@@ -1,0 +1,78 @@
+services:
+  postgres:
+    image: postgres:${POSTGRES_VERSION}
+    container_name: ${POSTGRES_CONTAINER}
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASS}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+  pgbouncer:
+    image: edoburu/pgbouncer:${PGBOUNCER_VERSION:-latest}
+    container_name: ${PGBOUNCER_CONTAINER:-evotes_pgbouncer}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres # Internal service name resolution
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASS}
+      DB_NAME: ${DB_NAME}
+      POOL_MODE: ${PGBOUNCER_POOL_MODE:-session}
+      MAX_CLIENT_CONN: ${PGBOUNCER_MAX_CLIENT_CONN:-1000}
+      DEFAULT_POOL_SIZE: ${PGBOUNCER_DEFAULT_POOL_SIZE:-20}
+      AUTH_TYPE: scram-sha-256
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -p 5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+  minio:
+    image: minio/minio:${MINIO_VERSION:-latest}
+    container_name: ${MINIO_CONTAINER:-evotes_minio}
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ${APP_NAME:-evotes_app}
+    environment:
+      DB_HOST: pgbouncer # Connect via pooler
+      DB_PORT: ${DB_PORT}
+      DB_USER: ${DB_USER}
+      DB_PASS: ${DB_PASS}
+      DB_NAME: ${DB_NAME}
+      MINIO_ENDPOINT: minio:9000
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: always
+
+volumes:
+  postgres_data:
+  pgadmin_data:
+  minio_data:

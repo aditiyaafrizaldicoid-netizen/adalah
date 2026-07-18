@@ -1,0 +1,120 @@
+@import "tailwindcss";
+
+:root[data-theme="dark"] {
+  /* Background */
+  --bg-primary: #0D0D0D;
+  --bg-secondary: #1A1A1A;
+  --bg-card: #1E1E1E;
+  --bg-sidebar: #150505;
+  --bg-topbar: #1A0808;
+  --bg-hover: rgba(200, 16, 46, 0.10);
+  --bg-active: rgba(200, 16, 46, 0.20);
+
+  /* Accent */
+  --accent-primary: #C8102E;
+  --accent-secondary: #FFB81C;
+  --accent-primary-hover: #E8192E;
+  --accent-secondary-hover: #FFC94D;
+
+  /* Text */
+  --text-primary: #FFFFFF;
+  --text-secondary: #A0A0A0;
+  --text-muted: #555555;
+  --text-accent: #FFB81C;
+
+  /* Border */
+  --border-primary: #2A2A2A;
+  --border-accent: #C8102E;
+  --border-subtle: #1F1F1F;
+
+  /* Status */
+  --status-ok: #22C55E;
+  --status-warning: #FFB81C;
+  --status-error: #C8102E;
+  --status-info: #38BDF8;
+  --status-offline: #555555;
+
+  /* Chart/Graph */
+  --chart-line1: #C8102E;
+  --chart-line2: #FFB81C;
+  --chart-line3: #38BDF8;
+  --chart-grid: #2A2A2A;
+
+  /* Shadow */
+  --shadow-card: 0 4px 6px rgba(0, 0, 0, 0.5);
+  --shadow-modal: 0 20px 60px rgba(0, 0, 0, 0.8);
+}
+
+:root[data-theme="light"] {
+  /* Background */
+  --bg-primary: #F5F5F5;
+  --bg-secondary: #FFFFFF;
+  --bg-card: #FFFFFF;
+  --bg-sidebar: #FDF0F0;
+  --bg-topbar: #FDEAEA;
+  --bg-hover: rgba(200, 16, 46, 0.06);
+  --bg-active: rgba(200, 16, 46, 0.12);
+
+  /* Accent */
+  --accent-primary: #C8102E;
+  --accent-secondary: #E69900;
+  --accent-primary-hover: #A50D26;
+  --accent-secondary-hover: #CC8800;
+
+  /* Text */
+  --text-primary: #111111;
+  --text-secondary: #555555;
+  --text-muted: #999999;
+  --text-accent: #C8102E;
+
+  /* Border */
+  --border-primary: #E5E5E5;
+  --border-accent: #C8102E;
+  --border-subtle: #F0F0F0;
+
+  /* Status */
+  --status-ok: #16A34A;
+  --status-warning: #D97706;
+  --status-error: #C8102E;
+  --status-info: #0284C7;
+  --status-offline: #9CA3AF;
+
+  /* Chart/Graph */
+  --chart-line1: #C8102E;
+  --chart-line2: #D97706;
+  --chart-line3: #0284C7;
+  --chart-grid: #E5E5E5;
+
+  /* Shadow */
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.08);
+  --shadow-modal: 0 20px 60px rgba(0, 0, 0, 0.2);
+}
+
+@theme {
+  --color-primary: var(--accent-primary);
+  --color-secondary: var(--bg-secondary);
+  --color-background: var(--bg-primary);
+  --color-card: var(--bg-card);
+  --color-success: var(--status-ok);
+  --color-warning: var(--status-warning);
+  --color-danger: var(--status-error);
+  --color-accent: var(--accent-secondary);
+  
+  --font-sans: "Inter", "Geist", system-ui, sans-serif;
+}
+
+@layer base {
+  body {
+    @apply bg-background text-[var(--text-primary)] font-sans antialiased overflow-hidden transition-colors duration-300;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-card border border-[var(--border-primary)] rounded-xl shadow-[var(--shadow-card)];
+  }
+  
+  .btn-primary {
+    @apply px-4 py-2 bg-[var(--accent-primary)] text-white font-bold rounded-lg hover:bg-[var(--accent-primary-hover)] transition-all active:scale-95;
+  }
+}

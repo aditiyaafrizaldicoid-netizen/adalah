@@ -1,0 +1,3 @@
+p, user, /api/v1/users/me, GET
+p, user, /api/v1/users/me, PUT
+p, user, /api/v1/auth/*, *
