@@ -97,6 +97,68 @@ class ASVController:
         """Mengembalikan channel config saat ini dalam format dict (untuk dikirim ke base station)."""
         return self.channel_config.to_dict()
 
+    # --- MANAJEMEN PARAMETER ARDUPILOT ---
+    def set_param(self, param_name: str, value: float) -> bool:
+        """
+        Mengubah satu parameter ArduPilot via MAVLink PARAM_SET.
+        Ekuivalen dengan mengedit parameter di Mission Planner.
+        Perubahan TERSIMPAN di EEPROM Pixhawk (persisten setelah reboot).
+        """
+        return self.connection.send_param_set(param_name, value)
+
+    def apply_no_rc_mode(self) -> dict:
+        """
+        Menerapkan konfigurasi parameter ArduRover untuk operasi TANPA RC receiver.
+        Menonaktifkan semua failsafe yang berkaitan dengan sinyal RC, dan 
+        mengeset fungsi Servo ke RCPassThru agar RC Override bekerja.
+        """
+        params_to_set = {
+            "FS_THR_ENABLE":    0,   # Disable RC throttle failsafe
+            "ARMING_CHECK":     0,   # Disable pre-arm checks (GPS, RC, compass, dll)
+            "BRD_SAFETY_DEFLT": 0,   # Disable safety switch / press-to-arm
+            "FS_GCS_ENABLE":    0,   # Disable GCS heartbeat failsafe
+        }
+        
+        # Tambahkan SERVOx_FUNCTION = 1 (RCPassThru) untuk channel aktif
+        active_channels = [
+            self.channel_config.thruster_left_ch,
+            self.channel_config.thruster_right_ch,
+            self.channel_config.servo_left_ch,
+            self.channel_config.servo_right_ch
+        ]
+        
+        for ch in active_channels:
+            if 1 <= ch <= 18:
+                params_to_set[f"SERVO{ch}_FUNCTION"] = 1
+
+        results = {}
+        for name, value in params_to_set.items():
+            ok = self.set_param(name, value)
+            results[name] = "OK" if ok else "FAILED"
+            import time; time.sleep(0.05)  # Jeda kecil antar parameter
+        
+        print(f"[ASVController] apply_no_rc_mode results: {results}")
+        return results
+
+    def restore_default_failsafe(self) -> dict:
+        """
+        Memulihkan failsafe ke nilai default ArduRover setelah selesai testing.
+        Penting untuk keamanan di lapangan!
+        """
+        params_default = {
+            "FS_THR_ENABLE":    1,   # Enable: HOLD saat RC hilang
+            "ARMING_CHECK":     1,   # Enable semua pre-arm checks
+            "BRD_SAFETY_DEFLT": 1,   # Enable safety switch
+            "FS_GCS_ENABLE":    1,   # Enable GCS failsafe
+        }
+        results = {}
+        for name, value in params_default.items():
+            ok = self.set_param(name, value)
+            results[name] = "OK" if ok else "FAILED"
+            import time; time.sleep(0.1)
+        print(f"[ASVController] restore_default_failsafe results: {results}")
+        return results
+
     # --- PERINTAH KONTROL (CONTROL COMMANDS) ---
     def arm(self, force: bool = False) -> bool:
         """Mengaktifkan (ARM) motor kapal."""

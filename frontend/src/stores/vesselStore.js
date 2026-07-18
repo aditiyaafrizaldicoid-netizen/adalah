@@ -8,17 +8,22 @@ export const useVesselStore = defineStore("vessel", () => {
   const heading = ref(0);
   const sog = ref(0); // Speed Over Ground (knots)
   const cog = ref(0); // Course Over Ground
-  
+
   const pitch = ref(0);
   const roll = ref(0);
   const yaw = ref(0);
-  
+
   const batteryPct = ref(100);
   const batteryVolt = ref(12.6);
-  
+
   const gpsFix = ref(0); // 0: No Fix, 1: 2D, 2: 3D, 3: DGPS, 4: RTK
   const satellites = ref(0);
   const signalStrength = ref(0);
+
+  // Flight Controller Status (dari Pixhawk via MAVLink)
+  const isConnected = ref(false);  // Pixhawk terdeteksi & heartbeat aktif
+  const isArmed = ref(false);      // Motor sudah ARM
+  const mode = ref('UNKNOWN');     // Mode aktif: MANUAL, GUIDED, AUTO, dll
 
   // Simulation State
   const isSimulating = ref(false);
@@ -58,6 +63,10 @@ export const useVesselStore = defineStore("vessel", () => {
     if (data.gps_fix !== undefined) gpsFix.value = data.gps_fix;
     if (data.satellites !== undefined) satellites.value = data.satellites;
     if (data.signal_strength !== undefined) signalStrength.value = data.signal_strength;
+    // Status Pixhawk
+    if (data.is_connected !== undefined) isConnected.value = data.is_connected;
+    if (data.is_armed !== undefined) isArmed.value = data.is_armed;
+    if (data.mode !== undefined) mode.value = data.mode;
   }
 
   function toggleSimulation() {
@@ -109,6 +118,7 @@ export const useVesselStore = defineStore("vessel", () => {
     gpsFix, satellites, signalStrength,
     xte, dtw, nextWp,
     thrusterL, thrusterR, rpmL, rpmR,
+    isConnected, isArmed, mode,
     isGpsValid, batteryColor, isSimulating,
     updateTelemetry, toggleSimulation
   };

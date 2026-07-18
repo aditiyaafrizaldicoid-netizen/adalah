@@ -4,28 +4,29 @@ import { useVesselStore } from '@/stores/vesselStore';
 import { useMissionStore } from '@/stores/missionStore';
 import { useScoringStore } from '@/stores/scoringStore';
 import { useWebsocketStore } from '@/stores/websocketStore';
-import { 
-  Navigation, 
-  Battery, 
-  MapPin, 
-  Zap, 
+import {
+  Navigation,
+  Battery,
+  MapPin,
+  Zap,
   Activity,
   Trophy,
   ChevronRight,
-  ShieldAlert
+  ShieldAlert,
+  Wifi,
+  WifiOff
 } from "lucide-vue-next";
 
-// Components (We will build these next)
 import MetricCard from "../components/ui/MetricCard.vue";
 import StatusBadge from "../components/ui/StatusBadge.vue";
 import ProgressBar from "../components/ui/ProgressBar.vue";
+import ArmingControl from "../components/monitoring/ArmingControl.vue";
 
 const vessel = useVesselStore();
 const mission = useMissionStore();
 const scoring = useScoringStore();
 const wsStore = useWebsocketStore();
 
-// Simulation Data for demonstration
 onMounted(() => {
   // Start simulation if needed
 });
@@ -39,7 +40,23 @@ onMounted(() => {
         <h1 class="text-3xl font-bold text-(--text-primary) tracking-tight">DASHBOARD <span class="text-primary/50 text-xl font-light">OVERVIEW</span></h1>
         <p class="text-(--text-secondary) text-sm mt-1 uppercase tracking-widest font-bold">Autonomous Surface Vessel Ground Station</p>
       </div>
-      <div class="flex gap-4">
+      <div class="flex items-center gap-3">
+        <!-- WebSocket Status -->
+        <div :class="[
+          'flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full border',
+          wsStore.status === 'CONNECTED' ? 'bg-success/10 text-success border-success/30' : 'bg-danger/10 text-danger border-danger/30'
+        ]">
+          <component :is="wsStore.status === 'CONNECTED' ? Wifi : WifiOff" class="w-3.5 h-3.5" />
+          {{ wsStore.status }}
+        </div>
+        <!-- ARM Badge -->
+        <div :class="[
+          'flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-full border',
+          vessel.isArmed ? 'bg-danger/10 text-danger border-danger/30 animate-pulse' : 'bg-(--bg-secondary) text-(--text-secondary) border-(--border-subtle)'
+        ]">
+          <div :class="['w-2 h-2 rounded-full', vessel.isArmed ? 'bg-danger' : 'bg-(--text-muted)']" />
+          {{ vessel.isArmed ? 'ARMED' : 'DISARMED' }}
+        </div>
         <StatusBadge label="GPS" :status="vessel.gpsFix > 0 ? 'success' : 'danger'" :value="`FIX: ${vessel.gpsFix}`" />
         <StatusBadge label="MISI" :status="mission.missionStatus === 'RUNNING' ? 'warning' : 'info'" :value="mission.missionStatus" />
       </div>
@@ -143,21 +160,29 @@ onMounted(() => {
         </div>
       </div>
 
+      <!-- Right Sidebar: Arming Control + Alerts -->
       <div class="col-span-12 lg:col-span-3 space-y-4">
+        <!-- ARM / DISARM Control -->
+        <ArmingControl />
+
         <!-- Alerts Panel -->
-        <div class="glass-card p-5 border-t-4 border-t-danger h-full">
+        <div class="glass-card p-5 border-t-4 border-t-danger">
           <div class="flex items-center gap-2 mb-4">
             <ShieldAlert class="w-5 h-5 text-danger" />
             <span class="text-sm font-bold uppercase tracking-widest text-(--text-primary)">System Alerts</span>
           </div>
           <div class="space-y-3">
-            <div class="p-3 bg-danger/10 border border-danger/20 rounded-lg">
+            <div v-if="!vessel.isConnected" class="p-3 bg-danger/10 border border-danger/20 rounded-lg">
               <span class="text-[10px] font-bold text-danger uppercase">Critical</span>
-              <p class="text-xs text-(--text-primary) mt-1">Loss of Signal detected for 2s</p>
+              <p class="text-xs text-(--text-primary) mt-1">Flight Controller tidak terhubung</p>
             </div>
-            <div class="p-3 bg-warning/10 border border-warning/20 rounded-lg">
+            <div v-if="wsStore.status !== 'CONNECTED'" class="p-3 bg-warning/10 border border-warning/20 rounded-lg">
               <span class="text-[10px] font-bold text-warning uppercase">Warning</span>
-              <p class="text-xs text-(--text-primary) mt-1">Thruster L Temperature High</p>
+              <p class="text-xs text-(--text-primary) mt-1">WebSocket terputus dari backend</p>
+            </div>
+            <div v-if="vessel.isConnected && wsStore.status === 'CONNECTED'" class="p-3 bg-success/10 border border-success/20 rounded-lg">
+              <span class="text-[10px] font-bold text-success uppercase">OK</span>
+              <p class="text-xs text-(--text-primary) mt-1">Semua sistem nominal</p>
             </div>
           </div>
         </div>

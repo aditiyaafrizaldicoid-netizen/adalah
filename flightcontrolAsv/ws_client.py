@@ -110,10 +110,14 @@ class ASVWebSocketClient:
 
         # --- ARM / DISARM ---
         if action == "arm":
-            self.asv.arm()
+            force = bool(cmd.get("force", False))
+            self.asv.arm(force=force)
+            print(f"[WS] ARM {'(FORCE)' if force else ''}")
 
         elif action == "disarm":
-            self.asv.disarm()
+            force = bool(cmd.get("force", False))
+            self.asv.disarm(force=force)
+            print(f"[WS] DISARM {'(FORCE)' if force else ''}")
 
         # --- MODE ---
         elif action == "set_mode":
@@ -193,6 +197,37 @@ class ASVWebSocketClient:
         elif action == "get_channel_map":
             self._send_channel_config_ack()
 
+        # --- APPLY NO-RC MODE (Disable semua RC failsafe via PARAM_SET) ---
+        elif action == "apply_no_rc_mode":
+            print("[WS] Menerapkan konfigurasi No-RC Mode ke Pixhawk...")
+            results = self.asv.apply_no_rc_mode()
+            self._send_ws({
+                "type": "PARAM_SET_RESULT",
+                "payload": {"action": "apply_no_rc_mode", "results": results}
+            })
+
+        # --- RESTORE FAILSAFE (Kembalikan ke default) ---
+        elif action == "restore_failsafe":
+            print("[WS] Memulihkan failsafe ke nilai default...")
+            results = self.asv.restore_default_failsafe()
+            self._send_ws({
+                "type": "PARAM_SET_RESULT",
+                "payload": {"action": "restore_failsafe", "results": results}
+            })
+
+        # --- SET SINGLE PARAM ---
+        elif action == "set_param":
+            param_name = cmd.get("param_name", "")
+            value = cmd.get("value", 0)
+            if param_name:
+                ok = self.asv.set_param(param_name, float(value))
+                self._send_ws({
+                    "type": "PARAM_SET_RESULT",
+                    "payload": {"param_name": param_name, "value": value, "ok": ok}
+                })
+            else:
+                print("[WS] set_param: 'param_name' tidak ditemukan dalam cmd")
+
         elif action:
             print(f"[WS] Unknown action: {action}")
 
@@ -200,17 +235,21 @@ class ASVWebSocketClient:
     #  SEND HELPERS                                                        #
     # ------------------------------------------------------------------ #
 
-    def _send_channel_config_ack(self):
-        """Kirim channel config saat ini ke base station (untuk sinkronisasi UI)."""
+    def _send_ws(self, data: dict):
+        """Helper: kirim dict sebagai JSON ke base station via WebSocket."""
         if self.ws and self.ws.sock and self.ws.sock.connected:
             try:
-                self.ws.send(json.dumps({
-                    "type": "CHANNEL_CONFIG",
-                    "payload": self.asv.get_channel_config()
-                }))
-                print("[WS] Sent CHANNEL_CONFIG ack to base station")
+                self.ws.send(json.dumps(data))
             except Exception as e:
-                print(f"[WS] Error sending CHANNEL_CONFIG: {e}")
+                print(f"[WS] Error sending message: {e}")
+
+    def _send_channel_config_ack(self):
+        """Kirim channel config saat ini ke base station (untuk sinkronisasi UI)."""
+        self._send_ws({
+            "type": "CHANNEL_CONFIG",
+            "payload": self.asv.get_channel_config()
+        })
+        print("[WS] Sent CHANNEL_CONFIG ack to base station")
 
     def _send_telemetry_loop(self):
         """Loop 100ms untuk mengirim telemetri ke base station."""

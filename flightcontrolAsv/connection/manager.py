@@ -84,6 +84,37 @@ class ConnectionManager:
                 print(f"[ConnectionManager] Error COMMAND_LONG ({command}): {e}")
                 return False
 
+    def send_param_set(self, param_name: str, value: float, param_type: int = None) -> bool:
+        """
+        Mengubah parameter ArduPilot secara langsung via MAVLink PARAM_SET.
+        Ekuivalen dengan mengubah parameter di Mission Planner / QGC.
+
+        :param param_name: Nama parameter, misal 'FS_THR_ENABLE', 'ARMING_CHECK'
+        :param value: Nilai baru parameter
+        :param param_type: Tipe MAVLink (default: MAV_PARAM_TYPE_REAL32)
+        """
+        with self._write_lock:
+            if not self.master or not self.state.get_data().is_connected:
+                print(f"[ConnectionManager] PARAM_SET gagal: tidak terhubung ke Pixhawk")
+                return False
+            if param_type is None:
+                param_type = mavutil.mavlink.MAV_PARAM_TYPE_REAL32
+            # Nama parameter harus bytes, max 16 karakter
+            param_id = param_name.encode('utf-8')[:16]
+            try:
+                self.master.mav.param_set_send(
+                    self.config.TARGET_SYSTEM,
+                    self.config.TARGET_COMPONENT,
+                    param_id,
+                    float(value),
+                    param_type
+                )
+                print(f"[ConnectionManager] PARAM_SET: {param_name} = {value}")
+                return True
+            except Exception as e:
+                print(f"[ConnectionManager] Error PARAM_SET ({param_name}): {e}")
+                return False
+
     def _send_heartbeat_loop(self):
         """Mengirimkan heartbeat periodik (keep-alive) ke Pixhawk setiap 1 detik."""
         while self._is_running:
