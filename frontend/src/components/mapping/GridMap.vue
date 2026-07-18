@@ -48,17 +48,25 @@ onMounted(() => {
 
   satellite.addTo(map); // Default to satellite
 
-  // Custom ASV Icon (Using HTML and CSS rotation)
+  // Custom ASV Icon (Sleek Monohull / Speedboat Shape)
   const asvIcon = L.divIcon({
     className: 'asv-custom-marker',
-    html: `<div class="asv-icon-wrapper shadow-xl">
+    html: `<div class="asv-icon-wrapper drop-shadow-2xl">
              <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-               <!-- Glowing Engine Trail -->
-               <polygon points="40,80 60,80 50,100" fill="#38bdf8" opacity="0.6"/>
-               <!-- Drone Body -->
-               <path d="M50 5 L85 85 L50 65 L15 85 Z" fill="#0f172a" stroke="#38bdf8" stroke-width="6" stroke-linejoin="round"/>
-               <!-- Center indicator -->
-               <circle cx="50" cy="50" r="8" fill="#38bdf8" />
+               <!-- Glowing Water Wake (Jejak Air) -->
+               <path d="M 30 80 L 70 80 L 50 100 Z" fill="#ef4444" opacity="0.8"/>
+               
+               <!-- Sleek Boat Hull (Bodi Kapal Melengkung) -->
+               <path d="M50 5 C 85 20, 80 50, 80 80 L 20 80 C 20 50, 15 20, 50 5 Z" fill="#0f172a" stroke="#ef4444" stroke-width="4" stroke-linejoin="round" />
+               
+               <!-- Cockpit / Cabin Deck -->
+               <path d="M 35 40 Q 50 30 65 40 L 70 65 L 30 65 Z" fill="#1e293b" stroke="#ef4444" stroke-width="2" />
+               
+               <!-- Radar / GPS Dome (Kuning) -->
+               <circle cx="50" cy="55" r="6" fill="#facc15" />
+               
+               <!-- Front Bow Line (Garis Haluan) -->
+               <line x1="50" y1="5" x2="50" y2="35" stroke="#ef4444" stroke-width="2" opacity="0.6" />
              </svg>
            </div>`,
     iconSize: [48, 48],
@@ -69,7 +77,7 @@ onMounted(() => {
 
   // Trail Polyline
   trailPolyline = L.polyline([], {
-    color: '#38bdf8',
+    color: '#ef4444',
     weight: 3,
     opacity: 0.7,
     dashArray: '5, 10',
