@@ -1,8 +1,8 @@
 package middleware
 
 import (
-	"go-fiber-template/internal/config"
 	"github.com/casbin/casbin/v2"
+	"go-fiber-template/internal/config"
 	"go.uber.org/zap"
 )
 

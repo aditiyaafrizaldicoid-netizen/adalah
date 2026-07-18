@@ -30,4 +30,3 @@ func (m *Middleware) LoggingMiddleware() fiber.Handler {
 		return err
 	}
 }
-

@@ -22,10 +22,10 @@ const actuators = computed(() => [
     color: 'sky',
     channel: cfg.thrusterLeftCh,
     label: cfg.thrusterLeftLabel,
-    pwm: 1500,
-    min: 1000,
+    pwm: 800,
+    min: 800,
     max: 2000,
-    center: 1500,
+    center: 800,
     isTesting: false,
     description: 'Motor kiri / Port Thruster',
   },
@@ -37,10 +37,10 @@ const actuators = computed(() => [
     color: 'sky',
     channel: cfg.thrusterRightCh,
     label: cfg.thrusterRightLabel,
-    pwm: 1500,
-    min: 1000,
+    pwm: 800,
+    min: 800,
     max: 2000,
-    center: 1500,
+    center: 800,
     isTesting: false,
     description: 'Motor kanan / Starboard Thruster',
   },
@@ -78,8 +78,8 @@ const actuators = computed(() => [
 
 // State PWM mutable per aktuator (keluarkan dari computed agar bisa diubah)
 const pwmState = ref({
-  thruster_left: 1500,
-  thruster_right: 1500,
+  thruster_left: 950,
+  thruster_right: 950,
   servo_left: 1500,
   servo_right: 1500,
 });
@@ -254,7 +254,8 @@ const warningMessage = computed(() => {
             <div class="text-[10px] text-(--text-muted) truncate">{{ actuator.description }}</div>
           </div>
           <!-- Channel Badge -->
-          <span :class="['text-xs font-mono font-bold px-2 py-1 rounded border shrink-0', channelGroupClass(actuator.channel)]">
+          <span
+            :class="['text-xs font-mono font-bold px-2 py-1 rounded border shrink-0', channelGroupClass(actuator.channel)]">
             {{ actuator.label }}
           </span>
         </div>
@@ -265,7 +266,7 @@ const warningMessage = computed(() => {
           <span :class="[
             'text-lg font-black font-mono tabular-nums',
             pwmState[actuator.id] > actuator.center ? 'text-success' :
-            pwmState[actuator.id] < actuator.center ? 'text-danger' : 'text-(--text-secondary)'
+              pwmState[actuator.id] < actuator.center ? 'text-danger' : 'text-(--text-secondary)'
           ]">
             {{ pwmState[actuator.id] }} <span class="text-xs font-normal text-(--text-muted)">µs</span>
           </span>
@@ -273,15 +274,9 @@ const warningMessage = computed(() => {
 
         <!-- Slider -->
         <div class="relative pt-1 pb-1">
-          <input
-            type="range"
-            :min="actuator.min"
-            :max="actuator.max"
-            :value="pwmState[actuator.id]"
-            @input="e => updatePwm(actuator, e.target.value)"
-            :disabled="testingState[actuator.id] || !canControl"
-            class="w-full accent-primary disabled:opacity-40 disabled:cursor-not-allowed"
-          />
+          <input type="range" :min="actuator.min" :max="actuator.max" :value="pwmState[actuator.id]"
+            @input="e => updatePwm(actuator, e.target.value)" :disabled="testingState[actuator.id] || !canControl"
+            class="w-full accent-primary disabled:opacity-40 disabled:cursor-not-allowed" />
           <div class="flex justify-between text-[9px] text-(--text-muted) mt-1 font-mono">
             <span>{{ actuator.min }}</span>
             <span class="text-(--text-secondary)">CENTER {{ actuator.center }}</span>
@@ -291,24 +286,18 @@ const warningMessage = computed(() => {
 
         <!-- Buttons -->
         <div class="flex gap-2 mt-1">
-          <button
-            @click="centerActuator(actuator)"
-            :disabled="testingState[actuator.id] || !canControl"
-            class="flex-1 py-2 bg-(--bg-secondary) hover:bg-white/10 rounded-lg text-xs font-bold
+          <button @click="centerActuator(actuator)" :disabled="testingState[actuator.id] || !canControl" class="flex-1 py-2 bg-(--bg-secondary) hover:bg-white/10 rounded-lg text-xs font-bold
                    text-(--text-primary) transition-colors border border-(--border-subtle)
                    disabled:opacity-40 disabled:cursor-not-allowed">
             CENTER
           </button>
 
-          <button
-            @click="toggleSweepTest(actuator)"
-            :disabled="!canControl"
-            :class="[
-              'flex-1 py-2 flex justify-center items-center gap-2 rounded-lg text-xs font-bold transition-colors border disabled:opacity-40 disabled:cursor-not-allowed',
-              testingState[actuator.id]
-                ? 'bg-danger/20 text-danger border-danger/50 hover:bg-danger/30'
-                : 'bg-primary/10 text-primary border-primary/30 hover:bg-primary/20'
-            ]">
+          <button @click="toggleSweepTest(actuator)" :disabled="!canControl" :class="[
+            'flex-1 py-2 flex justify-center items-center gap-2 rounded-lg text-xs font-bold transition-colors border disabled:opacity-40 disabled:cursor-not-allowed',
+            testingState[actuator.id]
+              ? 'bg-danger/20 text-danger border-danger/50 hover:bg-danger/30'
+              : 'bg-primary/10 text-primary border-primary/30 hover:bg-primary/20'
+          ]">
             <component :is="testingState[actuator.id] ? Square : Play" class="w-3 h-3" />
             {{ testingState[actuator.id] ? 'STOP TEST' : 'SWEEP TEST' }}
           </button>
@@ -318,16 +307,11 @@ const warningMessage = computed(() => {
 
     <!-- Global Controls -->
     <div class="flex gap-3">
-      <button
-        @click="stopAllTests"
-        class="flex-1 py-3 rounded-xl font-bold text-sm border border-danger/30
+      <button @click="stopAllTests" class="flex-1 py-3 rounded-xl font-bold text-sm border border-danger/30
                bg-danger/10 text-danger hover:bg-danger/20 transition-all">
         Stop Semua Test
       </button>
-      <button
-        @click="centerAll"
-        :disabled="!canControl"
-        class="flex-1 py-3 rounded-xl font-bold text-sm border border-(--border-subtle)
+      <button @click="centerAll" :disabled="!canControl" class="flex-1 py-3 rounded-xl font-bold text-sm border border-(--border-subtle)
                bg-(--bg-secondary) text-(--text-primary) hover:bg-white/10 transition-all
                disabled:opacity-40 disabled:cursor-not-allowed">
         Center All (1500µs)
@@ -338,6 +322,13 @@ const warningMessage = computed(() => {
 </template>
 
 <style scoped>
-.fade-enter-active, .fade-leave-active { transition: opacity 0.3s ease; }
-.fade-enter-from, .fade-leave-to { opacity: 0; }
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
 </style>

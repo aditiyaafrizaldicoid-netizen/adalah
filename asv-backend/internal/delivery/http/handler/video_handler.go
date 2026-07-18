@@ -19,7 +19,7 @@ type VideoHandler struct {
 func NewVideoHandler() *VideoHandler {
 	vh := &VideoHandler{}
 	vh.cond = sync.NewCond(&vh.mu)
-	
+
 	// Optional: Broadcast periodically so clients don't hang if no frames
 	go func() {
 		for {
@@ -29,7 +29,7 @@ func NewVideoHandler() *VideoHandler {
 			vh.mu.Unlock()
 		}
 	}()
-	
+
 	return vh
 }
 
@@ -39,7 +39,7 @@ func (h *VideoHandler) UploadFrame(c *fiber.Ctx) error {
 	if len(frame) == 0 {
 		return c.SendStatus(fiber.StatusBadRequest)
 	}
-	
+
 	frameCopy := make([]byte, len(frame))
 	copy(frameCopy, frame)
 

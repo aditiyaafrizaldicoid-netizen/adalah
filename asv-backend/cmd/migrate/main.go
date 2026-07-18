@@ -31,6 +31,7 @@ func main() {
 	err = db.AutoMigrate(
 		&entity.User{},
 		&entity.RefreshToken{},
+		&entity.AsvConfig{},
 	)
 
 	if err != nil {

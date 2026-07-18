@@ -20,4 +20,3 @@ func NewValidator() (*validator.Validate, ut.Translator) {
 
 	return v, trans
 }
-

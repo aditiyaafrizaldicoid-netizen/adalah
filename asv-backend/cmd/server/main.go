@@ -76,10 +76,12 @@ func main() {
 	// 5. Initialize Repositories
 	userRepo := repository.NewUserRepository(db, logger)
 	tokenRepo := repository.NewRefreshTokenRepository(db, logger)
+	asvConfigRepo := repository.NewAsvConfigRepository(db, logger)
 
 	// 6. Initialize Services
 	userService := service.NewUserService(userRepo, logger)
 	authService := service.NewAuthService(userRepo, tokenRepo, cfg, logger)
+	asvConfigService := service.NewAsvConfigService(asvConfigRepo, logger)
 
 	// 7. Initialize Middlewares
 	mid := middleware.NewMiddleware(cfg, logger, enforcer)
@@ -90,7 +92,7 @@ func main() {
 	healthHandler := handler.NewHealthHandler(db, redisClient)
 
 	wsHub := handler.NewWSHub()
-	wsHandler := handler.NewWSHandler(wsHub)
+	wsHandler := handler.NewWSHandler(wsHub, asvConfigService)
 	videoHandler := handler.NewVideoHandler()
 
 	// 9. Initialize Router & Get App

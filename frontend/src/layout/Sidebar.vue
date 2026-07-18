@@ -10,6 +10,7 @@ import {
   Trophy,
   Stethoscope,
   Database,
+  Gamepad2,
   ChevronLeft,
   ChevronRight,
 } from "lucide-vue-next";
@@ -24,6 +25,7 @@ const isDark = computed(() => themeStore.theme === 'dark');
 
 const menuItems = [
   { name: "Dashboard", path: "/", icon: LayoutDashboard },
+  { name: "Manual Control", path: "/manual", icon: Gamepad2 },
   { name: "Monitoring", path: "/monitoring", icon: Activity },
   { name: "Mapping", path: "/mapping", icon: MapIcon },
   { name: "Mission Control", path: "/mission", icon: Flag },

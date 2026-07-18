@@ -42,6 +42,11 @@ const routes = [
     name: "DataManager",
     component: () => import("../views/DataManager.vue"),
   },
+  {
+    path: "/manual",
+    name: "ManualControl",
+    component: () => import("../views/ManualControl.vue"),
+  },
 ];
 
 const router = createRouter({
