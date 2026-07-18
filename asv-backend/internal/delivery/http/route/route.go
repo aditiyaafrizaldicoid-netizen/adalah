@@ -21,6 +21,7 @@ type Router struct {
 	healthHandler *handler.HealthHandler
 	wsHandler     *handler.WSHandler
 	videoHandler  *handler.VideoHandler
+	calibHandler  *handler.CalibrationProfileHandler
 }
 
 func NewRouter(
@@ -31,6 +32,7 @@ func NewRouter(
 	healthHandler *handler.HealthHandler,
 	wsHandler *handler.WSHandler,
 	videoHandler *handler.VideoHandler,
+	calibHandler *handler.CalibrationProfileHandler,
 ) *Router {
 	return &Router{
 		cfg:           cfg,
@@ -40,6 +42,7 @@ func NewRouter(
 		healthHandler: healthHandler,
 		wsHandler:     wsHandler,
 		videoHandler:  videoHandler,
+		calibHandler:  calibHandler,
 	}
 }
 
@@ -97,6 +100,13 @@ func (r *Router) New() *fiber.App {
 	videoGroup := api.Group("/video")
 	videoGroup.Post("/upload", r.videoHandler.UploadFrame)
 	videoGroup.Get("/stream", r.videoHandler.StreamHandler)
+
+	// Calibration Profiles Routes
+	calibGroup := api.Group("/calibration")
+	calibGroup.Get("/profiles", r.calibHandler.GetAll)
+	calibGroup.Post("/profiles", r.calibHandler.Create)
+	calibGroup.Put("/profiles/:id", r.calibHandler.Update)
+	calibGroup.Delete("/profiles/:id", r.calibHandler.Delete)
 
 	// 404 Handler
 	app.Use(r.mw.NotFoundRouteMiddleware())

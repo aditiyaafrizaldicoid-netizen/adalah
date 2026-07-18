@@ -1,180 +1,309 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch } from 'vue';
 import { useVesselStore } from '@/stores/vesselStore';
+import { useMissionStore } from '@/stores/missionStore';
+import 'leaflet/dist/leaflet.css';
+import L from 'leaflet';
 
 const props = defineProps({
   width: { type: Number, default: 800 },
   height: { type: Number, default: 600 },
-  gridSize: { type: Number, default: 30 } // 30 meters
+  visibleLayers: { type: Array, default: () => ['grid', 'vessel', 'trail', 'buoys'] }
 });
 
 const vessel = useVesselStore();
-const canvasRef = ref(null);
-let ctx = null;
-let animationId = null;
+const mission = useMissionStore();
 
-// Map state
-const zoom = ref(20); // pixels per meter
-const offsetX = ref(0);
-const offsetY = ref(0);
-const trail = ref([]); // Store position history [{x, y}]
+const mapContainer = ref(null);
+let map = null;
+let asvMarker = null;
+let trailPolyline = null;
+let trailCoords = [];
+let waypointMarkers = [];
+let waypointPolyline = null;
 
-// Watch vessel position and add to trail
-watch(() => [vessel.lat, vessel.lng], ([lat, lng]) => {
-  if (!vessel.isSimulating) return;
-  
-  // Convert GPS to mock local grid coordinates for trail
-  const tx = (lng * 111111) / 100;
-  const ty = -(lat * 111111) / 100;
-  
-  trail.value.push({ x: tx, y: ty });
-  
-  // Limit trail length to 200 points
-  if (trail.value.length > 200) trail.value.shift();
-}, { deep: true });
-
-// Draw function
-const draw = () => {
-  if (!ctx) return;
-  
-  const style = getComputedStyle(document.documentElement);
-  const bgColor = style.getPropertyValue('--bg-primary').trim();
-  const gridColor = style.getPropertyValue('--border-primary').trim();
-  const textColor = style.getPropertyValue('--text-muted').trim();
-
-  const w = canvasRef.value.width;
-  const h = canvasRef.value.height;
-  
-  // Clear
-  ctx.fillStyle = bgColor || '#0f172a';
-  ctx.fillRect(0, 0, w, h);
-  
-  // Center point
-  const centerX = w / 2 + offsetX.value;
-  const centerY = h / 2 + offsetY.value;
-  
-  // Draw Grid
-  ctx.strokeStyle = gridColor || '#1e293b';
-  ctx.lineWidth = 1;
-  
-  const step = zoom.value; // 1 meter in pixels
-  
-  // Vertical lines
-  for (let x = centerX % step; x < w; x += step) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, h);
-    ctx.stroke();
-  }
-  
-  // Horizontal lines
-  for (let y = centerY % step; y < h; y += step) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(w, y);
-    ctx.stroke();
-  }
-
-  // Draw Origin Axis
-  ctx.strokeStyle = textColor || '#334155';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(centerX, 0); ctx.lineTo(centerX, h);
-  ctx.moveTo(0, centerY); ctx.lineTo(w, centerY);
-  ctx.stroke();
-
-  // Draw Trail
-  if (trail.value.length > 1) {
-    ctx.strokeStyle = 'rgba(200, 16, 46, 0.4)'; // Primary color with alpha
-    ctx.lineWidth = 3;
-    ctx.lineJoin = 'round';
-    ctx.beginPath();
-    
-    trail.value.forEach((p, index) => {
-      const tx = centerX + p.x * zoom.value;
-      const ty = centerY + p.y * zoom.value;
-      if (index === 0) ctx.moveTo(tx, ty);
-      else ctx.lineTo(tx, ty);
-    });
-    ctx.stroke();
-  }
-
-  // Draw Vessel (Simulated Local Position)
-  // Mock conversion: 0.00001 degree ~ 1.11 meters
-  const vesselX = centerX + (vessel.lng * 111111) * zoom.value / 100; 
-  const vesselY = centerY - (vessel.lat * 111111) * zoom.value / 100; 
-  
-  ctx.save();
-  ctx.translate(vesselX, vesselY);
-  ctx.rotate((vessel.heading * Math.PI) / 180);
-  
-  // Vessel Shape
-  ctx.fillStyle = '#38bdf8';
-  ctx.beginPath();
-  ctx.moveTo(0, -15);
-  ctx.lineTo(10, 15);
-  ctx.lineTo(0, 10);
-  ctx.lineTo(-10, 15);
-  ctx.closePath();
-  ctx.fill();
-  
-  // Heading line
-  ctx.strokeStyle = '#38bdf8';
-  ctx.lineWidth = 2;
-  ctx.setLineDash([5, 5]);
-  ctx.beginPath();
-  ctx.moveTo(0, -15);
-  ctx.lineTo(0, -50);
-  ctx.stroke();
-  
-  ctx.restore();
-
-  animationId = requestAnimationFrame(draw);
-};
+// Default starting point (e.g., somewhere in Indonesia or specific lake)
+const defaultLat = -7.9215169;
+const defaultLng = 112.5973649;
 
 onMounted(() => {
-  ctx = canvasRef.value.getContext('2d');
-  draw();
+  // Initialize Leaflet Map
+  map = L.map(mapContainer.value, {
+    center: [vessel.lat || defaultLat, vessel.lng || defaultLng],
+    zoom: 18,
+    zoomControl: false, // We'll add our own custom controls
+    attributionControl: false
+  });
+
+  // Base Layers
+  const satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 20,
+    attribution: 'Tiles &copy; Esri'
+  });
+
+  const darkGrid = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    maxZoom: 20,
+    attribution: '&copy; CARTO'
+  });
+
+  satellite.addTo(map); // Default to satellite
+
+  // Custom ASV Icon (Using HTML and CSS rotation)
+  const asvIcon = L.divIcon({
+    className: 'asv-custom-marker',
+    html: `<div class="asv-icon-wrapper shadow-xl">
+             <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+               <!-- Glowing Engine Trail -->
+               <polygon points="40,80 60,80 50,100" fill="#38bdf8" opacity="0.6"/>
+               <!-- Drone Body -->
+               <path d="M50 5 L85 85 L50 65 L15 85 Z" fill="#0f172a" stroke="#38bdf8" stroke-width="6" stroke-linejoin="round"/>
+               <!-- Center indicator -->
+               <circle cx="50" cy="50" r="8" fill="#38bdf8" />
+             </svg>
+           </div>`,
+    iconSize: [48, 48],
+    iconAnchor: [24, 24]
+  });
+
+  asvMarker = L.marker([vessel.lat || defaultLat, vessel.lng || defaultLng], { icon: asvIcon, zIndexOffset: 1000 }).addTo(map);
+
+  // Trail Polyline
+  trailPolyline = L.polyline([], {
+    color: '#38bdf8',
+    weight: 3,
+    opacity: 0.7,
+    dashArray: '5, 10',
+    lineJoin: 'round'
+  }).addTo(map);
+
+  // Waypoints Polyline
+  waypointPolyline = L.polyline([], {
+    color: '#facc15', // Yellow warning color for planning
+    weight: 3,
+    opacity: 0.8
+  }).addTo(map);
+
+  // Map Click Event for Waypoints
+  map.on('click', (e) => {
+    // Add waypoint to Pinia store
+    mission.addWaypoint(e.latlng.lat, e.latlng.lng);
+    renderWaypoints();
+  });
 });
 
+// Watch ASV position to update marker and trail
+watch(() => [vessel.lat, vessel.lng, vessel.heading], ([lat, lng, heading]) => {
+  if (!map || !asvMarker) return;
+  if (lat === 0 && lng === 0) return; // Ignore initial empty coords
+
+  const newPos = [lat, lng];
+
+  // Update Marker Position
+  asvMarker.setLatLng(newPos);
+
+  // Rotate the marker using CSS inside the divIcon wrapper
+  const el = asvMarker.getElement();
+  if (el) {
+    const wrapper = el.querySelector('.asv-icon-wrapper');
+    if (wrapper) {
+      wrapper.style.transform = `rotate(${heading}deg)`;
+      // Removed CSS transition so it behaves exactly like CompassRose (no 360 glitch)
+    }
+  }
+
+  // Update Trail
+  trailCoords.push(newPos);
+  if (trailCoords.length > 10000) trailCoords.shift(); // Keep last 10000 points (~15 mins at 10Hz)
+  trailPolyline.setLatLngs(trailCoords);
+
+  // Auto-pan if map is tracking (could add a toggle state for this)
+  // map.panTo(newPos);
+}, { deep: true });
+
+// --- MOCK SIMULATION FOR DEMO ---
+let simInterval = null;
+const startSimulation = () => {
+  if (simInterval) return;
+  console.log("Starting ASV movement simulation...");
+  vessel.isSimulating = true;
+
+  // Sync initial position if it's way off
+  if (Math.abs(vessel.lat - defaultLat) > 2) {
+    vessel.lat = defaultLat;
+    vessel.lng = defaultLng;
+  }
+
+  if (vessel.heading === 0) {
+    vessel.heading = 45; // Start pointing North-East
+  }
+
+  simInterval = setInterval(() => {
+    // Move forward slightly
+    const speed = 0.00002; // Approx 22cm per tick (2.2m per sec)
+
+    // Convert heading to radians for math
+    const headingRad = (vessel.heading - 90) * (Math.PI / 180);
+
+    vessel.lat += Math.sin(headingRad) * -speed;
+    vessel.lng += Math.cos(headingRad) * speed;
+
+    // Slightly turn right continuously
+    // vessel.heading += 0.5;
+    // if (vessel.heading >= 360) vessel.heading = 0;
+    // Normalize heading to -180 .. 180
+    // if (vessel.heading > 180) {
+    //   vessel.heading -= 360;
+    // } else if (vessel.heading < -180) {
+    //   vessel.heading += 360;
+    // }
+
+  }, 100); // 10Hz update
+};
+
+const stopSimulation = () => {
+  vessel.isSimulating = false;
+  if (simInterval) clearInterval(simInterval);
+  simInterval = null;
+};
+// --------------------------------
+
+// Render Waypoints based on Mission Store
+const renderWaypoints = () => {
+  if (!map) return;
+
+  // Clear existing markers
+  waypointMarkers.forEach(m => map.removeLayer(m));
+  waypointMarkers = [];
+
+  const coords = mission.waypoints.map(wp => [wp.lat, wp.lng]);
+  waypointPolyline.setLatLngs(coords);
+
+  mission.waypoints.forEach((wp, index) => {
+    const wpIcon = L.divIcon({
+      className: 'wp-custom-marker',
+      html: `<div class="w-6 h-6 bg-warning text-black font-black text-[10px] rounded-full flex items-center justify-center border-2 border-black shadow-lg">
+               ${index + 1}
+             </div>`,
+      iconSize: [24, 24],
+      iconAnchor: [12, 12]
+    });
+
+    const m = L.marker([wp.lat, wp.lng], { icon: wpIcon }).addTo(map);
+    m.on('contextmenu', () => {
+      // Right click to remove waypoint
+      mission.removeWaypoint(index);
+      renderWaypoints();
+    });
+    waypointMarkers.push(m);
+  });
+};
+
+// Re-render if store changes from external component
+watch(() => mission.waypoints.length, () => {
+  renderWaypoints();
+});
+
+watch(() => props.visibleLayers, (layers) => {
+  if (!map) return;
+
+  // Toggle Vessel Marker
+  if (layers.includes('vessel') && !map.hasLayer(asvMarker)) {
+    asvMarker.addTo(map);
+  } else if (!layers.includes('vessel') && map.hasLayer(asvMarker)) {
+    map.removeLayer(asvMarker);
+  }
+
+  // Toggle Trail
+  if (layers.includes('trail') && !map.hasLayer(trailPolyline)) {
+    trailPolyline.addTo(map);
+  } else if (!layers.includes('trail') && map.hasLayer(trailPolyline)) {
+    map.removeLayer(trailPolyline);
+  }
+}, { deep: true });
+
 onUnmounted(() => {
-  cancelAnimationFrame(animationId);
+  stopSimulation();
+  if (map) {
+    map.remove();
+    map = null;
+  }
 });
 </script>
 
 <template>
-  <div class="relative w-full h-full bg-background rounded-xl overflow-hidden cursor-crosshair">
-    <canvas 
-      ref="canvasRef" 
-      :width="width" 
-      :height="height"
-      class="w-full h-full"
-    ></canvas>
-    
+  <div
+    class="relative w-full h-full bg-background rounded-xl overflow-hidden shadow-2xl border border-(--border-subtle)">
+    <!-- Leaflet Map Container -->
+    <div ref="mapContainer" class="w-full h-full z-0 cursor-crosshair"></div>
+
+    <!-- DEV: Simulation Toggle -->
+    <div class="absolute top-6 left-1/2 -translate-x-1/2 z-10 flex gap-2">
+      <button @click="simInterval ? stopSimulation() : startSimulation()"
+        class="px-4 py-2 rounded-full font-black text-xs uppercase shadow-xl transition-all"
+        :class="simInterval ? 'bg-danger text-white' : 'bg-primary text-black'">
+        {{ simInterval ? '🛑 Stop Demo' : '▶️ Play Movement Demo' }}
+      </button>
+    </div>
+
     <!-- Map Controls Overlay -->
-    <div class="absolute bottom-4 right-4 flex flex-col gap-2">
-      <button @click="zoom += 5" class="w-10 h-10 bg-card/80 text-(--text-primary) rounded-lg border border-(--border-subtle) hover:bg-primary transition-all">+</button>
-      <button @click="zoom = Math.max(5, zoom - 5)" class="w-10 h-10 bg-card/80 text-(--text-primary) rounded-lg border border-(--border-subtle) hover:bg-primary transition-all">-</button>
+    <div class="absolute bottom-6 right-6 flex flex-col gap-3 z-10">
+      <button @click="map && map.setZoom(map.getZoom() + 1)"
+        class="w-12 h-12 bg-card/90 backdrop-blur-md text-(--text-primary) rounded-xl border border-(--border-subtle) hover:bg-primary hover:text-black transition-all shadow-xl font-bold text-xl flex items-center justify-center">+</button>
+      <button @click="map && map.setZoom(map.getZoom() - 1)"
+        class="w-12 h-12 bg-card/90 backdrop-blur-md text-(--text-primary) rounded-xl border border-(--border-subtle) hover:bg-primary hover:text-black transition-all shadow-xl font-bold text-xl flex items-center justify-center">-</button>
+
+      <button @click="map && map.panTo([vessel.lat || defaultLat, vessel.lng || defaultLng])"
+        class="mt-4 w-12 h-12 bg-primary/20 backdrop-blur-md text-primary rounded-xl border border-primary hover:bg-primary hover:text-black transition-all shadow-xl flex items-center justify-center"
+        title="Center to ASV">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      </button>
     </div>
 
     <!-- Map Info Overlay -->
-    <div class="absolute top-4 left-4 pointer-events-none">
-      <div class="bg-(--bg-secondary)/90 border border-(--border-subtle) p-3 rounded-lg">
-        <div class="flex items-center gap-2 mb-2">
-          <div class="w-2 h-2 rounded-full bg-primary animate-pulse"></div>
-          <span class="text-[10px] font-black text-(--text-primary) uppercase tracking-widest">Local Grid (30x30m)</span>
-        </div>
-        <div class="space-y-1">
-          <div class="flex justify-between gap-4">
-            <span class="text-[10px] text-(--text-secondary) uppercase font-bold">Zoom</span>
-            <span class="text-[10px] font-mono text-primary">{{ zoom }} px/m</span>
+    <div class="absolute top-6 left-6 z-10 pointer-events-none">
+      <div class="bg-card/80 backdrop-blur-md border border-(--border-subtle) p-4 rounded-xl shadow-2xl">
+        <div class="flex items-center gap-3 mb-3">
+          <div class="relative flex h-3 w-3">
+            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75"></span>
+            <span class="relative inline-flex rounded-full h-3 w-3 bg-success"></span>
           </div>
-          <div class="flex justify-between gap-4">
-            <span class="text-[10px] text-(--text-secondary) uppercase font-bold">X-Offset</span>
-            <span class="text-[10px] font-mono text-(--text-primary)">{{ offsetX }}m</span>
+          <span class="text-xs font-black text-white uppercase tracking-widest">Live Satellite Map</span>
+        </div>
+        <div class="space-y-2">
+          <div class="flex justify-between gap-6 items-center">
+            <span class="text-[10px] text-(--text-secondary) uppercase font-bold">ASV LAT</span>
+            <span class="text-[11px] font-mono text-primary font-bold">{{ vessel.lat.toFixed(6) }}</span>
+          </div>
+          <div class="flex justify-between gap-6 items-center">
+            <span class="text-[10px] text-(--text-secondary) uppercase font-bold">ASV LNG</span>
+            <span class="text-[11px] font-mono text-primary font-bold">{{ vessel.lng.toFixed(6) }}</span>
+          </div>
+          <div class="flex justify-between gap-6 items-center">
+            <span class="text-[10px] text-(--text-secondary) uppercase font-bold">YAW (HEADING)</span>
+            <span class="text-[11px] font-mono text-white font-bold">{{ vessel.heading.toFixed(1) }}°</span>
           </div>
         </div>
       </div>
     </div>
   </div>
 </template>
+
+<style>
+/* Leaflet Global Overrides */
+.leaflet-container {
+  background: #0f172a !important;
+  /* Tailwind slate-900 */
+  font-family: inherit;
+}
+
+.asv-icon-wrapper {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+</style>

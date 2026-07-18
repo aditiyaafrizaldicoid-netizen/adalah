@@ -32,6 +32,7 @@ func main() {
 		&entity.User{},
 		&entity.RefreshToken{},
 		&entity.AsvConfig{},
+		&entity.CalibrationProfile{},
 	)
 
 	if err != nil {

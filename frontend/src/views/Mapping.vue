@@ -53,7 +53,7 @@ const toggleLayer = (layer) => {
 
     <!-- Map Area -->
     <div class="flex-1 relative overflow-hidden bg-background">
-      <GridMap :width="1920" :height="1080" />
+      <GridMap :width="1920" :height="1080" :visible-layers="visibleLayers" />
       
       <!-- Waypoint Editor Component -->
       <div class="absolute top-6 right-6 w-72">

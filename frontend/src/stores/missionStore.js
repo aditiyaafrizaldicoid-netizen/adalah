@@ -65,6 +65,14 @@ export const useMissionStore = defineStore("mission", () => {
     if (timerInterval) clearInterval(timerInterval);
   }
 
+  function addWaypoint(lat, lng) {
+    waypoints.value.push({ lat, lng, type: 'NAV' });
+  }
+
+  function removeWaypoint(index) {
+    waypoints.value.splice(index, 1);
+  }
+
   return {
     currentStep,
     buoysPassed,
@@ -79,6 +87,8 @@ export const useMissionStore = defineStore("mission", () => {
     pauseMission,
     resumeMission,
     stopMission,
-    resetMission
+    resetMission,
+    addWaypoint,
+    removeWaypoint
   };
 });

@@ -77,11 +77,13 @@ func main() {
 	userRepo := repository.NewUserRepository(db, logger)
 	tokenRepo := repository.NewRefreshTokenRepository(db, logger)
 	asvConfigRepo := repository.NewAsvConfigRepository(db, logger)
+	calibRepo := repository.NewCalibrationProfileRepository(db, logger)
 
 	// 6. Initialize Services
 	userService := service.NewUserService(userRepo, logger)
 	authService := service.NewAuthService(userRepo, tokenRepo, cfg, logger)
 	asvConfigService := service.NewAsvConfigService(asvConfigRepo, logger)
+	calibService := service.NewCalibrationProfileService(calibRepo, logger)
 
 	// 7. Initialize Middlewares
 	mid := middleware.NewMiddleware(cfg, logger, enforcer)
@@ -94,9 +96,10 @@ func main() {
 	wsHub := handler.NewWSHub()
 	wsHandler := handler.NewWSHandler(wsHub, asvConfigService)
 	videoHandler := handler.NewVideoHandler()
+	calibHandler := handler.NewCalibrationProfileHandler(calibService)
 
 	// 9. Initialize Router & Get App
-	r := route.NewRouter(cfg, mid, authHandler, userHandler, healthHandler, wsHandler, videoHandler)
+	r := route.NewRouter(cfg, mid, authHandler, userHandler, healthHandler, wsHandler, videoHandler, calibHandler)
 	app := r.New()
 
 	// 10. Start Server

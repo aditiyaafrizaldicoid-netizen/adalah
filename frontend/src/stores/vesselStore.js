@@ -3,8 +3,8 @@ import { ref, computed } from "vue";
 
 export const useVesselStore = defineStore("vessel", () => {
   // Telemetry State
-  const lat = ref(-6.2088);
-  const lng = ref(106.8456);
+  const lat = ref(-7.9215169);
+  const lng = ref(112.5973649);
   const heading = ref(0);
   const sog = ref(0); // Speed Over Ground (knots)
   const cog = ref(0); // Course Over Ground
@@ -33,7 +33,7 @@ export const useVesselStore = defineStore("vessel", () => {
   const xte = ref(0);
   const dtw = ref(150.5);
   const nextWp = ref(1);
-  
+
   // Engine Stats
   const thrusterL = ref(0);
   const thrusterR = ref(0);
@@ -50,9 +50,20 @@ export const useVesselStore = defineStore("vessel", () => {
 
   // Actions to update telemetry
   function updateTelemetry(data) {
-    if (data.lat !== undefined) lat.value = data.lat;
-    if (data.lng !== undefined) lng.value = data.lng;
-    if (data.heading !== undefined) heading.value = data.heading;
+    if (!isSimulating.value) {
+      if (data.lat !== undefined && data.lat !== 0) lat.value = data.lat;
+      if (data.lng !== undefined && data.lng !== 0) lng.value = data.lng;
+    }
+
+    // Always update these from real sensors even if simulating location
+    if (data.heading !== undefined) {
+      heading.value = data.heading;
+      if (heading.value > 180) {
+        heading.value -= 360;
+      } else if (heading.value < -180) {
+        heading.value += 360;
+      }
+    }
     if (data.sog !== undefined) sog.value = data.sog;
     if (data.cog !== undefined) cog.value = data.cog;
     if (data.pitch !== undefined) pitch.value = data.pitch;
@@ -76,14 +87,14 @@ export const useVesselStore = defineStore("vessel", () => {
         // Mock movement
         heading.value = (heading.value + (Math.random() - 0.4) * 2 + 360) % 360;
         sog.value = Math.max(0, sog.value + (Math.random() - 0.5) * 0.1);
-        
+
         // Mock attitude
         pitch.value = Math.sin(Date.now() / 1000) * 5;
         roll.value = Math.cos(Date.now() / 1000) * 8;
-        
+
         // Mock battery drain
         if (batteryPct.value > 0) batteryPct.value -= 0.001;
-        
+
         // Mock GPS
         satellites.value = 12 + Math.floor(Math.random() * 3);
         gpsFix.value = 3;

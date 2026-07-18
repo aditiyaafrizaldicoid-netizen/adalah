@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue';
+import { onMounted, ref } from 'vue';
 import { Settings2, Compass, MapPin, Camera, Zap, Cpu } from "lucide-vue-next";
 
 // Sub-components
@@ -10,7 +10,9 @@ import ThrusterCalibration from "../components/calibration/ThrusterCalibration.v
 import ServoCalibration from "../components/calibration/ServoCalibration.vue";
 import CalibrationProfile from "../components/calibration/CalibrationProfile.vue";
 import ChannelConfig from "../components/calibration/ChannelConfig.vue";
-
+import { useRouter, useRoute } from 'vue-router';
+const router = useRouter();
+const route = useRoute();
 const activeTab = ref('channel');
 
 const tabs = [
@@ -22,6 +24,13 @@ const tabs = [
   { id: 'servo', name: 'Servo / Actuator', icon: Settings2 },
   { id: 'profile', name: 'Profiles', icon: Settings2 },
 ];
+const changeTab = (tabId) => {
+  activeTab.value = tabId;
+  router.push({ name: 'Calibration', query: { tab: tabId } });
+};
+onMounted(() => {
+  activeTab.value = route.query.tab || 'channel';
+})
 </script>
 
 <template>
@@ -31,23 +40,19 @@ const tabs = [
         <Settings2 class="text-primary w-6 h-6" />
         SENSOR CALIBRATION
       </h1>
-      <p class="text-(--text-secondary) text-xs mt-1 uppercase tracking-widest font-bold">Hardware Fine-Tuning & Alignment</p>
+      <p class="text-(--text-secondary) text-xs mt-1 uppercase tracking-widest font-bold">Hardware Fine-Tuning &
+        Alignment</p>
     </div>
 
     <div class="flex-1 flex gap-6 overflow-hidden">
       <!-- Sidebar Tabs -->
       <div class="w-64 shrink-0 flex flex-col gap-2 overflow-y-auto pr-2">
-        <button 
-          v-for="tab in tabs" 
-          :key="tab.id"
-          @click="activeTab = tab.id"
-          :class="[
-            'flex items-center gap-4 px-5 py-4 rounded-xl font-bold text-sm transition-all border shrink-0',
-            activeTab === tab.id 
-              ? 'bg-primary text-slate-900 border-primary shadow-lg shadow-primary/10' 
-              : 'bg-card/50 text-(--text-secondary) border-(--border-subtle)/50 hover:bg-(--bg-secondary) hover:text-(--text-primary)'
-          ]"
-        >
+        <button v-for="tab in tabs" :key="tab.id" @click="changeTab(tab.id)" :class="[
+          'flex items-center gap-4 px-5 py-4 rounded-xl font-bold text-sm transition-all border shrink-0',
+          activeTab === tab.id
+            ? 'bg-primary text-slate-900 border-primary shadow-lg shadow-primary/10'
+            : 'bg-card/50 text-(--text-secondary) border-(--border-subtle)/50 hover:bg-(--bg-secondary) hover:text-(--text-primary)'
+        ]">
           <component :is="tab.icon" class="w-5 h-5" />
           {{ tab.name }}
         </button>
@@ -56,15 +61,15 @@ const tabs = [
       <!-- Content Area (Modular Components) -->
       <div class="flex-1 glass-card p-8 overflow-y-auto">
         <transition name="fade" mode="out-in">
-           <div :key="activeTab">
-              <ChannelConfig v-if="activeTab === 'channel'" />
-              <ImuCalibration v-if="activeTab === 'imu'" />
-              <GpsCalibration v-if="activeTab === 'gps'" />
-              <CameraCalibration v-if="activeTab === 'camera'" />
-              <ThrusterCalibration v-if="activeTab === 'thruster'" />
-              <ServoCalibration v-if="activeTab === 'servo'" />
-              <CalibrationProfile v-if="activeTab === 'profile'" />
-           </div>
+          <div :key="activeTab">
+            <ChannelConfig v-if="activeTab === 'channel'" />
+            <ImuCalibration v-if="activeTab === 'imu'" />
+            <GpsCalibration v-if="activeTab === 'gps'" />
+            <CameraCalibration v-if="activeTab === 'camera'" />
+            <ThrusterCalibration v-if="activeTab === 'thruster'" />
+            <ServoCalibration v-if="activeTab === 'servo'" />
+            <CalibrationProfile v-if="activeTab === 'profile'" />
+          </div>
         </transition>
       </div>
     </div>
@@ -72,6 +77,13 @@ const tabs = [
 </template>
 
 <style scoped>
-.fade-enter-active, .fade-leave-active { transition: opacity 0.2s ease; }
-.fade-enter-from, .fade-leave-to { opacity: 0; }
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
 </style>

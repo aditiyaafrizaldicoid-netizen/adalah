@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"log"
 
-	"go-fiber-template/internal/entity"
 	"go-fiber-template/internal/service"
 
 	"github.com/gofiber/contrib/websocket"

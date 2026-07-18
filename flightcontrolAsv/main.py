@@ -22,9 +22,9 @@ def main():
     ws_client.start()
     
     # 3. Setup Video Streamer (Pushing to Backend)
-    video_upload_url = os.getenv("ASV_VIDEO_URL", "http://localhost:3000/api/v1/video/upload")
-    video_streamer = VideoStreamer(camera_index=0, width=640, height=480, fps=15, backend_url=video_upload_url)
-    video_streamer.start()
+    # video_upload_url = os.getenv("ASV_VIDEO_URL", "http://localhost:3000/api/v1/video/upload")
+    # video_streamer = VideoStreamer(camera_index=0, width=640, height=480, fps=15, backend_url=video_upload_url)
+    # video_streamer.start()
     
     try:
         print("\n[Main] Sistem berjalan. Tekan Ctrl+C untuk berhenti.")
@@ -33,7 +33,7 @@ def main():
     except KeyboardInterrupt:
         print("\n[Main] Dibatalkan oleh pengguna.")
     finally:
-        video_streamer.stop()
+        # video_streamer.stop()
         ws_client.stop()
         asv.stop()
         print("\n[Main] Selesai. Semua koneksi ditutup.")
