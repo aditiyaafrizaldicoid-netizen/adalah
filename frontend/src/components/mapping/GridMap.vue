@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted, watch } from 'vue';
+import { ref, onMounted, onUnmounted, watch, computed } from 'vue';
 import { useVesselStore } from '@/stores/vesselStore';
 import { useMissionStore } from '@/stores/missionStore';
 import 'leaflet/dist/leaflet.css';
@@ -128,6 +128,26 @@ watch(() => [vessel.lat, vessel.lng, vessel.heading], ([lat, lng, heading]) => {
   // map.panTo(newPos);
 }, { deep: true });
 
+// --- GEO-TAG FORMATTING & TIME ---
+const currentTime = ref(new Date());
+let timeInterval = null;
+
+const formatDDMMMM = (deg, isLat) => {
+  const absolute = Math.abs(deg);
+  const degrees = Math.floor(absolute);
+  // Format minutes to 4 decimal places and replace dot with comma as requested
+  const minutes = ((absolute - degrees) * 60).toFixed(4).replace('.', ',');
+  const dir = isLat ? (deg >= 0 ? 'N' : 'S') : (deg >= 0 ? 'E' : 'W');
+  return `[${degrees.toString().padStart(isLat ? 2 : 3, '0')} ${minutes} ${dir}]`;
+};
+
+const formattedDate = computed(() => {
+  return currentTime.value.toLocaleDateString('en-GB', { weekday: 'short', year: 'numeric', month: 'short', day: '2-digit' }).toUpperCase();
+});
+const formattedTime = computed(() => {
+  return currentTime.value.toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+});
+
 // --- MOCK SIMULATION FOR DEMO ---
 let simInterval = null;
 const startSimulation = () => {
@@ -211,6 +231,10 @@ watch(() => mission.waypoints.length, () => {
   renderWaypoints();
 });
 
+onMounted(() => {
+  timeInterval = setInterval(() => currentTime.value = new Date(), 1000);
+});
+
 watch(() => props.visibleLayers, (layers) => {
   if (!map) return;
 
@@ -230,6 +254,7 @@ watch(() => props.visibleLayers, (layers) => {
 }, { deep: true });
 
 onUnmounted(() => {
+  if (timeInterval) clearInterval(timeInterval);
   stopSimulation();
   if (map) {
     map.remove();
@@ -270,29 +295,50 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <!-- Map Info Overlay -->
-    <div class="absolute top-6 left-6 z-10 pointer-events-none">
-      <div class="bg-card/80 backdrop-blur-md border border-(--border-subtle) p-4 rounded-xl shadow-2xl">
-        <div class="flex items-center gap-3 mb-3">
-          <div class="relative flex h-3 w-3">
-            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75"></span>
-            <span class="relative inline-flex rounded-full h-3 w-3 bg-success"></span>
-          </div>
-          <span class="text-xs font-black text-white uppercase tracking-widest">Live Satellite Map</span>
+    <!-- Geo-Tag & Telemetry Overlay -->
+    <div class="absolute top-6 left-6 z-10 flex flex-col gap-3 pointer-events-none">
+      
+      <!-- Live Status & Geo-Tag Time -->
+      <div class="bg-card/90 backdrop-blur-md border border-(--border-subtle) px-4 py-3 rounded-xl shadow-2xl flex items-center gap-4">
+        <div class="relative flex h-3 w-3">
+          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75"></span>
+          <span class="relative inline-flex rounded-full h-3 w-3 bg-success"></span>
         </div>
-        <div class="space-y-2">
-          <div class="flex justify-between gap-6 items-center">
-            <span class="text-[10px] text-(--text-secondary) uppercase font-bold">ASV LAT</span>
-            <span class="text-[11px] font-mono text-primary font-bold">{{ vessel.lat.toFixed(6) }}</span>
+        <div class="flex flex-col">
+          <span class="text-[10px] font-black text-white/50 uppercase tracking-widest leading-none mb-1">Live Geo-Tag</span>
+          <div class="flex items-center gap-2 font-mono text-xs font-bold text-white leading-none">
+            <span class="text-primary">{{ formattedDate }}</span>
+            <span class="text-(--text-secondary)">|</span>
+            <span>{{ formattedTime }} <span class="text-white/50 text-[10px]">WIB</span></span>
           </div>
-          <div class="flex justify-between gap-6 items-center">
-            <span class="text-[10px] text-(--text-secondary) uppercase font-bold">ASV LNG</span>
-            <span class="text-[11px] font-mono text-primary font-bold">{{ vessel.lng.toFixed(6) }}</span>
-          </div>
-          <div class="flex justify-between gap-6 items-center">
-            <span class="text-[10px] text-(--text-secondary) uppercase font-bold">YAW (HEADING)</span>
-            <span class="text-[11px] font-mono text-white font-bold">{{ vessel.heading.toFixed(1) }}°</span>
-          </div>
+        </div>
+      </div>
+
+      <!-- Advanced Coordinates Box -->
+      <div class="bg-card/90 backdrop-blur-md border border-(--border-subtle) p-4 rounded-xl shadow-2xl flex flex-col gap-3">
+        <div class="flex justify-between gap-6 items-center border-b border-white/5 pb-2">
+          <span class="text-[10px] text-(--text-secondary) uppercase font-bold tracking-widest">ASV LAT</span>
+          <span class="text-[12px] font-mono text-primary font-bold">{{ formatDDMMMM(vessel.lat, true) }}</span>
+        </div>
+        <div class="flex justify-between gap-6 items-center">
+          <span class="text-[10px] text-(--text-secondary) uppercase font-bold tracking-widest">ASV LNG</span>
+          <span class="text-[12px] font-mono text-primary font-bold">{{ formatDDMMMM(vessel.lng, false) }}</span>
+        </div>
+      </div>
+
+      <!-- SOG & COG (Speed & Course) -->
+      <div class="flex gap-3">
+        <div class="flex-1 bg-card/90 backdrop-blur-md border border-(--border-subtle) p-3 rounded-xl shadow-2xl flex flex-col">
+          <span class="text-[9px] text-(--text-secondary) uppercase font-black tracking-widest mb-1">SOG (Knots)</span>
+          <span class="text-lg font-mono text-white font-bold leading-none">{{ vessel.sog.toFixed(1) }}</span>
+        </div>
+        <div class="flex-1 bg-card/90 backdrop-blur-md border border-(--border-subtle) p-3 rounded-xl shadow-2xl flex flex-col">
+          <span class="text-[9px] text-(--text-secondary) uppercase font-black tracking-widest mb-1">COG (Deg)</span>
+          <span class="text-lg font-mono text-white font-bold leading-none">{{ vessel.cog.toFixed(1) }}°</span>
+        </div>
+        <div class="flex-1 bg-card/90 backdrop-blur-md border border-(--border-subtle) p-3 rounded-xl shadow-2xl flex flex-col">
+          <span class="text-[9px] text-(--text-secondary) uppercase font-black tracking-widest mb-1">HDG (Deg)</span>
+          <span class="text-lg font-mono text-primary font-bold leading-none">{{ vessel.heading.toFixed(1) }}°</span>
         </div>
       </div>
     </div>
