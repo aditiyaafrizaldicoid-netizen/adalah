@@ -5,12 +5,13 @@ import numpy as np
 import urllib.request
 
 class VideoStreamer:
-    def __init__(self, camera_index=0, width=640, height=480, fps=15, backend_url="http://localhost:3000/api/v1/video/upload"):
+    def __init__(self, camera_index=0, width=640, height=480, fps=15, backend_url="http://localhost:3000/api/v1/video/upload", frame_callback=None):
         self.camera_index = camera_index
         self.width = width
         self.height = height
         self.fps = fps
         self.backend_url = backend_url
+        self.frame_callback = frame_callback
         self._is_running = False
         self._capture_thread = None
 
@@ -66,6 +67,9 @@ class VideoStreamer:
                 
             if frame.shape[1] != self.width or frame.shape[0] != self.height:
                 frame = cv2.resize(frame, (self.width, self.height))
+                
+            if self.frame_callback:
+                frame = self.frame_callback(frame)
                 
             encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 60]
             result, encimg = cv2.imencode('.jpg', frame, encode_param)
