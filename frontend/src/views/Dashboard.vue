@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted } from "vue";
+import { ref, onMounted } from "vue";
 import { useVesselStore } from "@/stores/vesselStore";
 import { useMissionStore } from "@/stores/missionStore";
 import { useScoringStore } from "@/stores/scoringStore";
@@ -15,6 +15,9 @@ import {
   ShieldAlert,
   Wifi,
   WifiOff,
+  Video,
+  VideoOff,
+  CircleDot,
 } from "lucide-vue-next";
 
 import MetricCard from "../components/ui/MetricCard.vue";
@@ -26,6 +29,12 @@ const vessel = useVesselStore();
 const mission = useMissionStore();
 const scoring = useScoringStore();
 const wsStore = useWebsocketStore();
+
+const selectedRes = ref('640x480');
+const handleToggleRecord = () => {
+  const [w, h] = selectedRes.value.split('x');
+  wsStore.toggleRecording(parseInt(w), parseInt(h));
+};
 
 onMounted(() => {
   // Start simulation if needed
@@ -217,7 +226,36 @@ onMounted(() => {
             <span class="animate-pulse tracking-widest">NO VIDEO SIGNAL</span>
           </div>
           <!-- Video Overlay UI -->
-          <div class="absolute top-4 right-4 flex gap-2">
+          <div class="absolute top-4 right-4 flex items-center gap-2 z-10">
+            <!-- Recording Indicator Badge -->
+            <span v-if="vessel.isRecording"
+              class="flex items-center gap-1.5 bg-red-600/90 text-white text-[10px] px-2.5 py-1 rounded font-black tracking-widest animate-pulse border border-red-400 shadow-lg">
+              <CircleDot class="w-3.5 h-3.5 text-white" />
+              REC {{ vessel.recordingResolution }}
+            </span>
+
+            <!-- Resolution Picker -->
+            <select v-if="!vessel.isRecording" v-model="selectedRes"
+              class="text-[10px] font-mono bg-black/80 border border-white/20 text-white rounded px-2 py-1 focus:outline-none opacity-80 hover:opacity-100 transition-opacity">
+              <option value="640x480">640x480 (SD)</option>
+              <option value="1280x720">1280x720 (HD)</option>
+              <option value="1920x1080">1920x1080 (FHD)</option>
+            </select>
+
+            <!-- Record Button -->
+            <button @click="handleToggleRecord"
+              :class="[
+                'px-3 py-1 rounded flex items-center gap-1.5 text-[10px] font-bold tracking-wider transition-all shadow-lg cursor-pointer',
+                vessel.isRecording 
+                  ? 'bg-red-600 text-white hover:bg-red-700 animate-pulse border border-red-400' 
+                  : 'bg-black/80 text-white border border-white/20 hover:bg-red-600 hover:text-white'
+              ]"
+              :title="vessel.isRecording ? 'Stop Recording Raw Stream' : 'Record Raw Stream (No Object Detection)'">
+              <VideoOff v-if="vessel.isRecording" class="w-3.5 h-3.5" />
+              <Video v-else class="w-3.5 h-3.5 text-red-500" />
+              <span>{{ vessel.isRecording ? 'STOP REC' : 'REC MP4' }}</span>
+            </button>
+
             <span
               class="bg-danger/80 text-white text-[10px] px-2 py-1 rounded font-bold animate-pulse tracking-widest"
               >LIVE</span

@@ -25,6 +25,11 @@ export const useVesselStore = defineStore("vessel", () => {
   const isArmed = ref(false);      // Motor sudah ARM
   const mode = ref('UNKNOWN');     // Mode aktif: MANUAL, GUIDED, AUTO, dll
 
+  // Video Recording State (Tanpa Object Detection)
+  const isRecording = ref(false);
+  const recordingFilename = ref('');
+  const recordingResolution = ref('640x480');
+
   // Simulation State
   const isSimulating = ref(false);
   let simInterval = null;
@@ -78,6 +83,10 @@ export const useVesselStore = defineStore("vessel", () => {
     if (data.is_connected !== undefined) isConnected.value = data.is_connected;
     if (data.is_armed !== undefined) isArmed.value = data.is_armed;
     if (data.mode !== undefined) mode.value = data.mode;
+    // Status Recording Video Mentah
+    if (data.is_recording !== undefined) isRecording.value = data.is_recording;
+    if (data.recording_filename !== undefined) recordingFilename.value = data.recording_filename;
+    if (data.recording_resolution !== undefined) recordingResolution.value = data.recording_resolution;
   }
 
   function toggleSimulation() {
@@ -130,6 +139,7 @@ export const useVesselStore = defineStore("vessel", () => {
     xte, dtw, nextWp,
     thrusterL, thrusterR, rpmL, rpmR,
     isConnected, isArmed, mode,
+    isRecording, recordingFilename, recordingResolution,
     isGpsValid, batteryColor, isSimulating,
     updateTelemetry, toggleSimulation
   };

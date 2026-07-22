@@ -24,9 +24,10 @@ class ASVWebSocketClient:
     - Channel ACK: { "type": "CHANNEL_CONFIG", "payload": { ... } }
     """
 
-    def __init__(self, asv: ASVController, ws_url: str = "ws://localhost:3000/api/v1/ws/asv"):
+    def __init__(self, asv: ASVController, ws_url: str = "ws://localhost:3000/api/v1/ws/asv", video_streamer=None):
         self.asv = asv
         self.ws_url = ws_url
+        self.video_streamer = video_streamer
         self.ws = None
         self._is_running = False
         self._thread = None
@@ -34,6 +35,9 @@ class ASVWebSocketClient:
 
         # State RC Override per-channel yang sedang aktif (persistent antar perintah)
         self._rc_state = [65535] * 18  # 18 channel, semua di-release default
+
+    def set_video_streamer(self, video_streamer):
+        self.video_streamer = video_streamer
 
     def start(self):
         if self._is_running:
@@ -228,6 +232,37 @@ class ASVWebSocketClient:
             else:
                 print("[WS] set_param: 'param_name' tidak ditemukan dalam cmd")
 
+        # --- VIDEO RECORDING (Tanpa Object Detection) ---
+        elif action == "start_recording":
+            width = cmd.get("width")
+            height = cmd.get("height")
+            if self.video_streamer:
+                filename = self.video_streamer.start_recording(width=width, height=height)
+                self._send_ws({
+                    "type": "RECORDING_STATUS",
+                    "payload": {
+                        "is_recording": True,
+                        "filename": filename,
+                        "width": self.video_streamer.record_width,
+                        "height": self.video_streamer.record_height
+                    }
+                })
+            else:
+                print("[WS] start_recording: video_streamer tidak terhubung pada ws_client")
+
+        elif action == "stop_recording":
+            if self.video_streamer:
+                filename = self.video_streamer.stop_recording()
+                self._send_ws({
+                    "type": "RECORDING_STATUS",
+                    "payload": {
+                        "is_recording": False,
+                        "filename": filename
+                    }
+                })
+            else:
+                print("[WS] stop_recording: video_streamer tidak terhubung pada ws_client")
+
         elif action:
             print(f"[WS] Unknown action: {action}")
 
@@ -272,6 +307,9 @@ class ASVWebSocketClient:
                         "is_armed": t.get("is_armed", False),
                         "mode": t.get("mode", "UNKNOWN"),
                         "is_connected": t.get("is_connected", False),
+                        "is_recording": self.video_streamer.is_recording if self.video_streamer else False,
+                        "recording_filename": self.video_streamer.recording_filename if (self.video_streamer and self.video_streamer.is_recording) else "",
+                        "recording_resolution": f"{self.video_streamer.record_width}x{self.video_streamer.record_height}" if (self.video_streamer and self.video_streamer.is_recording) else ""
                     }
                     self.ws.send(json.dumps({
                         "type": "TELEMETRY",

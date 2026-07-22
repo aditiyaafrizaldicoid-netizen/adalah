@@ -40,6 +40,14 @@ export const useWebsocketStore = defineStore("websocket", () => {
 
         if (data.type === "TELEMETRY") {
           vesselStore.updateTelemetry(data.payload);
+        } else if (data.type === "RECORDING_STATUS") {
+          if (data.payload) {
+            vesselStore.isRecording = !!data.payload.is_recording;
+            vesselStore.recordingFilename = data.payload.filename || '';
+            if (data.payload.width && data.payload.height) {
+              vesselStore.recordingResolution = `${data.payload.width}x${data.payload.height}`;
+            }
+          }
         } else if (data.type === "MISSION_UPDATE") {
           // Update mission state
         } else if (data.type === "PONG") {
@@ -104,6 +112,25 @@ export const useWebsocketStore = defineStore("websocket", () => {
     }
   }
 
+  function startRecording(width, height) {
+    const cmd = { action: "start_recording" };
+    if (width) cmd.width = parseInt(width);
+    if (height) cmd.height = parseInt(height);
+    sendCommand(cmd);
+  }
+
+  function stopRecording() {
+    sendCommand({ action: "stop_recording" });
+  }
+
+  function toggleRecording(width, height) {
+    if (vesselStore.isRecording) {
+      stopRecording();
+    } else {
+      startRecording(width, height);
+    }
+  }
+
   function disconnect() {
     autoReconnect.value = false;
     if (socket.value) socket.value.close();
@@ -111,6 +138,6 @@ export const useWebsocketStore = defineStore("websocket", () => {
 
   return {
     socket, status, latency, lastMessage, autoReconnect,
-    connect, disconnect, sendCommand,
+    connect, disconnect, sendCommand, startRecording, stopRecording, toggleRecording,
   };
 });

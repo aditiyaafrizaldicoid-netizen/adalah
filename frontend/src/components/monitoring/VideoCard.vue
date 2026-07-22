@@ -1,7 +1,9 @@
 <script setup>
 import { ref, computed } from 'vue';
-import { RefreshCw, AlertCircle, Camera } from 'lucide-vue-next';
+import { RefreshCw, AlertCircle, Camera, Video, VideoOff, CircleDot } from 'lucide-vue-next';
 import { useMjpegStream } from '@/composables/useMjpegStream';
+import { useVesselStore } from '@/stores/vesselStore';
+import { useWebsocketStore } from '@/stores/websocketStore';
 
 const props = defineProps({
     title: String,
@@ -12,9 +14,18 @@ const props = defineProps({
     objectFit: { type: String, default: 'object-contain' }
 });
 
+const vessel = useVesselStore();
+const wsStore = useWebsocketStore();
+const selectedRes = ref('640x480');
+
 const isMounted = ref(true);
 const srcRef = computed(() => props.src);
 const { activeSrc, isError, onError, onLoad, reload, imgRef, BLANK } = useMjpegStream(srcRef);
+
+const handleToggleRecord = () => {
+    const [w, h] = selectedRes.value.split('x');
+    wsStore.toggleRecording(parseInt(w), parseInt(h));
+};
 </script>
 
 <template>
@@ -32,6 +43,11 @@ const { activeSrc, isError, onError, onLoad, reload, imgRef, BLANK } = useMjpegS
                 {{ title || 'VIDEO STREAM' }}
             </h3>
             <div class="flex items-center gap-3">
+                <span v-if="vessel.isRecording"
+                    class="flex items-center gap-1.5 bg-red-600/90 text-white text-[10px] px-2 py-0.5 rounded font-black tracking-widest animate-pulse border border-red-400">
+                    <CircleDot class="w-3 h-3 text-white" />
+                    REC {{ vessel.recordingResolution }}
+                </span>
                 <span class="flex items-center gap-1.5" v-if="isMounted && !isError">
                     <span class="led-green"></span>
                     <span class="text-[10px] font-black text-white opacity-80 uppercase tracking-widest">LIVE</span>
@@ -47,6 +63,29 @@ const { activeSrc, isError, onError, onLoad, reload, imgRef, BLANK } = useMjpegS
             :class="['relative bg-black flex items-center justify-center overflow-hidden flex-1 group-hover/video:shadow-[inset_0_0_40px_rgba(0,0,0,0.8)] transition-all', aspect]">
             <img ref="imgRef" :src="activeSrc" @error="onError" @load="onLoad" class="w-full h-full"
                 :class="[objectFit, { 'opacity-0': isError || activeSrc === BLANK }]" />
+
+            <!-- Record Overlay Controls (Top Right overlay inside video) -->
+            <div class="absolute top-3 right-3 z-10 flex items-center gap-2">
+                <select v-if="!vessel.isRecording" v-model="selectedRes"
+                    class="text-[10px] font-mono bg-black/80 border border-white/20 text-white rounded px-1.5 py-1 focus:outline-none opacity-0 group-hover/video:opacity-100 transition-opacity">
+                    <option value="640x480">640x480 (SD)</option>
+                    <option value="1280x720">1280x720 (HD)</option>
+                    <option value="1920x1080">1920x1080 (FHD)</option>
+                </select>
+
+                <button @click="handleToggleRecord"
+                    :class="[
+                        'px-2.5 py-1 rounded flex items-center gap-1.5 text-[10px] font-bold tracking-wider transition-all shadow-lg cursor-pointer',
+                        vessel.isRecording 
+                            ? 'bg-red-600 text-white hover:bg-red-700 animate-pulse border border-red-400' 
+                            : 'bg-black/80 text-white border border-white/20 hover:bg-red-600 hover:text-white'
+                    ]"
+                    :title="vessel.isRecording ? 'Stop Recording Raw Stream' : 'Record Raw Stream (No Object Detection)'">
+                    <VideoOff v-if="vessel.isRecording" class="w-3.5 h-3.5" />
+                    <Video v-else class="w-3.5 h-3.5 text-red-500" />
+                    <span>{{ vessel.isRecording ? 'STOP REC' : 'REC MP4' }}</span>
+                </button>
+            </div>
 
             <!-- Loading / Error Overlay -->
             <div v-if="isError || activeSrc === BLANK"
@@ -77,6 +116,10 @@ const { activeSrc, isError, onError, onLoad, reload, imgRef, BLANK } = useMjpegS
                 <div
                     class="px-2 py-1 bg-black/60 backdrop-blur-md border border-white/10 rounded text-[8px] font-mono text-white/70 uppercase">
                     MJPEG
+                </div>
+                <div v-if="vessel.isRecording && vessel.recordingFilename"
+                    class="px-2 py-1 bg-red-950/80 border border-red-500/30 rounded text-[8px] font-mono text-red-300 uppercase">
+                    Saving MP4: {{ vessel.recordingFilename.split('/').pop() }}
                 </div>
             </div>
         </div>
