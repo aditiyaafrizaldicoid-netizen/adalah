@@ -12,7 +12,7 @@ def main():
     # Ganti dengan port yang sesuai di Mini PC
     # Jika menggunakan simulasi SITL (misalnya ArduRover SITL): port = "tcp:127.0.0.1:5760"
     port = os.getenv("ASV_TEST_PORT", "/dev/ttyACM0")
-    baudrate = 115200
+    baudrate = 9600
     
     asv = ASVController(port=port, baudrate=baudrate)
     asv.start()
@@ -22,9 +22,9 @@ def main():
     ws_client.start()
     
     # 3. Setup Video Streamer (Pushing to Backend)
-    # video_upload_url = os.getenv("ASV_VIDEO_URL", "http://localhost:3000/api/v1/video/upload")
-    # video_streamer = VideoStreamer(camera_index=0, width=640, height=480, fps=15, backend_url=video_upload_url)
-    # video_streamer.start()
+    video_upload_url = os.getenv("ASV_VIDEO_URL", "http://localhost:3000/api/v1/video/upload")
+    video_streamer = VideoStreamer(camera_index=2, width=240, height=120, fps=15, backend_url=video_upload_url)
+    video_streamer.start()
     
     try:
         print("\n[Main] Sistem berjalan. Tekan Ctrl+C untuk berhenti.")
