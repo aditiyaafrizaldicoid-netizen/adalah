@@ -14,8 +14,8 @@ export const useChannelConfigStore = defineStore("channelConfig", () => {
 
   // --- State channel mapping ---
   const thrusterLeftCh = ref(1);   // MAIN 1 default
-  const thrusterRightCh = ref(3);  // MAIN 3 default
-  const servoLeftCh = ref(2);      // MAIN 2 default
+  const thrusterRightCh = ref(2);  // MAIN 2 default
+  const servoLeftCh = ref(3);      // MAIN 3 default
   const servoRightCh = ref(4);     // MAIN 4 default
   const servoMethod = ref("rc_override"); // "rc_override" | "do_set_servo"
 
@@ -91,8 +91,8 @@ export const useChannelConfigStore = defineStore("channelConfig", () => {
    */
   function resetToDefault() {
     thrusterLeftCh.value = 1;
-    thrusterRightCh.value = 3;
-    servoLeftCh.value = 2;
+    thrusterRightCh.value = 2;
+    servoLeftCh.value = 3;
     servoRightCh.value = 4;
     servoMethod.value = "rc_override";
     isSynced.value = false;

@@ -47,8 +47,8 @@ onMounted(() => {
     <div class="flex justify-between items-end">
       <div>
         <h1 class="text-3xl font-bold text-(--text-primary) tracking-tight">
-          DASHBOARD
-          <span class="text-primary/50 text-xl font-light">OVERVIEW</span>
+         ROBOTIKA
+          <span class="text-primary/50 text-xl font-light">TIM-1</span>
         </h1>
         <p
           class="text-(--text-secondary) text-sm mt-1 uppercase tracking-widest font-bold"
