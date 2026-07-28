@@ -57,6 +57,20 @@ export const useWebsocketStore = defineStore("websocket", () => {
           import("./channelConfigStore").then(({ useChannelConfigStore }) => {
             useChannelConfigStore().updateFromPayload(data.payload);
           });
+        } else if (data.type === "WARNING") {
+          // Warning dari backend (ASV disconnect, FC disconnect, dll)
+          const p = data.payload;
+          if (p) {
+            vesselStore.addWarning(p.level, p.code, p.message);
+            // Update state koneksi ASV berdasarkan kode warning
+            if (p.code === "ASV_CONNECTED") {
+              vesselStore.asvConnected = true;
+              vesselStore.clearWarning("ASV_DISCONNECTED");
+              vesselStore.clearWarning("ASV_OFFLINE");
+            } else if (p.code === "ASV_DISCONNECTED" || p.code === "ASV_OFFLINE") {
+              vesselStore.asvConnected = false;
+            }
+          }
         }
       };
 

@@ -30,6 +30,14 @@ export const useVesselStore = defineStore("vessel", () => {
   const recordingFilename = ref('');
   const recordingResolution = ref('640x480');
 
+  // Camera & Connectivity State
+  const cameraConnected = ref(false);  // Apakah stream kamera aktif
+  const asvConnected = ref(false);     // Apakah Mini PC (ASV) terkoneksi ke base station
+
+  // System Warnings (dari backend atau deteksi lokal)
+  // Format: { id, level, code, message, timestamp }
+  const warnings = ref([]);
+
   // Simulation State
   const isSimulating = ref(false);
   let simInterval = null;
@@ -89,6 +97,41 @@ export const useVesselStore = defineStore("vessel", () => {
     if (data.recording_resolution !== undefined) recordingResolution.value = data.recording_resolution;
   }
 
+  /**
+   * Tambahkan warning ke antrian.
+   * @param {string} level - 'critical' | 'warning' | 'info'
+   * @param {string} code  - kode unik, misal 'CAMERA_LOST'
+   * @param {string} message - pesan human-readable
+   */
+  function addWarning(level, code, message) {
+    // Jika warning dengan code yang sama sudah ada, update timestamp-nya saja
+    const existing = warnings.value.find(w => w.code === code);
+    if (existing) {
+      existing.timestamp = Date.now();
+      existing.message = message;
+      return;
+    }
+    warnings.value.unshift({
+      id: `${code}_${Date.now()}`,
+      level,
+      code,
+      message,
+      timestamp: Date.now(),
+    });
+    // Batasi maksimal 10 warning
+    if (warnings.value.length > 10) warnings.value.pop();
+  }
+
+  /** Hapus warning berdasarkan code */
+  function clearWarning(code) {
+    warnings.value = warnings.value.filter(w => w.code !== code);
+  }
+
+  /** Hapus semua warning */
+  function clearAllWarnings() {
+    warnings.value = [];
+  }
+
   function toggleSimulation() {
     isSimulating.value = !isSimulating.value;
     if (isSimulating.value) {
@@ -140,7 +183,10 @@ export const useVesselStore = defineStore("vessel", () => {
     thrusterL, thrusterR, rpmL, rpmR,
     isConnected, isArmed, mode,
     isRecording, recordingFilename, recordingResolution,
+    cameraConnected, asvConnected,
+    warnings,
     isGpsValid, batteryColor, isSimulating,
-    updateTelemetry, toggleSimulation
+    updateTelemetry, toggleSimulation,
+    addWarning, clearWarning, clearAllWarnings,
   };
 });

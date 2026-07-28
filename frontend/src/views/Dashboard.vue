@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from "vue";
+import { ref, onMounted, onUnmounted, watch } from "vue";
 import { useVesselStore } from "@/stores/vesselStore";
 import { useMissionStore } from "@/stores/missionStore";
 import { useScoringStore } from "@/stores/scoringStore";
@@ -18,6 +18,9 @@ import {
   Video,
   VideoOff,
   CircleDot,
+  AlertTriangle,
+  CheckCircle,
+  X,
 } from "lucide-vue-next";
 
 import MetricCard from "../components/ui/MetricCard.vue";
@@ -36,8 +39,57 @@ const handleToggleRecord = () => {
   wsStore.toggleRecording(parseInt(w), parseInt(h));
 };
 
+// ── Camera Loss Detection ────────────────────────────────────────────
+// Kita tracking kapan frame terakhir diterima dari MJPEG stream.
+// Jika lebih dari 5 detik tidak ada frame baru → kamera dianggap putus.
+const cameraLostSentStop = ref(false);
+const lastFrameTime = ref(Date.now());
+const imgRef = ref(null);
+let cameraCheckInterval = null;
+
+function onCameraLoad() {
+  // Frame berhasil diterima → update timestamp & clear warning
+  lastFrameTime.value = Date.now();
+  if (!vessel.cameraConnected) {
+    vessel.cameraConnected = true;
+    vessel.clearWarning('CAMERA_LOST');
+    cameraLostSentStop.value = false;
+  }
+}
+
+function onCameraError() {
+  handleCameraLost();
+}
+
+function handleCameraLost() {
+  vessel.cameraConnected = false;
+  vessel.addWarning(
+    'critical',
+    'CAMERA_LOST',
+    '🎥 KRITIS: Stream kamera terputus! Mengirim perintah EMERGENCY STOP ke kapal.'
+  );
+  // Kirim emergency stop hanya sekali per kejadian
+  if (!cameraLostSentStop.value && wsStore.status === 'CONNECTED') {
+    wsStore.sendCommand({ action: 'emergency_stop', reason: 'camera_lost' });
+    cameraLostSentStop.value = true;
+    console.warn('[Dashboard] Camera lost — emergency_stop sent');
+  }
+}
+
 onMounted(() => {
-  // Start simulation if needed
+  // Cek setiap 3 detik apakah frame sudah lama tidak diperbarui
+  cameraCheckInterval = setInterval(() => {
+    const now = Date.now();
+    const elapsed = now - lastFrameTime.value;
+    // Jika kamera pernah terhubung (ada 1 load sukses) tapi sekarang hilang > 5 detik
+    if (vessel.cameraConnected && elapsed > 5000) {
+      handleCameraLost();
+    }
+  }, 3000);
+});
+
+onUnmounted(() => {
+  if (cameraCheckInterval) clearInterval(cameraCheckInterval);
 });
 </script>
 
@@ -208,18 +260,24 @@ onMounted(() => {
           class="glass-card relative overflow-hidden border border-(--border-subtle) rounded-xl bg-slate-900 flex items-center justify-center w-full aspect-video"
         >
           <img
+            ref="imgRef"
             src="http://localhost:3000/api/v1/video/stream"
             class="w-full h-full object-cover"
-            onerror="
-              this.style.display = 'none';
-              this.nextElementSibling.style.display = 'flex';
-            "
-            onload="
-              this.style.display = 'block';
-              this.nextElementSibling.style.display = 'none';
-            "
+            @load="onCameraLoad"
+            @error="onCameraError"
           />
+          <!-- Camera Lost Overlay -->
           <div
+            v-if="!vessel.cameraConnected"
+            class="absolute inset-0 bg-slate-950/90 text-slate-500 font-mono text-sm flex flex-col items-center justify-center gap-3"
+          >
+            <VideoOff class="w-10 h-10 text-danger/70 animate-pulse" />
+            <span class="animate-pulse tracking-widest text-danger/70 font-bold text-xs uppercase">NO VIDEO SIGNAL</span>
+            <span class="text-[10px] text-slate-600">Emergency stop sent to vessel</span>
+          </div>
+          <!-- Stream placeholder saat koneksi pertama (belum load / belum error) -->
+          <div
+            id="camera-placeholder"
             class="absolute inset-0 text-slate-500 font-mono text-sm flex flex-col items-center justify-center"
             style="display: none"
           >
@@ -285,46 +343,85 @@ onMounted(() => {
 
         <!-- Alerts Panel -->
         <div class="glass-card p-5 border-t-4 border-t-danger">
-          <div class="flex items-center gap-2 mb-4">
-            <ShieldAlert class="w-5 h-5 text-danger" />
-            <span
-              class="text-sm font-bold uppercase tracking-widest text-(--text-primary)"
-              >System Alerts</span
-            >
+          <div class="flex items-center justify-between gap-2 mb-4">
+            <div class="flex items-center gap-2">
+              <ShieldAlert class="w-5 h-5 text-danger" />
+              <span
+                class="text-sm font-bold uppercase tracking-widest text-(--text-primary)"
+                >System Alerts</span
+              >
+            </div>
+            <!-- Badge jumlah warning -->
+            <span v-if="vessel.warnings.length > 0"
+              class="bg-danger text-white text-[9px] font-black px-2 py-0.5 rounded-full animate-pulse">
+              {{ vessel.warnings.length }}
+            </span>
+            <button v-if="vessel.warnings.length > 0"
+              @click="vessel.clearAllWarnings()"
+              class="text-[9px] text-(--text-muted) hover:text-danger transition-colors"
+              title="Dismiss semua alert">
+              <X class="w-3.5 h-3.5" />
+            </button>
           </div>
-          <div class="space-y-3">
+
+          <div class="space-y-2 max-h-[320px] overflow-y-auto">
+            <!-- Dynamic warnings dari vesselStore -->
+            <transition-group name="alert-list">
+              <div
+                v-for="w in vessel.warnings"
+                :key="w.id"
+                :class="[
+                  'p-3 rounded-lg border relative',
+                  w.level === 'critical' ? 'bg-danger/10 border-danger/20' :
+                  w.level === 'warning'  ? 'bg-warning/10 border-warning/20' :
+                                           'bg-primary/10 border-primary/20'
+                ]">
+                <div class="flex items-start justify-between gap-2">
+                  <div class="flex-1 min-w-0">
+                    <span :class="[
+                      'text-[9px] font-black uppercase tracking-wider block mb-1',
+                      w.level === 'critical' ? 'text-danger' :
+                      w.level === 'warning'  ? 'text-warning' : 'text-primary'
+                    ]">
+                      <AlertTriangle v-if="w.level !== 'info'" class="w-2.5 h-2.5 inline mr-0.5" />
+                      {{ w.level === 'critical' ? 'KRITIS' : w.level === 'warning' ? 'WARNING' : 'INFO' }}
+                      <span class="opacity-50 ml-1">{{ w.code }}</span>
+                    </span>
+                    <p class="text-[10px] text-(--text-primary) leading-relaxed">{{ w.message }}</p>
+                  </div>
+                  <button @click="vessel.clearWarning(w.code)"
+                    class="shrink-0 text-(--text-muted) hover:text-danger transition-colors mt-0.5">
+                    <X class="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+            </transition-group>
+
+            <!-- Fallback: semua nominal -->
+            <div
+              v-if="vessel.warnings.length === 0 && vessel.isConnected && wsStore.status === 'CONNECTED'"
+              class="p-3 bg-success/10 border border-success/20 rounded-lg"
+            >
+              <span class="text-[10px] font-bold text-success uppercase">OK</span>
+              <p class="text-xs text-(--text-primary) mt-1">Semua sistem nominal</p>
+            </div>
+
+            <!-- Static: FC tidak terhubung -->
             <div
               v-if="!vessel.isConnected"
               class="p-3 bg-danger/10 border border-danger/20 rounded-lg"
             >
-              <span class="text-[10px] font-bold text-danger uppercase"
-                >Critical</span
-              >
-              <p class="text-xs text-(--text-primary) mt-1">
-                Flight Controller tidak terhubung
-              </p>
+              <span class="text-[10px] font-bold text-danger uppercase">Critical</span>
+              <p class="text-xs text-(--text-primary) mt-1">Flight Controller tidak terhubung</p>
             </div>
+
+            <!-- Static: WS backend putus -->
             <div
               v-if="wsStore.status !== 'CONNECTED'"
               class="p-3 bg-warning/10 border border-warning/20 rounded-lg"
             >
-              <span class="text-[10px] font-bold text-warning uppercase"
-                >Warning</span
-              >
-              <p class="text-xs text-(--text-primary) mt-1">
-                WebSocket terputus dari backend
-              </p>
-            </div>
-            <div
-              v-if="vessel.isConnected && wsStore.status === 'CONNECTED'"
-              class="p-3 bg-success/10 border border-success/20 rounded-lg"
-            >
-              <span class="text-[10px] font-bold text-success uppercase"
-                >OK</span
-              >
-              <p class="text-xs text-(--text-primary) mt-1">
-                Semua sistem nominal
-              </p>
+              <span class="text-[10px] font-bold text-warning uppercase">Warning</span>
+              <p class="text-xs text-(--text-primary) mt-1">WebSocket terputus dari backend</p>
             </div>
           </div>
         </div>
@@ -332,3 +429,19 @@ onMounted(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.alert-list-enter-active,
+.alert-list-leave-active {
+  transition: all 0.3s ease;
+}
+.alert-list-enter-from {
+  opacity: 0;
+  transform: translateX(-10px);
+}
+.alert-list-leave-to {
+  opacity: 0;
+  transform: translateX(10px);
+  max-height: 0;
+}
+</style>

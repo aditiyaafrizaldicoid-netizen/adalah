@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"encoding/json"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/gofiber/contrib/websocket"
 )
@@ -73,4 +75,46 @@ func (h *WSHub) BroadcastToASV(message []byte) {
 			}
 		}
 	}
+}
+
+// BroadcastWarningToWeb mengirim pesan WARNING JSON ke semua Web UI client.
+// level: "critical" | "warning" | "info"
+func (h *WSHub) BroadcastWarningToWeb(level, code, message string) {
+	payload := map[string]interface{}{
+		"type": "WARNING",
+		"payload": map[string]interface{}{
+			"level":     level,
+			"code":      code,
+			"message":   message,
+			"timestamp": time.Now().UnixMilli(),
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("Error marshaling warning: %v", err)
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for c := range h.clients {
+		if c.Type == ClientTypeWeb {
+			if err := c.Conn.WriteMessage(websocket.TextMessage, data); err != nil {
+				log.Printf("Error sending warning to Web client: %v", err)
+				c.Conn.Close()
+				delete(h.clients, c)
+			}
+		}
+	}
+}
+
+// HasASVClient mengembalikan true jika setidaknya ada 1 ASV yang terhubung.
+func (h *WSHub) HasASVClient() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for c := range h.clients {
+		if c.Type == ClientTypeASV {
+			return true
+		}
+	}
+	return false
 }
