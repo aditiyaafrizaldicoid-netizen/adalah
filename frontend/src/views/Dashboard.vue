@@ -123,10 +123,10 @@ onMounted(() => {
         />
         <MetricCard
           label="BATTERY"
-          :value="vessel.batteryPct.toFixed(2)"
-          unit="%"
+          :value="vessel.batteryVolt.toFixed(2)"
+          unit="V"
           :icon="Battery"
-          :color="vessel.batteryPct > 20 ? 'success' : 'danger'"
+          :color="vessel.batteryVolt > 22 ? 'success' : 'danger'"
         />
         <MetricCard
           label="TOTAL SCORE"
