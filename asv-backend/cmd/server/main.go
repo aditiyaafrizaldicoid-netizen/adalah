@@ -78,12 +78,16 @@ func main() {
 	tokenRepo := repository.NewRefreshTokenRepository(db, logger)
 	asvConfigRepo := repository.NewAsvConfigRepository(db, logger)
 	calibRepo := repository.NewCalibrationProfileRepository(db, logger)
+	pidConfigRepo := repository.NewPidConfigRepository(db, logger)
+	missionPresetRepo := repository.NewMissionPresetRepository(db, logger)
 
 	// 6. Initialize Services
 	userService := service.NewUserService(userRepo, logger)
 	authService := service.NewAuthService(userRepo, tokenRepo, cfg, logger)
 	asvConfigService := service.NewAsvConfigService(asvConfigRepo, logger)
 	calibService := service.NewCalibrationProfileService(calibRepo, logger)
+	pidConfigService := service.NewPidConfigService(pidConfigRepo, logger)
+	missionPresetService := service.NewMissionPresetService(missionPresetRepo, logger)
 
 	// 7. Initialize Middlewares
 	mid := middleware.NewMiddleware(cfg, logger, enforcer)
@@ -94,12 +98,16 @@ func main() {
 	healthHandler := handler.NewHealthHandler(db, redisClient)
 
 	wsHub := handler.NewWSHub()
-	wsHandler := handler.NewWSHandler(wsHub, asvConfigService)
+	wsHandler := handler.NewWSHandler(wsHub, asvConfigService, pidConfigService)
 	videoHandler := handler.NewVideoHandler()
 	calibHandler := handler.NewCalibrationProfileHandler(calibService)
+	pidConfigHandler := handler.NewPidConfigHandler(pidConfigService)
+	missionPresetHandler := handler.NewMissionPresetHandler(missionPresetService)
 
 	// 9. Initialize Router & Get App
-	r := route.NewRouter(cfg, mid, authHandler, userHandler, healthHandler, wsHandler, videoHandler, calibHandler)
+	r := route.NewRouter(cfg, mid, authHandler, userHandler, healthHandler, wsHandler, videoHandler, calibHandler, pidConfigHandler, missionPresetHandler)
+
+
 	app := r.New()
 
 	// 10. Start Server

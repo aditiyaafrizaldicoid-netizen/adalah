@@ -2,7 +2,8 @@ import json
 import time
 import threading
 import websocket
-from client import ASVController
+from core.client import ASVController
+
 
 
 class ASVWebSocketClient:
@@ -42,15 +43,38 @@ class ASVWebSocketClient:
         # Tracking status FC untuk deteksi disconnect
         self._fc_was_connected = False
         self._fc_monitor_lock = threading.Lock()
+        self._send_lock = threading.Lock()  # Thread-safe lock untuk pengiriman pesan WebSocket
 
-        # Tracking status kamera untuk deteksi putus
+
+        # Reference ke VideoStreamer & TrackingController
+        self.video_streamer = None
+        self.tracking_controller = None
         self._camera_was_ok = False
+        self.mission_engine = None
 
     def set_video_streamer(self, video_streamer):
         self.video_streamer = video_streamer
         # Daftarkan callback agar VideoStreamer memberi tahu kita saat kamera putus/nyambung
         if hasattr(video_streamer, 'set_status_callback'):
             video_streamer.set_status_callback(self._on_camera_status_change)
+
+    def set_tracking_controller(self, tracking_controller):
+        self.tracking_controller = tracking_controller
+        print("[WS] TrackingController registered for live PID tuning")
+
+    def set_mission_engine(self, mission_engine):
+        self.mission_engine = mission_engine
+        print("[WS] MissionEngine registered for autonomous mission control")
+
+    def send_mission_status(self, status_dict: dict):
+        """Kirim status misi terbaru ke Base Station."""
+        self._send_ws({
+            "type": "MISSION_STATUS",
+            "payload": status_dict
+        })
+
+
+
 
     def start(self):
         if self._is_running:
@@ -137,14 +161,16 @@ class ASVWebSocketClient:
 
         # --- ARM / DISARM ---
         if action == "arm":
-            force = bool(cmd.get("force", False))
+            force = cmd.get("force", False)
             self.asv.arm(force=force)
-            print(f"[WS] ARM {'(FORCE)' if force else ''}")
+            print(f"[WS] Command: ARM (force={force})")
 
         elif action == "disarm":
-            force = bool(cmd.get("force", False))
+            force = cmd.get("force", False)
             self.asv.disarm(force=force)
-            print(f"[WS] DISARM {'(FORCE)' if force else ''}")
+            print(f"[WS] Command: DISARM (force={force})")
+
+
 
         # --- EMERGENCY STOP ---
         elif action == "emergency_stop":
@@ -154,23 +180,9 @@ class ASVWebSocketClient:
 
         # --- MODE ---
         elif action == "set_mode":
-            mode = cmd.get("mode")
+            mode = cmd.get("mode", "")
             if mode:
-                mode_upper = mode.upper()
-                # Mode GUIDED/AUTO/LOITER butuh SERVO_FUNCTION = RCPassThru (1) agar MAVLink bisa control servo.
-                # Mode MANUAL/HOLD butuh SERVO_FUNCTION = Throttle/GroundSteering agar RC fisik bekerja.
-                AUTONOMOUS_MODES = {"GUIDED", "AUTO", "LOITER", "RTL", "SMART_RTL", "FOLLOW"}
-                RC_PHYSICAL_MODES = {"MANUAL", "HOLD", "ACRO", "STEERING"}
-
-                if mode_upper in AUTONOMOUS_MODES:
-                    print(f"[WS] set_mode: Switching to {mode_upper} — applying No-RC mode (RCPassThru) first...")
-                    self.asv.apply_no_rc_mode()
-                    import time; time.sleep(0.3)  # Beri waktu Pixhawk untuk update parameter
-                elif mode_upper in RC_PHYSICAL_MODES:
-                    print(f"[WS] set_mode: Switching to {mode_upper} — restoring RC physical mode...")
-                    self.asv.apply_rc_mode()
-                    import time; time.sleep(0.3)
-
+                print(f"[WS] set_mode: Switching to {mode}...")
                 self.asv.set_mode(mode)
             else:
                 print("[WS] set_mode: parameter 'mode' tidak ada dalam cmd")
@@ -188,15 +200,25 @@ class ASVWebSocketClient:
         elif action == "stop":
             self.asv.stop_movement()
 
-        # --- RC OVERRIDE (raw channel list) ---
-        elif action == "rc_override":
-            channels = cmd.get("channels", [])
-            if channels:
-                self.asv.send_rc_override(channels)
+        # --- UPDATE PID TRACKING TUNING ---
+        elif action == "update_pid":
+            kp = cmd.get("kp", None)
+            ki = cmd.get("ki", None)
+            kd = cmd.get("kd", None)
+            speed = cmd.get("forward_speed", None)
+            align_tol = cmd.get("align_threshold_px", None)
+            if self.tracking_controller:
+                self.tracking_controller.update_pid_params(
+                    kp=kp, ki=ki, kd=kd,
+                    forward_speed=speed,
+                    align_threshold_px=align_tol
+                )
+                print(f"[WS] PID parameters dynamically tuned -> Kp:{kp}, Ki:{ki}, Kd:{kd}, Speed:{speed}")
             else:
-                print("[WS] rc_override: parameter 'channels' tidak ada dalam cmd")
+                print("[WS] ⚠️ tracking_controller is not registered!")
 
-        # --- MANUAL CONTROL (Joystick / Gamepad) ---
+        # --- MANUAL CONTROL (Joystick / Gamepad MAVLink) ---
+
         elif action == "manual_control":
             x = int(cmd.get("x", 0))
             y = int(cmd.get("y", 0))
@@ -210,25 +232,6 @@ class ASVWebSocketClient:
             self._rc_state = [65535] * 18
             self.asv.release_rc()
 
-        # --- SET SERVO (satu channel, via RC override agar tidak diblokir FC) ---
-        elif action == "set_servo":
-            channel = int(cmd.get("channel", 0))
-            pwm = int(cmd.get("pwm", 1500))
-            if 1 <= channel <= 18:
-                # Update rc_state agar tidak mengganggu channel lain
-                self._rc_state[channel - 1] = pwm
-                self.asv.send_rc_override(self._rc_state)
-                print(f"[WS] set_servo: ch{channel} = {pwm} µs via RC Override")
-            else:
-                print(f"[WS] set_servo: channel {channel} tidak valid (harus 1-18)")
-
-        # --- DRIVE VECTORED (Thruster L/R + Servo L/R sekaligus) ---
-        elif action == "drive_vectored":
-            throttle_left = int(cmd.get("throttle_left", 1500))
-            throttle_right = int(cmd.get("throttle_right", 1500))
-            servo_left = int(cmd.get("servo_left", 1500))
-            servo_right = int(cmd.get("servo_right", 1500))
-            self.asv.drive_dual_vectored(throttle_left, throttle_right, servo_left, servo_right)
 
         # --- CHANNEL MAP CONFIG (Dari base station) ---
         elif action == "set_channel_map":
@@ -245,23 +248,51 @@ class ASVWebSocketClient:
         elif action == "get_channel_map":
             self._send_channel_config_ack()
 
-        # --- APPLY NO-RC MODE (Disable semua RC failsafe via PARAM_SET) ---
-        elif action == "apply_no_rc_mode":
-            print("[WS] Menerapkan konfigurasi No-RC Mode ke Pixhawk...")
-            results = self.asv.apply_no_rc_mode()
-            self._send_ws({
-                "type": "PARAM_SET_RESULT",
-                "payload": {"action": "apply_no_rc_mode", "results": results}
-            })
 
-        # --- RESTORE FAILSAFE / APPLY RC MODE (Kembalikan ke remote RC fisik) ---
-        elif action in ("restore_failsafe", "apply_rc_mode"):
-            print("[WS] Menerapkan konfigurasi RC Mode (Physical RC) ke Pixhawk...")
-            results = self.asv.apply_rc_mode()
-            self._send_ws({
-                "type": "PARAM_SET_RESULT",
-                "payload": {"action": action, "results": results}
-            })
+
+        # --- UPLOAD MISSION / WAYPOINTS (Dari Map UI) ---
+        elif action == "upload_mission":
+            waypoints = cmd.get("waypoints", [])
+            if waypoints:
+                ok = self.asv.upload_mission(waypoints)
+                self._send_ws({
+                    "type": "MISSION_UPDATE",
+                    "payload": {"status": "UPLOADED" if ok else "FAILED", "count": len(waypoints)}
+                })
+                print(f"[WS] upload_mission: {len(waypoints)} waypoints uploaded (ok={ok})")
+
+        # --- SAVE CURRENT WAYPOINT (Survey Mode - Tombol UI) ---
+        elif action == "save_current_waypoint":
+            t = self.asv.get_telemetry_dict()
+            lat = t.get("lat")
+            lng = t.get("lon")
+            if lat and lng and lat != 0:
+                wp = {"lat": lat, "lng": lng, "seq": len(getattr(self.asv, '_saved_survey_waypoints', [])) + 1}
+                if not hasattr(self.asv, '_saved_survey_waypoints'):
+                    self.asv._saved_survey_waypoints = []
+                self.asv._saved_survey_waypoints.append(wp)
+                self._send_ws({
+                    "type": "WAYPOINT_SAVED",
+                    "payload": wp
+                })
+                print(f"[WS] 📍 Save Current Waypoint: {wp}")
+
+        # --- SET RELATIVE METER WAYPOINTS ---
+        elif action == "set_relative_waypoints":
+            meter_list = cmd.get("meter_waypoints", [])
+            if meter_list:
+                from control.geodesy import LocalFrameConverter
+                t = self.asv.get_telemetry_dict()
+                home_lat = t.get("lat") or -7.9215169
+                home_lng = t.get("lon") or 112.5973649
+                heading = t.get("heading") or 0.0
+                gps_wps = LocalFrameConverter.convert_meter_waypoints_to_gps(home_lat, home_lng, heading, meter_list)
+                self.asv.upload_mission(gps_wps)
+                self._send_ws({
+                    "type": "MISSION_UPDATE",
+                    "payload": {"status": "RELATIVE_CONVERTED", "waypoints": gps_wps}
+                })
+                print(f"[WS] 📐 Relative Meter Waypoints converted: {len(gps_wps)} points")
 
         # --- SET SINGLE PARAM ---
         elif action == "set_param":
@@ -275,6 +306,7 @@ class ASVWebSocketClient:
                 })
             else:
                 print("[WS] set_param: 'param_name' tidak ditemukan dalam cmd")
+
 
         # --- VIDEO RECORDING (Tanpa Object Detection) ---
         elif action == "start_recording":
@@ -307,6 +339,53 @@ class ASVWebSocketClient:
             else:
                 print("[WS] stop_recording: video_streamer tidak terhubung pada ws_client")
 
+        # --- MISSION ENGINE CONTROLS ---
+        elif action == "load_mission":
+            steps = cmd.get("steps", [])
+            if self.mission_engine and steps:
+                ok = self.mission_engine.load_mission(steps)
+                self.send_mission_status(self.mission_engine.get_status_dict())
+                print(f"[WS] Mission loaded with {len(steps)} steps (ok={ok})")
+            else:
+                print("[WS] ⚠️ load_mission: mission_engine tidak registered atau steps kosong!")
+
+        elif action == "start_mission":
+            steps = cmd.get("steps", [])
+            if self.mission_engine:
+                ok = self.mission_engine.start_mission(steps)
+                self.send_mission_status(self.mission_engine.get_status_dict())
+                print(f"[WS] Mission started (ok={ok}, steps={len(self.mission_engine._steps)})")
+            else:
+                print("[WS] ⚠️ start_mission: mission_engine tidak registered!")
+
+
+
+        elif action == "pause_mission":
+            if self.mission_engine:
+                self.mission_engine.pause_mission()
+                print("[WS] Mission paused")
+
+        elif action == "resume_mission":
+            if self.mission_engine:
+                self.mission_engine.resume_mission()
+                print("[WS] Mission resumed")
+
+        elif action == "abort_mission":
+            if self.mission_engine:
+                self.mission_engine.abort_mission()
+                print("[WS] Mission aborted")
+
+        elif action == "reset_mission":
+            if self.mission_engine:
+                self.mission_engine.reset_mission()
+                print("[WS] Mission reset")
+
+        elif action == "get_mission_status":
+            if self.mission_engine:
+                self.send_mission_status(self.mission_engine.get_status_dict())
+
+
+
         elif action:
             print(f"[WS] Unknown action: {action}")
 
@@ -320,14 +399,11 @@ class ASVWebSocketClient:
         Kemudian kirim WARNING ke base station.
         """
         try:
-            # 1. Lepaskan semua RC override (thruster & servo kembali ke neutral)
-            self._rc_state = [65535] * 18
-            self.asv.release_rc()
-
-            # 2. Stop movement (set velocity = 0 via MAVLink untuk mode GUIDED)
+            # Stop movement (set velocity = 0 via MAVLink)
             self.asv.stop_movement()
 
             print(f"[WS] ⛔ EMERGENCY STOP dieksekusi. Alasan: {reason}")
+
 
             # 3. Kirim WARNING ke base station agar operator tahu
             self._send_warning(
@@ -399,37 +475,41 @@ class ASVWebSocketClient:
         Dipanggil oleh VideoStreamer saat status kamera berubah.
         is_ok=False → kamera putus, is_ok=True → kamera kembali
         """
-        if not is_ok and self._camera_was_ok:
-            self._camera_was_ok = False
-            print(f"[WS] 📷 Kamera PUTUS terdeteksi oleh VideoStreamer! ({reason})")
-            self._send_warning(
-                level="critical",
-                code="CAMERA_LOST",
-                message=f"🎥 KRITIS: Kamera terputus di Mini PC! ({reason}) Menghentikan kapal..."
-            )
-            # Emergency stop saat kamera putus
-            self._execute_emergency_stop("camera_lost")
+        if not is_ok:
+            if self._camera_was_ok is not False:
+                self._camera_was_ok = False
+                print(f"[WS] 📷 Kamera PUTUS terdeteksi oleh VideoStreamer! ({reason})")
+                self._send_warning(
+                    level="critical",
+                    code="CAMERA_LOST",
+                    message=f"🎥 KRITIS: Kamera terputus di Mini PC! ({reason}) Menghentikan kapal..."
+                )
+                # Emergency stop saat kamera putus
+                self._execute_emergency_stop("camera_lost")
 
-        elif is_ok and not self._camera_was_ok:
-            self._camera_was_ok = True
-            print(f"[WS] 📷 Kamera kembali terhubung!")
-            self._send_warning(
-                level="info",
-                code="CAMERA_RESTORED",
-                message="📷 Kamera berhasil terhubung kembali di Mini PC."
-            )
+        else:
+            if self._camera_was_ok is not True:
+                self._camera_was_ok = True
+                print(f"[WS] 📷 Kamera kembali terhubung!")
+                self._send_warning(
+                    level="info",
+                    code="CAMERA_RESTORED",
+                    message="📷 Kamera berhasil terhubung kembali di Mini PC."
+                )
 
     # ------------------------------------------------------------------ #
     #  SEND HELPERS                                                        #
     # ------------------------------------------------------------------ #
 
     def _send_ws(self, data: dict):
-        """Helper: kirim dict sebagai JSON ke base station via WebSocket."""
-        if self.ws and self.ws.sock and self.ws.sock.connected:
-            try:
-                self.ws.send(json.dumps(data))
-            except Exception as e:
-                print(f"[WS] Error sending message: {e}")
+        """Helper: kirim dict sebagai JSON ke base station via WebSocket (Thread-Safe)."""
+        with self._send_lock:
+            if self.ws and self.ws.sock and self.ws.sock.connected:
+                try:
+                    self.ws.send(json.dumps(data))
+                except Exception as e:
+                    print(f"[WS] Error sending message: {e}")
+
 
     def _send_warning(self, level: str, code: str, message: str):
         """
@@ -477,10 +557,12 @@ class ASVWebSocketClient:
                         "is_armed": t.get("is_armed", False),
                         "mode": t.get("mode", "UNKNOWN"),
                         "is_connected": t.get("is_connected", False),
+                        "camera_connected": self.video_streamer.is_camera_ok() if self.video_streamer else False,
                         "is_recording": self.video_streamer.is_recording if self.video_streamer else False,
                         "recording_filename": self.video_streamer.recording_filename if (self.video_streamer and self.video_streamer.is_recording) else "",
                         "recording_resolution": f"{self.video_streamer.record_width}x{self.video_streamer.record_height}" if (self.video_streamer and self.video_streamer.is_recording) else ""
                     }
+
                     self.ws.send(json.dumps({
                         "type": "TELEMETRY",
                         "payload": payload

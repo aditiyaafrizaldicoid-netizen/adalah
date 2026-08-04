@@ -102,11 +102,15 @@ const sendDriveCommand = () => {
   const isUsingKeyboard = keys.w || keys.a || keys.s || keys.d;
   if ((isGamepadConnected.value || isUsingKeyboard) && vessel.isArmed) {
     wsStore.sendCommand({
-      action: "drive_vectored",
-      ...vectoredCmd.value
+      action: "manual_control",
+      x: Math.round(throttle.value * 1000),
+      y: Math.round(steering.value * 1000),
+      r: Math.round(steering.value * 1000),
+      z: 500,
     });
   }
 };
+
 
 onMounted(() => {
   // Start the control loop

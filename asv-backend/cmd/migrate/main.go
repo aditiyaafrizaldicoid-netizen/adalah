@@ -33,7 +33,11 @@ func main() {
 		&entity.RefreshToken{},
 		&entity.AsvConfig{},
 		&entity.CalibrationProfile{},
+		&entity.PidConfig{},
+		&entity.MissionPreset{},
 	)
+
+
 
 	if err != nil {
 		logger.Fatal("Failed to run database migrations", zap.Error(err))

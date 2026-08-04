@@ -17,7 +17,6 @@ export const useChannelConfigStore = defineStore("channelConfig", () => {
   const thrusterRightCh = ref(2);  // MAIN 2 default
   const servoLeftCh = ref(3);      // MAIN 3 default
   const servoRightCh = ref(4);     // MAIN 4 default
-  const servoMethod = ref("rc_override"); // "rc_override" | "do_set_servo"
 
   // Apakah config sudah tersinkronisasi dengan ASV
   const isSynced = ref(false);
@@ -58,7 +57,6 @@ export const useChannelConfigStore = defineStore("channelConfig", () => {
         thruster_right_ch: thrusterRightCh.value,
         servo_left_ch: servoLeftCh.value,
         servo_right_ch: servoRightCh.value,
-        servo_method: servoMethod.value,
       },
     });
     console.log("[ChannelConfig] Sent set_channel_map to ASV");
@@ -80,7 +78,6 @@ export const useChannelConfigStore = defineStore("channelConfig", () => {
     if (payload.thruster_right_ch !== undefined) thrusterRightCh.value = payload.thruster_right_ch;
     if (payload.servo_left_ch !== undefined) servoLeftCh.value = payload.servo_left_ch;
     if (payload.servo_right_ch !== undefined) servoRightCh.value = payload.servo_right_ch;
-    if (payload.servo_method !== undefined) servoMethod.value = payload.servo_method;
     isSynced.value = true;
     lastSyncTime.value = new Date().toLocaleTimeString();
     console.log("[ChannelConfig] Synced from ASV:", payload);
@@ -94,7 +91,6 @@ export const useChannelConfigStore = defineStore("channelConfig", () => {
     thrusterRightCh.value = 2;
     servoLeftCh.value = 3;
     servoRightCh.value = 4;
-    servoMethod.value = "rc_override";
     isSynced.value = false;
   }
 
@@ -104,7 +100,6 @@ export const useChannelConfigStore = defineStore("channelConfig", () => {
     thrusterRightCh,
     servoLeftCh,
     servoRightCh,
-    servoMethod,
     isSynced,
     lastSyncTime,
     // Computed
@@ -121,3 +116,4 @@ export const useChannelConfigStore = defineStore("channelConfig", () => {
     resetToDefault,
   };
 });
+

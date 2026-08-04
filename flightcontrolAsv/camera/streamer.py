@@ -33,13 +33,17 @@ class VideoStreamer:
         # Callback untuk notifikasi status kamera ke ws_client
         # Signature: callback(is_ok: bool, reason: str)
         self._status_callback = None
-        self._camera_ok = False  # Status kamera saat ini
+        self._camera_ok = None  # Status kamera saat ini (None = belum diinisialisasi)
 
     def set_status_callback(self, callback):
         """Daftarkan callback yang dipanggil saat status kamera berubah.
         Callback signature: callback(is_ok: bool, reason: str)
         """
         self._status_callback = callback
+
+    def is_camera_ok(self) -> bool:
+        """Mengembalikan status koneksi kamera saat ini."""
+        return bool(self._camera_ok)
 
     def start_recording(self, width=None, height=None, save_dir="recordings"):
         with self._recording_lock:
@@ -164,8 +168,10 @@ class VideoStreamer:
 
             if ret:
                 fail_count = 0
+                frame = cv2.flip(frame, 1)  # Flip horizontal (kiri <-> kanan)
             else:
                 fail_count += 1
+
                 frame = fallback_frame
 
                 # Kalau gagal beruntun melewati threshold, anggap kamera disconnect -> coba reconnect

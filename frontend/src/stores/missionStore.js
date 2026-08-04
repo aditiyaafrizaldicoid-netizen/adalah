@@ -1,94 +1,404 @@
 import { defineStore } from "pinia";
-import { ref, computed } from "vue";
+import { ref, computed, onMounted } from "vue";
+import { useWebsocketStore } from "./websocketStore";
 
+// ─── Step Type Definitions ───────────────────────────────────────────────────
+export const STEP_TYPES = [
+  {
+    type: "START",
+    label: "Start / Warmup",
+    icon: "⚡",
+    color: "text-emerald-400",
+    bg: "bg-emerald-500/10 border-emerald-500/30",
+    fields: [{ key: "duration_sec", label: "Warmup Duration (s)", type: "number", default: 2 }],
+  },
+  {
+    type: "TRACKING_BUOY",
+    label: "Tracking Buoy (AI Vision)",
+    icon: "🎯",
+    color: "text-primary",
+    bg: "bg-primary/10 border-primary/30",
+    fields: [{ key: "pass_count", label: "Gate Pass Count", type: "number", default: 1 }],
+  },
+  {
+    type: "GOTO_GPS",
+    label: "Go To GPS Coordinate",
+    icon: "🧭",
+    color: "text-sky-400",
+    bg: "bg-sky-500/10 border-sky-500/30",
+    fields: [
+      { key: "lat", label: "Latitude", type: "number", default: -7.9215169 },
+      { key: "lon", label: "Longitude", type: "number", default: 112.5973649 },
+    ],
+  },
+  {
+    type: "TAKE_IMAGE",
+    label: "Take Image / Record",
+    icon: "📷",
+    color: "text-violet-400",
+    bg: "bg-violet-500/10 border-violet-500/30",
+    fields: [{ key: "duration_sec", label: "Duration (s)", type: "number", default: 3 }],
+  },
+  {
+    type: "HOLD",
+    label: "Hold Position",
+    icon: "⚓",
+    color: "text-amber-400",
+    bg: "bg-amber-500/10 border-amber-500/30",
+    fields: [{ key: "duration_sec", label: "Hold Duration (s)", type: "number", default: 5 }],
+  },
+  {
+    type: "FINISH",
+    label: "Mission Complete",
+    icon: "🏁",
+    color: "text-emerald-400",
+    bg: "bg-emerald-500/10 border-emerald-500/30",
+    fields: [],
+  },
+];
+
+export const getStepTypeDef = (type) => STEP_TYPES.find((s) => s.type === type) || null;
+
+// ─── Mission Store ────────────────────────────────────────────────────────────
 export const useMissionStore = defineStore("mission", () => {
-  const currentStep = ref(1);
-  const buoysPassed = ref([]);
-  const penalties = ref(0);
-  const missionStatus = ref("IDLE"); // IDLE, RUNNING, PAUSED, FINISHED, ABORTED
-  const missionStartTime = ref(null);
+  // Mission pipeline steps (user-defined)
+  const steps = ref([]);
+
+  // Live mission status from backend
+  const missionStatus = ref("IDLE");    // IDLE, RUNNING, PAUSED, FINISHED, ABORTED
+  const currentStepIdx = ref(0);
+  const currentStep = ref({});
+  const totalSteps = ref(0);
+  const elapsedSec = ref(0);
+  const buoyPassCount = ref(0);
+
+  // Legacy (for timeline component compatibility)
+  const currentStep_legacy = ref(1);
+  const missionElapsedSeconds = ref(0);
   const waypoints = ref([]);
 
-  const missionElapsedSeconds = ref(0);
-  let timerInterval = null;
+  // Timer for UI elapsed counter
+  let _timerInterval = null;
 
-  const missionSteps = [
-    { id: 1, name: "Preparation" },
-    { id: 2, name: "Start" },
-    { id: 3, name: "Buoy 1-10 Navigation" },
-    { id: 4, name: "Surface Imaging" },
-    { id: 5, name: "Underwater Imaging" },
-    { id: 6, name: "Docking" },
-    { id: 7, name: "Finish" }
-  ];
-
+  // Formatted time
   const formattedTime = computed(() => {
-    const mins = Math.floor(missionElapsedSeconds.value / 60);
-    const secs = missionElapsedSeconds.value % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    const t = elapsedSec.value;
+    const m = Math.floor(t / 60).toString().padStart(2, "0");
+    const s = (t % 60).toString().padStart(2, "0");
+    return `${m}:${s}`;
   });
 
-  function startMission() {
-    missionStatus.value = "RUNNING";
-    missionStartTime.value = Date.now();
-    missionElapsedSeconds.value = 0;
-    
-    if (timerInterval) clearInterval(timerInterval);
-    timerInterval = setInterval(() => {
-      missionElapsedSeconds.value++;
-    }, 1000);
+  const stepElapsedSec = ref(0);
+
+  // Dynamic Progress Calculations
+  const progressPct = computed(() => {
+    if (missionStatus.value === "FINISHED") return 100;
+    const total = totalSteps.value || steps.value.length;
+    if (!total || missionStatus.value === "IDLE") return 0;
+
+    let baseRatio = currentStepIdx.value / total;
+
+    if (missionStatus.value === "RUNNING" || missionStatus.value === "PAUSED") {
+      const step = currentStep.value?.type ? currentStep.value : steps.value[currentStepIdx.value];
+      let subRatio = 0;
+
+      if (step) {
+        if (step.type === "TRACKING_BUOY" && step.pass_count > 0) {
+          subRatio = Math.min(buoyPassCount.value / step.pass_count, 1.0);
+        } else if (step.duration_sec && step.duration_sec > 0) {
+          subRatio = Math.min(stepElapsedSec.value / step.duration_sec, 1.0);
+        }
+      }
+
+      baseRatio += subRatio / total;
+    }
+
+    return Math.min(100, Math.round(baseRatio * 100));
+  });
+
+  const activeStepLabel = computed(() => {
+    if (missionStatus.value === "FINISHED") return "Mission Complete";
+    if (missionStatus.value === "IDLE") {
+      const total = steps.value.length;
+      if (!total) return "No Steps Configured";
+      return `Ready (${total} Steps)`;
+    }
+    if (missionStatus.value === "ABORTED") return "Mission Aborted";
+
+    const step = currentStep.value?.type ? currentStep.value : steps.value[currentStepIdx.value];
+    if (!step) return `Step ${currentStepIdx.value + 1}`;
+
+    const stepNum = (currentStepIdx.value + 1).toString().padStart(2, '0');
+    const totalNum = (totalSteps.value || steps.value.length).toString().padStart(2, '0');
+
+    if (step.type === "START") {
+      const remaining = Math.max(0, Math.ceil((step.duration_sec || 2) - stepElapsedSec.value));
+      return `[${stepNum}/${totalNum}] Warmup (${remaining}s)`;
+    }
+
+    if (step.type === "TRACKING_BUOY") {
+      const passTarget = step.pass_count || 1;
+      const passed = buoyPassCount.value || 0;
+      return `[${stepNum}/${totalNum}] Buoy Gate ${passed}/${passTarget}`;
+    }
+
+    if (step.duration_sec) {
+      const remaining = Math.max(0, Math.ceil(step.duration_sec - stepElapsedSec.value));
+      return `[${stepNum}/${totalNum}] ${step.name || step.type} (${remaining}s)`;
+    }
+
+    return `[${stepNum}/${totalNum}] ${step.name || step.type}`;
+  });
+
+
+  // ─── Step Builder Actions ─────────────────────────────────────────────────
+  function addStep(type) {
+    const def = getStepTypeDef(type);
+    if (!def) return;
+    const defaults = {};
+    def.fields.forEach((f) => (defaults[f.key] = f.default));
+    steps.value.push({
+      id: Date.now(),
+      type,
+      name: def.label,
+      ...defaults,
+    });
   }
 
+  function removeStep(index) {
+    steps.value.splice(index, 1);
+  }
+
+  function moveStep(fromIdx, toIdx) {
+    if (toIdx < 0 || toIdx >= steps.value.length) return;
+    const arr = [...steps.value];
+    const [item] = arr.splice(fromIdx, 1);
+    arr.splice(toIdx, 0, item);
+    steps.value = arr;
+  }
+
+  function updateStep(index, key, value) {
+    if (steps.value[index]) {
+      steps.value[index][key] = value;
+    }
+  }
+
+  function clearSteps() {
+    steps.value = [];
+  }
+
+  // ─── WebSocket Mission Commands ───────────────────────────────────────────
+  function loadAndStartMission() {
+    if (!steps.value.length) return;
+    const wsStore = useWebsocketStore();
+    const stepsPayload = steps.value.map((s, i) => ({ ...s, id: i + 1 }));
+
+    wsStore.sendCommand({ action: "arm" });
+    wsStore.sendCommand({ action: "set_mode", mode: "GUIDED" });
+    wsStore.sendCommand({ action: "start_mission", steps: stepsPayload });
+  }
+
+  function startMission() {
+    if (!steps.value.length) return;
+    const wsStore = useWebsocketStore();
+    const stepsPayload = steps.value.map((s, i) => ({ ...s, id: i + 1 }));
+
+    wsStore.sendCommand({ action: "arm" });
+    wsStore.sendCommand({ action: "set_mode", mode: "GUIDED" });
+    wsStore.sendCommand({ action: "start_mission", steps: stepsPayload });
+    missionStatus.value = "RUNNING";
+    _startLocalTimer();
+  }
+
+
+
   function pauseMission() {
+    const wsStore = useWebsocketStore();
+    wsStore.sendCommand({ action: "pause_mission" });
     missionStatus.value = "PAUSED";
-    if (timerInterval) clearInterval(timerInterval);
+    _stopLocalTimer();
   }
 
   function resumeMission() {
+    const wsStore = useWebsocketStore();
+    wsStore.sendCommand({ action: "resume_mission" });
     missionStatus.value = "RUNNING";
-    timerInterval = setInterval(() => {
-      missionElapsedSeconds.value++;
-    }, 1000);
+    _startLocalTimer();
   }
 
-  function stopMission() {
-    missionStatus.value = "FINISHED";
-    if (timerInterval) clearInterval(timerInterval);
+  function abortMission() {
+    const wsStore = useWebsocketStore();
+    wsStore.sendCommand({ action: "abort_mission" });
+    missionStatus.value = "ABORTED";
+    _stopLocalTimer();
   }
 
   function resetMission() {
+    const wsStore = useWebsocketStore();
+    wsStore.sendCommand({ action: "reset_mission" });
     missionStatus.value = "IDLE";
-    currentStep.value = 1;
-    buoysPassed.value = [];
-    penalties.value = 0;
-    missionElapsedSeconds.value = 0;
-    if (timerInterval) clearInterval(timerInterval);
+    currentStepIdx.value = 0;
+    elapsedSec.value = 0;
+    buoyPassCount.value = 0;
+    _stopLocalTimer();
   }
 
-  function addWaypoint(lat, lng) {
-    waypoints.value.push({ lat, lng, type: 'NAV' });
+  // ─── Live Status Update from WS ──────────────────────────────────────────
+  function updateMissionStatus(payload) {
+    missionStatus.value = payload.status || "IDLE";
+    currentStepIdx.value = payload.current_step_idx ?? 0;
+    currentStep.value = payload.current_step ?? {};
+    totalSteps.value = payload.total_steps ?? 0;
+    stepElapsedSec.value = payload.step_elapsed_sec ?? 0;
+    buoyPassCount.value = payload.buoy_pass_count ?? 0;
+    currentStep_legacy.value = (payload.current_step_idx ?? 0) + 1;
+
+
+    if (missionStatus.value === "RUNNING" && !_timerInterval) {
+      _startLocalTimer();
+    } else if (missionStatus.value !== "RUNNING") {
+      _stopLocalTimer();
+    }
   }
 
-  function removeWaypoint(index) {
-    waypoints.value.splice(index, 1);
+  // ─── Presets & Database Persistence ───────────────────────────────────────
+  const defaultPresets = [
+    {
+      name: "Kompetisi Standar",
+      steps: [
+        { id: 1, type: "START", name: "System Warmup", duration_sec: 3 },
+        { id: 2, type: "TRACKING_BUOY", name: "Gate 1-10 Navigation", pass_count: 5 },
+        { id: 3, type: "GOTO_GPS", name: "Waypoint A - Sampling Area", lat: -7.9215169, lon: 112.5973649 },
+        { id: 4, type: "TAKE_IMAGE", name: "Surface Imaging", duration_sec: 5 },
+        { id: 5, type: "GOTO_GPS", name: "Waypoint B - Docking Zone", lat: -7.9220500, lon: 112.5981000 },
+        { id: 6, type: "FINISH", name: "Mission Complete" },
+      ],
+    },
+    {
+      name: "Quick Test Run",
+      steps: [
+        { id: 1, type: "START", name: "Warmup", duration_sec: 2 },
+        { id: 2, type: "TRACKING_BUOY", name: "Single Gate Pass", pass_count: 1 },
+        { id: 3, type: "FINISH", name: "Done" },
+      ],
+    },
+  ];
+
+  const dbPresets = ref([]);
+
+  const presets = computed(() => {
+    return [...dbPresets.value, ...defaultPresets];
+  });
+
+  async function fetchPresets() {
+    try {
+      const res = await fetch("http://localhost:3000/api/v1/mission-presets");
+      if (res.ok) {
+        const json = await res.json();
+        if (json.status === "success" && Array.isArray(json.data)) {
+          dbPresets.value = json.data.map((item) => {
+            let parsedSteps = [];
+            try {
+              parsedSteps = typeof item.steps === "string" ? JSON.parse(item.steps) : item.steps;
+            } catch (e) {
+              parsedSteps = [];
+            }
+            return {
+              id: `db_${item.id}`,
+              dbId: item.id,
+              name: item.name,
+              steps: parsedSteps,
+              isDb: true,
+            };
+          });
+        }
+      }
+    } catch (e) {
+      console.warn("[MissionStore] Failed to fetch presets from database:", e);
+    }
   }
+
+  async function saveCurrentAsPreset(presetName) {
+    if (!steps.value.length) return false;
+    const name = presetName || `Mission ${new Date().toLocaleString('id-ID')}`;
+    try {
+      const res = await fetch("http://localhost:3000/api/v1/mission-presets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name,
+          steps: JSON.stringify(steps.value),
+        }),
+      });
+      if (res.ok) {
+        await fetchPresets();
+        return true;
+      }
+    } catch (e) {
+      console.error("[MissionStore] Failed to save preset to database:", e);
+    }
+    return false;
+  }
+
+  async function deletePreset(dbId) {
+    try {
+      const res = await fetch(`http://localhost:3000/api/v1/mission-presets/${dbId}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        await fetchPresets();
+        return true;
+      }
+    } catch (e) {
+      console.error("[MissionStore] Failed to delete preset:", e);
+    }
+    return false;
+  }
+
+  function loadPreset(preset) {
+    steps.value = preset.steps.map((s) => ({ ...s, id: Date.now() + Math.random() }));
+  }
+
+  // Fetch presets on init & load default 6-step preset if steps empty
+  fetchPresets();
+  if (!steps.value.length) {
+    loadPreset(defaultPresets[0]);
+  }
+
+
+  // ─── Internal ─────────────────────────────────────────────────────────────
+  function _startLocalTimer() {
+    if (_timerInterval) return;
+    _timerInterval = setInterval(() => {
+      elapsedSec.value++;
+    }, 1000);
+  }
+
+  function _stopLocalTimer() {
+    if (_timerInterval) {
+      clearInterval(_timerInterval);
+      _timerInterval = null;
+    }
+  }
+
+  // Legacy compat
+  const missionSteps = computed(() =>
+    steps.value.map((s, i) => ({ id: i + 1, name: s.name || s.type }))
+  );
 
   return {
-    currentStep,
-    buoysPassed,
-    penalties,
-    missionStatus,
-    missionStartTime,
-    waypoints,
-    missionSteps,
-    missionElapsedSeconds,
-    formattedTime,
-    startMission,
-    pauseMission,
-    resumeMission,
-    stopMission,
-    resetMission,
-    addWaypoint,
-    removeWaypoint
+    // State
+    steps, missionStatus, currentStepIdx, currentStep, totalSteps,
+    elapsedSec, buoyPassCount, formattedTime, progressPct, activeStepLabel, waypoints, presets, dbPresets,
+    // Legacy
+    missionSteps, currentStep_legacy,
+    // Step builder
+    addStep, removeStep, moveStep, updateStep, clearSteps,
+    // Mission control
+    startMission, pauseMission, resumeMission, abortMission, resetMission, loadAndStartMission,
+    // Status updater
+    updateMissionStatus,
+    // Presets & Database
+    loadPreset, fetchPresets, saveCurrentAsPreset, deletePreset
   };
 });

@@ -49,8 +49,14 @@ export const useWebsocketStore = defineStore("websocket", () => {
             }
           }
         } else if (data.type === "MISSION_UPDATE") {
-          // Update mission state
+          // Legacy mission update
+        } else if (data.type === "MISSION_STATUS") {
+          // Live mission engine status from Mini PC
+          import("./missionStore").then(({ useMissionStore }) => {
+            useMissionStore().updateMissionStatus(data.payload);
+          });
         } else if (data.type === "PONG") {
+
           latency.value = Date.now() - data.timestamp;
         } else if (data.type === "CHANNEL_CONFIG") {
           // Sinkronisasi channel config dari ASV
@@ -62,14 +68,20 @@ export const useWebsocketStore = defineStore("websocket", () => {
           const p = data.payload;
           if (p) {
             vesselStore.addWarning(p.level, p.code, p.message);
-            // Update state koneksi ASV berdasarkan kode warning
+            // Update state koneksi ASV & kamera berdasarkan kode warning
             if (p.code === "ASV_CONNECTED") {
               vesselStore.asvConnected = true;
               vesselStore.clearWarning("ASV_DISCONNECTED");
               vesselStore.clearWarning("ASV_OFFLINE");
             } else if (p.code === "ASV_DISCONNECTED" || p.code === "ASV_OFFLINE") {
               vesselStore.asvConnected = false;
+            } else if (p.code === "CAMERA_LOST") {
+              vesselStore.cameraConnected = false;
+            } else if (p.code === "CAMERA_RESTORED") {
+              vesselStore.cameraConnected = true;
+              vesselStore.clearWarning("CAMERA_LOST");
             }
+
           }
         }
       };
@@ -126,6 +138,29 @@ export const useWebsocketStore = defineStore("websocket", () => {
     }
   }
 
+  function saveCurrentWaypoint() {
+    sendCommand({ action: "save_current_waypoint" });
+  }
+
+  function uploadMission(waypoints) {
+    sendCommand({ action: "upload_mission", waypoints });
+  }
+
+  function setRelativeWaypoints(meterWaypoints) {
+    sendCommand({ action: "set_relative_waypoints", meter_waypoints: meterWaypoints });
+  }
+
+  function updatePid(params) {
+    sendCommand({
+      action: "update_pid",
+      kp: params.kp !== undefined ? parseFloat(params.kp) : undefined,
+      ki: params.ki !== undefined ? parseFloat(params.ki) : undefined,
+      kd: params.kd !== undefined ? parseFloat(params.kd) : undefined,
+      forward_speed: params.forward_speed !== undefined ? parseFloat(params.forward_speed) : undefined,
+      align_threshold_px: params.align_threshold_px !== undefined ? parseFloat(params.align_threshold_px) : undefined,
+    });
+  }
+
   function startRecording(width, height) {
     const cmd = { action: "start_recording" };
     if (width) cmd.width = parseInt(width);
@@ -147,11 +182,15 @@ export const useWebsocketStore = defineStore("websocket", () => {
 
   function disconnect() {
     autoReconnect.value = false;
+
     if (socket.value) socket.value.close();
   }
 
   return {
     socket, status, latency, lastMessage, autoReconnect,
     connect, disconnect, sendCommand, startRecording, stopRecording, toggleRecording,
+    saveCurrentWaypoint, uploadMission, setRelativeWaypoints, updatePid,
   };
 });
+
+

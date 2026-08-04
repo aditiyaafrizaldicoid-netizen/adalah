@@ -114,34 +114,7 @@ function channelGroupClass(ch) {
       </div>
     </div>
 
-    <!-- Method Toggle -->
-    <div class="glass-card p-5">
-      <div class="flex items-center justify-between mb-3">
-        <span class="text-sm font-bold text-(--text-primary) flex items-center gap-2">
-          <Info class="w-4 h-4 text-primary" />
-          Output Method
-        </span>
-      </div>
-      <div class="flex gap-3">
-        <button
-          v-for="method in [
-            { id: 'rc_override', label: 'RC Override', desc: 'Direkomendasikan – Tidak bisa diblokir FC' },
-            { id: 'do_set_servo', label: 'DO_SET_SERVO', desc: 'Hanya untuk AUX Disabled (FUNCTION=0)' }
-          ]"
-          :key="method.id"
-          @click="draft.servoMethod = method.id"
-          :class="[
-            'flex-1 p-4 rounded-xl border text-left transition-all',
-            draft.servoMethod === method.id
-              ? 'bg-primary/10 border-primary text-primary'
-              : 'bg-(--bg-secondary)/50 border-(--border-subtle)/50 text-(--text-secondary) hover:bg-(--bg-secondary) hover:text-(--text-primary)'
-          ]"
-        >
-          <div class="font-bold text-sm">{{ method.label }}</div>
-          <div class="text-[10px] mt-1 opacity-70">{{ method.desc }}</div>
-        </button>
-      </div>
-    </div>
+
 
     <!-- Channel Grid -->
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">

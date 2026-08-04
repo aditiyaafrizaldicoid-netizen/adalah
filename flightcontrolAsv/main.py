@@ -1,61 +1,96 @@
+import sys
+sys.dont_write_bytecode = True  # Mencegah Python membuat file cache __pycache__ / .pyc
+
 import os
 import time
-from client import ASVController
-from ws_client import ASVWebSocketClient
-from video_stream import VideoStreamer
+import threading
+
+from core.client import ASVController
+from connection.websocket import ASVWebSocketClient
+from camera.streamer import VideoStreamer
+
 
 def main():
     print("==================================================")
     print(" 🚢 ASV FLIGHT CONTROLLER + WEBSOCKET CLIENT ")
     print("==================================================")
 
-    # Ganti dengan port yang sesuai di Mini PC
-    # Jika menggunakan simulasi SITL (misalnya ArduRover SITL): port = "tcp:127.0.0.1:5760"
     port = os.getenv("ASV_TEST_PORT", "/dev/ttyACM0")
     baudrate = 9600
 
     asv = ASVController(port=port, baudrate=baudrate)
     asv.start()
 
-    # Tunggu sampai Pixhawk benar-benar terkoneksi (menerima heartbeat)
     print("[Main] Menunggu koneksi Pixhawk...")
     while not asv.is_connected():
         time.sleep(0.5)
 
-    # Otomatis reset Pixhawk ke Mode RC Fisik (Throttle & Steering) saat script dijalankan
-    print("[Main] Mengembalikan konfigurasi Pixhawk ke Mode RC Fisik (Default)...")
-    asv.apply_rc_mode()
-
-    ws_url = os.getenv("ASV_WS_URL", "ws://bodrex-Legion-5-16IRX9.local:3000/api/v1/ws/asv")
+    ws_url = os.getenv("ASV_WS_URL", "ws://localhost:3000/api/v1/ws/asv")
     ws_client = ASVWebSocketClient(asv, ws_url=ws_url)
     ws_client.start()
 
     # ------------------------------------------------------------------ #
-    #  Inisialisasi YOLO Tracker dan Tracking Controller                   #
+    #  Inisialisasi YOLO Tracker dan Tracking Controller                  #
     # ------------------------------------------------------------------ #
     from vision.tracker import BallTracker
     from control.pid_tracker import TrackingController
+    from control.mission_engine import MissionEngine
 
     camera_width = 640
 
-    # Tracker: deteksi bola hijau (class 0) dan bola merah (class 1) sebagai gate
+    model_path = os.path.join(os.path.dirname(__file__), "models", "best.pt")
     tracker = BallTracker(
-        model_path="best.pt",
+        model_path=model_path,
         target_class=[0, 1],
         conf_threshold=0.6
     )
 
-    # Controller: gunakan GUIDED mode dengan forward_speed dan turn_rate
     controller = TrackingController(
         frame_width=camera_width,
-        kp=0.04,
-        ki=0.001,
-        kd=0.008,
-        forward_speed=1.0,          # m/s kecepatan maju saat approaching/passing
-        align_threshold_px=40,      # toleransi piksel untuk dianggap lurus
-        pass_duration=2.5,          # detik maju lurus saat melewati gate
-        cooldown_duration=3.0       # detik cooldown setelah lewat gate
+        kp=20,
+        ki=0,
+        kd=0,
+        forward_speed=1.0,
+        align_threshold_px=0.5,
+        pass_duration=1,
+        cooldown_duration=1
     )
+    ws_client.set_tracking_controller(controller)
+
+    # ------------------------------------------------------------------ #
+    #  Inisialisasi Mission Engine                                         #
+    # ------------------------------------------------------------------ #
+    mission_engine = MissionEngine(asv=asv, tracker=tracker, tracking_controller=controller)
+
+    # Callback: kirim status misi ke Base Station via WebSocket setiap kali berubah
+    def on_mission_status_change(status_dict):
+        ws_client.send_mission_status(status_dict)
+
+    mission_engine.set_status_callback(on_mission_status_change)
+    ws_client.set_mission_engine(mission_engine)
+
+    # ------------------------------------------------------------------ #
+    #  Inisialisasi Telemetry Blackbox Logger                              #
+    # ------------------------------------------------------------------ #
+    from core.logger import TelemetryLogger
+    logger = TelemetryLogger()
+
+    # ------------------------------------------------------------------ #
+    #  Frame processing callback (dipanggil ~30 FPS oleh VideoStreamer)   #
+    # ------------------------------------------------------------------ #
+    import time as _time
+    # Throttle log messages berulang agar tidak spam terminal (max 1x per interval)
+    _log_throttle: dict = {}  # key -> last_print_time
+    _GUIDED_KEEPALIVE_INTERVAL = 1.0   # detik: interval kirim keepalive velocity=0
+    _LOG_INTERVAL = 5.0                # detik: interval print pesan berulang
+    _guided_keepalive_time = [0.0]
+
+    def _throttled_print(key: str, message: str, interval: float = _LOG_INTERVAL):
+        """Print message maksimum satu kali per interval detik untuk key tertentu."""
+        now = _time.time()
+        if now - _log_throttle.get(key, 0.0) >= interval:
+            print(message)
+            _log_throttle[key] = now
 
     def process_and_control(frame):
         # Deteksi bola dan hitung midpoint gate; sertakan state untuk OSD
@@ -72,22 +107,56 @@ def main():
 
         if mode == "MANUAL":
             # Mode MANUAL: Sepenuhnya dikendalikan Remote RC fisik
-            # Lepaskan semua override agar RC bekerja 100% tanpa gangguan Python
-            asv.release_rc()
+            pass
 
         elif mode == "GUIDED":
-            # ---- Mode GUIDED: Gunakan NavigationControl.send_velocity() ----
-            # Controller menghitung forward speed (m/s) dan turn rate (deg/s)
-            forward_speed, turn_rate_deg, state = controller.compute_velocity(gate_x)
+            state = controller.state
 
-            if state in (controller.STATE_ALIGNING,
-                         controller.STATE_APPROACHING,
-                         controller.STATE_PASSING):
-                # Kirim perintah velocity MAVLink ke Pixhawk
-                asv.move_forward(forward_speed) if turn_rate_deg == 0.0 else asv.turn(forward_speed, turn_rate_deg)
+            if mission_engine.status == "RUNNING":
+                # ----------------------------------------------------------------
+                # MISSION ENGINE RUNNING:
+                # update_frame() SELALU dipanggil agar timer step (warmup, hold,
+                # take_image) terus berjalan walaupun kapal belum di-ARM.
+                # Perintah velocity baru dikirim ke MAVLink jika sudah ARM.
+                # ----------------------------------------------------------------
+                forward_speed, turn_rate_deg, step_label = mission_engine.update_frame(frame, gate_x)
+                state = step_label
+
+                if telemetry.is_armed:
+                    # Kirim perintah gerakan hanya jika kapal sudah di-ARM
+                    if forward_speed != 0.0 or turn_rate_deg != 0.0:
+                        if turn_rate_deg == 0.0:
+                            asv.move_forward(forward_speed)
+                        else:
+                            asv.turn(forward_speed, turn_rate_deg)
+                if telemetry.is_armed:
+                    # Belum ARM → timer step tetap jalan, tapi servo diam
+                    # (print di-throttle agar tidak spam tiap frame)
+                    _throttled_print("mission_disarmed",
+                        f"[MISSION] ⚠️ DISARMED — step '{step_label}' berjalan, gerakan ditahan.")
+
             else:
-                # SEARCHING atau COOLDOWN: hentikan kapal
-                asv.stop_movement()
+                # ---- Mission IDLE / PAUSED / FINISHED: JANGAN gerak otomatis! ----
+                state = "IDLE"
+                if telemetry.is_armed:
+                    # Kirim velocity=0 keepalive setiap 1 detik agar ArduRover
+                    # tidak timeout (GUID_TIMEOUT) dan auto-switch ke HOLD
+                    now = _time.time()
+                    if now - _guided_keepalive_time[0] >= _GUIDED_KEEPALIVE_INTERVAL:
+                        asv.stop_movement(silent=True)  # silent → tidak print log
+                        _guided_keepalive_time[0] = now
+                else:
+                    _throttled_print("guided_disarmed",
+                        "[GUIDED] ⚠️ Kapal DISARMED. Tekan ARM di Base Station agar siap misi.")
+
+
+
+            # Catat log blackbox
+            error_px = gate_x - camera_width // 2 if gate_x is not None else None
+            logger.log_record(asv.get_telemetry_dict(), state=state, gate_x=gate_x, error_px=error_px)
+
+
+
 
         else:
             # Mode lain (AUTO, LOITER, dll): biarkan autopilot yang handle
@@ -98,7 +167,7 @@ def main():
     # ------------------------------------------------------------------ #
     #  Setup Video Streamer (Pushing ke Backend)                          #
     # ------------------------------------------------------------------ #
-    video_upload_url = os.getenv("ASV_VIDEO_URL", "http://bodrex-Legion-5-16IRX9.local:3000/api/v1/video/upload")
+    video_upload_url = os.getenv("ASV_VIDEO_URL", "http://localhost:3000/api/v1/video/upload")
     video_streamer = VideoStreamer(
         camera_index=0,
         width=camera_width,

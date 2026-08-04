@@ -47,8 +47,8 @@ class TrackingController:
         # PID: error = (gate_center_x - frame_center_x), output = turn_rate deg/s
         # Setpoint = 0 (error kita sudah dihitung sebelum di-feed ke PID)
         self.pid = PID(kp, ki, kd, setpoint=0.0)
-        # Batasi turn rate: -30 hingga +30 deg/s
-        self.pid.output_limits = (-30.0, 30.0)
+        # Batasi turn rate: -30 hingga +30 deg/s``
+        self.pid.output_limits = (-50.0, 50.0)
 
         # State machine
         self.state = self.STATE_SEARCHING
@@ -56,7 +56,22 @@ class TrackingController:
         self.last_seen_time = 0.0
         self._lost_timeout = 2.0  # detik sebelum kembali ke SEARCHING jika gate hilang
 
+    def update_pid_params(self, kp=None, ki=None, kd=None, forward_speed=None, align_threshold_px=None):
+        """Dynamic tuning PID & parameters dari Base Station secara live."""
+        if kp is not None:
+            self.pid.Kp = float(kp)
+        if ki is not None:
+            self.pid.Ki = float(ki)
+        if kd is not None:
+            self.pid.Kd = float(kd)
+        if forward_speed is not None:
+            self.forward_speed = float(forward_speed)
+        if align_threshold_px is not None:
+            self.align_threshold_px = float(align_threshold_px)
+        print(f"[TrackingController] PID Parameters Updated -> Kp: {self.pid.Kp}, Ki: {self.pid.Ki}, Kd: {self.pid.Kd}, Speed: {self.forward_speed}m/s, AlignTol: {self.align_threshold_px}px")
+
     def _set_state(self, new_state: str):
+
         self.state = new_state
         self._state_start_time = time.time()
         print(f"[TrackingController] State -> {new_state}")
@@ -96,7 +111,10 @@ class TrackingController:
             if now - self.last_seen_time > self._lost_timeout:
                 if self.state != self.STATE_SEARCHING:
                     self._set_state(self.STATE_SEARCHING)
-            return 0.0, 0.0, self.state
+            # Maju pelan (0.5 m/s) untuk mencari bola jika sedang SEARCHING
+            search_speed = self.forward_speed * 0.5
+            return search_speed, 0.0, self.state
+
 
         # ---- Gate terdeteksi ----
         self.last_seen_time = now
@@ -107,8 +125,9 @@ class TrackingController:
         error = float(gate_center_x - self.center_x)
         abs_error = abs(error)
 
-        # Feed error ke PID, output = turn_rate deg/s
+        # Feed error ke PID, output = turn_rate deg/s (positif = belok kanan, negatif = belok kiri)
         turn_rate = float(self.pid(error))
+
 
         # ---- SEARCHING -> ALIGNING ----
         if self.state == self.STATE_SEARCHING:
@@ -143,28 +162,4 @@ class TrackingController:
         # Fallback
         return 0.0, turn_rate, self.state
 
-    # ------------------------------------------------------------------ #
-    #  Legacy method – dipertahankan untuk kompatibilitas backward         #
-    # ------------------------------------------------------------------ #
 
-    def compute_steering(self, ball_x):
-        """
-        [LEGACY] Menghitung nilai PWM steering untuk RC Override.
-        Gunakan compute_velocity() untuk mode GUIDED.
-        """
-        # Re-init legacy PID jika dipanggil pertama kali
-        if not hasattr(self, '_legacy_pid'):
-            from simple_pid import PID as _PID
-            self._legacy_pid = _PID(0.5, 0.0, 0.1, setpoint=self.center_x)
-            self._legacy_pid.output_limits = (-500, 500)
-
-        if ball_x is not None:
-            self.last_seen_time = time.time()
-            control_output = -self._legacy_pid(ball_x)
-            steering_pwm = int(1500 + control_output)
-            return steering_pwm, True
-        else:
-            if time.time() - self.last_seen_time > 1.0:
-                return 1500, False
-            else:
-                return None, False

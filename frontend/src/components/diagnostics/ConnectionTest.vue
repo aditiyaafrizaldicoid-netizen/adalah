@@ -1,18 +1,22 @@
 <script setup>
 import { Wifi, RefreshCw, Send } from 'lucide-vue-next';
-import { ref } from 'vue';
 
-const latency = ref(0);
+import { ref, computed } from 'vue';
+import { useWebsocketStore } from '@/stores/websocketStore';
+
+const wsStore = useWebsocketStore();
 const isTesting = ref(false);
+
+const latency = computed(() => wsStore.latency || 0);
 
 const runTest = () => {
   isTesting.value = true;
   setTimeout(() => {
-    latency.value = 42 + Math.floor(Math.random() * 10);
     isTesting.value = false;
-  }, 1000);
+  }, 500);
 };
 </script>
+
 
 <template>
   <div class="glass-card p-6 flex flex-col gap-6">

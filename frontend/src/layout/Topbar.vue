@@ -68,15 +68,7 @@ onUnmounted(() => {
         <Sun v-else class="w-5 h-5" />
       </button>
 
-      <!-- Simulation Toggle -->
-      <div class="flex items-center gap-3 px-4 py-1.5 rounded-full bg-(--bg-secondary) border border-(--border-subtle) group cursor-pointer hover:border-primary/50 transition-colors" @click="vessel.toggleSimulation()">
-        <div :class="['w-8 h-4 rounded-full relative transition-colors', vessel.isSimulating ? 'bg-primary' : 'bg-slate-700']">
-          <div :class="['absolute top-1 w-2 h-2 rounded-full bg-white transition-all', vessel.isSimulating ? 'left-5' : 'left-1']"></div>
-        </div>
-        <span :class="['text-xs font-bold uppercase tracking-wider', vessel.isSimulating ? 'text-primary' : 'text-(--text-secondary)']">
-          Simulation
-        </span>
-      </div>
+
 
       <div class="flex items-center gap-4 text-(--text-secondary)">
         <div class="flex items-center gap-2">

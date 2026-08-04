@@ -1,6 +1,7 @@
 import math
 from pymavlink import mavutil
-from sensors.state import ASVState
+from core.state import ASVState
+
 
 class MAVLinkParser:
     """

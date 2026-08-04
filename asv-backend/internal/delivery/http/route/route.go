@@ -14,14 +14,16 @@ import (
 )
 
 type Router struct {
-	cfg           *config.Config
-	mw            *middleware.Middleware
-	authHandler   *handler.AuthHandler
-	userHandler   *handler.UserHandler
-	healthHandler *handler.HealthHandler
-	wsHandler     *handler.WSHandler
-	videoHandler  *handler.VideoHandler
-	calibHandler  *handler.CalibrationProfileHandler
+	cfg                  *config.Config
+	mw                   *middleware.Middleware
+	authHandler          *handler.AuthHandler
+	userHandler          *handler.UserHandler
+	healthHandler        *handler.HealthHandler
+	wsHandler            *handler.WSHandler
+	videoHandler         *handler.VideoHandler
+	calibHandler         *handler.CalibrationProfileHandler
+	pidConfigHandler     *handler.PidConfigHandler
+	missionPresetHandler *handler.MissionPresetHandler
 }
 
 func NewRouter(
@@ -33,16 +35,20 @@ func NewRouter(
 	wsHandler *handler.WSHandler,
 	videoHandler *handler.VideoHandler,
 	calibHandler *handler.CalibrationProfileHandler,
+	pidConfigHandler *handler.PidConfigHandler,
+	missionPresetHandler *handler.MissionPresetHandler,
 ) *Router {
 	return &Router{
-		cfg:           cfg,
-		mw:            mw,
-		authHandler:   authHandler,
-		userHandler:   userHandler,
-		healthHandler: healthHandler,
-		wsHandler:     wsHandler,
-		videoHandler:  videoHandler,
-		calibHandler:  calibHandler,
+		cfg:                  cfg,
+		mw:                   mw,
+		authHandler:          authHandler,
+		userHandler:          userHandler,
+		healthHandler:        healthHandler,
+		wsHandler:            wsHandler,
+		videoHandler:         videoHandler,
+		calibHandler:         calibHandler,
+		pidConfigHandler:     pidConfigHandler,
+		missionPresetHandler: missionPresetHandler,
 	}
 }
 
@@ -57,11 +63,7 @@ func (r *Router) New() *fiber.App {
 	if r.mw != nil {
 		app.Use(requestid.New())
 		app.Use(r.mw.LoggingMiddleware())
-		// app.Use(r.mw.HelmetMiddleware())
 		app.Use(r.mw.CORSMiddleware())
-		// app.Use(r.mw.LimiterMiddleware())
-		// app.Use(r.mw.CSRFMiddleware())
-		// Global Casbin RBAC can be added here if needed: app.Use(r.mw.CasbinMiddleware())
 	}
 
 	app.Get("/swagger/*", swagger.HandlerDefault)
@@ -106,9 +108,20 @@ func (r *Router) New() *fiber.App {
 	calibGroup.Get("/profiles", r.calibHandler.GetAll)
 	calibGroup.Post("/profiles", r.calibHandler.Create)
 	calibGroup.Put("/profiles/:id", r.calibHandler.Update)
-	calibGroup.Delete("/profiles/:id", r.calibHandler.Delete)
 
-	// 404 Handler
+	// PID Config Routes
+	pidGroup := api.Group("/pid-config")
+	pidGroup.Get("", r.pidConfigHandler.GetConfig)
+	pidGroup.Put("", r.pidConfigHandler.SaveConfig)
+
+	// Mission Presets Routes
+	presetGroup := api.Group("/mission-presets")
+	presetGroup.Get("", r.missionPresetHandler.GetAll)
+	presetGroup.Get("/:id", r.missionPresetHandler.GetByID)
+	presetGroup.Post("", r.missionPresetHandler.Create)
+	presetGroup.Put("/:id", r.missionPresetHandler.Update)
+	presetGroup.Delete("/:id", r.missionPresetHandler.Delete)
+
 	app.Use(r.mw.NotFoundRouteMiddleware())
 	return app
 }

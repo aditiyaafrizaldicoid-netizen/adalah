@@ -59,18 +59,21 @@ const vessel = useVesselStore();
         <GpsWidget :lat="vessel.lat" :lng="vessel.lng" :fix="vessel.gpsFix" :satellites="vessel.satellites" />
       </div>
 
-      <!-- Camera Feeds -->
-      <div class="col-span-12 lg:col-span-6">
-        <CameraFeed src="http://localhost:3000/api/v1/video/stream" label="Surface View (Cam-01)" status="CONNECTED" />
-      </div>
-      <div class="col-span-12 lg:col-span-6">
-        <CameraFeed src="http://localhost:3000/api/v1/video/stream" label="Underwater View (Cam-02)" status="ERROR" />
+      <!-- Camera Feed -->
+      <div class="col-span-12">
+        <CameraFeed
+          src="http://localhost:3000/api/v1/video/stream"
+          label="Primary Video Stream (Camera 0)"
+          :status="vessel.cameraConnected ? 'CONNECTED' : 'DISCONNECTED'"
+        />
       </div>
 
+
       <!-- History Chart -->
-      <div class="col-span-12 h-[300px]">
+      <div class="col-span-12 h-75">
         <TelemetryChart />
       </div>
+
     </div>
   </div>
 </template>

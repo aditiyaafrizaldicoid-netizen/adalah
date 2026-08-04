@@ -1,12 +1,16 @@
 <script setup>
-import { Trophy } from 'lucide-vue-next';
+import { computed } from 'vue';
 
-const teams = [
-  { name: 'TEAM KKI-01 (YOU)', score: 145.2, rank: 1, trend: 'up' },
-  { name: 'TEAM ASV-ROBOTIC', score: 138.5, rank: 2, trend: 'down' },
-  { name: 'TIM MARITIM-UNIV', score: 122.1, rank: 3, trend: 'stable' },
-];
+import { Trophy } from 'lucide-vue-next';
+import { useScoringStore } from '@/stores/scoringStore';
+
+const scoring = useScoringStore();
+
+const teams = computed(() => [
+  { name: 'OFFICIAL ASV VESSEL (CURRENT RUN)', score: scoring.totalScore, rank: 1, status: 'RUNNING' }
+]);
 </script>
+
 
 <template>
   <div class="glass-card overflow-hidden">

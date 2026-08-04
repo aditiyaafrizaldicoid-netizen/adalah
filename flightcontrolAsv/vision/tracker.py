@@ -100,18 +100,31 @@ class BallTracker:
         gate_center_x = None
         gate_center_y = None
 
-        if len(all_centers_x) >= 2:
-            # Midpoint dari semua bola yang terdeteksi
+        # Sort bola berdasarkan LUAS BOUNDING BOX (terbesar / terdekat dengan kamera)
+        sorted_red = sorted(red_balls, key=lambda b: (b[4] - b[2]) * (b[5] - b[3]), reverse=True)
+        sorted_green = sorted(green_balls, key=lambda b: (b[4] - b[2]) * (b[5] - b[3]), reverse=True)
+
+
+        if len(sorted_red) > 0 and len(sorted_green) > 0:
+            # Pasangan bola merah & hijau TERDEKAT di depan kapal
+            closest_red = sorted_red[0]
+            closest_green = sorted_green[0]
+            red_pt = (closest_red[0], closest_red[1])
+            green_pt = (closest_green[0], closest_green[1])
+
+            gate_center_x = (red_pt[0] + green_pt[0]) // 2
+            gate_center_y = (red_pt[1] + green_pt[1]) // 2
+
+            # Gambar garis gate penghubung pasangan terdekat (hanya tuple 2 elemen)
+            cv2.line(frame, red_pt, green_pt, self.COLOR_GATE_LINE, 2, cv2.LINE_AA)
+
+
+        elif len(all_centers_x) >= 2:
+            # Jika ada bola sejenis terdekat
             gate_center_x = sum(all_centers_x) // len(all_centers_x)
             gate_center_y = sum(all_centers_y) // len(all_centers_y)
 
-            # Gambar garis penghubung antar semua bola (gate line)
-            # Urutkan berdasarkan X agar garis terhubung dari kiri ke kanan
-            sorted_pts = sorted(zip(all_centers_x, all_centers_y), key=lambda p: p[0])
-            for i in range(len(sorted_pts) - 1):
-                cv2.line(frame, sorted_pts[i], sorted_pts[i + 1],
-                         self.COLOR_GATE_LINE, 2, cv2.LINE_AA)
-
+        if gate_center_x is not None:
             # Gambar midpoint gate (magenta, lebih besar)
             cv2.circle(frame, (gate_center_x, gate_center_y), 10, self.COLOR_MIDPOINT, -1)
             cv2.circle(frame, (gate_center_x, gate_center_y), 14, self.COLOR_MIDPOINT, 2)
@@ -126,10 +139,23 @@ class BallTracker:
                         (min(frame_center_x, gate_center_x), gate_center_y - 8),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, self.COLOR_ERROR_LINE, 1)
 
+
         elif len(all_centers_x) == 1:
-            # Hanya 1 bola terdeteksi, tetap jadikan target
-            gate_center_x = all_centers_x[0]
-            gate_center_y = all_centers_y[0]
+            # Hanya 1 bola terdeteksi -> terapkan asymmetric offset
+            # Bola Hijau (class 0) harus di kanan -> target shifted to left (-120px)
+            # Bola Merah (class 1) harus di kiri  -> target shifted to right (+120px)
+            single_cx = all_centers_x[0]
+            single_cy = all_centers_y[0]
+            offset_px = int(w * 0.2)  # ~120px pada 640w
+
+            if len(green_balls) == 1:
+                gate_center_x = max(0, single_cx - offset_px)
+            elif len(red_balls) == 1:
+                gate_center_x = min(w, single_cx + offset_px)
+            else:
+                gate_center_x = single_cx
+            gate_center_y = single_cy
+
 
         # ---- OSD: State label ----
         if state_label:

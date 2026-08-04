@@ -1,12 +1,13 @@
 from typing import Dict, Any, Optional
 from config import config, ASVConfig, ChannelConfig, channel_config
-from sensors.state import ASVState, ASVStateData
+from core.state import ASVState, ASVStateData
 from connection.manager import ConnectionManager
 from control.arming import ArmingControl
 from control.mode import ModeControl
 from control.navigation import NavigationControl
 from control.motion import MotionControl
 from control.mission import MissionControl
+
 
 class ASVController:
     """
@@ -106,72 +107,7 @@ class ASVController:
         """
         return self.connection.send_param_set(param_name, value)
 
-    def apply_no_rc_mode(self) -> dict:
-        """
-        Menerapkan konfigurasi parameter ArduRover untuk operasi TANPA RC receiver.
-        Menonaktifkan semua failsafe yang berkaitan dengan sinyal RC, dan 
-        mengeset fungsi Servo ke RCPassThru agar RC Override bekerja.
-        """
-        params_to_set = {
-            "FS_THR_ENABLE":    0,   # Disable RC throttle failsafe
-            "ARMING_CHECK":     0,   # Disable pre-arm checks (GPS, RC, compass, dll)
-            "BRD_SAFETY_DEFLT": 0,   # Disable safety switch / press-to-arm
-            "FS_GCS_ENABLE":    0,   # Disable GCS heartbeat failsafe
-        }
-        
-        # Tambahkan SERVOx_FUNCTION = 1 (RCPassThru) untuk channel aktif
-        active_channels = [
-            self.channel_config.thruster_left_ch,
-            self.channel_config.thruster_right_ch,
-            self.channel_config.servo_left_ch,
-            self.channel_config.servo_right_ch
-        ]
-        
-        for ch in active_channels:
-            if 1 <= ch <= 18:
-                params_to_set[f"SERVO{ch}_FUNCTION"] = 1
 
-        results = {}
-        for name, value in params_to_set.items():
-            ok = self.set_param(name, value)
-            results[name] = "OK" if ok else "FAILED"
-            import time; time.sleep(0.05)  # Jeda kecil antar parameter
-        
-        print(f"[ASVController] apply_no_rc_mode results: {results}")
-        return results
-
-    def apply_rc_mode(self) -> dict:
-        """
-        Menerapkan fungsi SERVO Pixhawk agar dikendalikan oleh Remote RC fisik
-        menggunakan Differential Thrust (Skid Steering):
-        - Servo 1: ThrottleLeft  (73) -> Thruster Kiri  (Mati saat Disarm, ikuti stang Throttle+Yaw)
-        - Servo 2: ThrottleRight (74) -> Thruster Kanan (Mati saat Disarm, ikuti stang Throttle+Yaw)
-        - Servo 3: GroundSteering (26) -> Servo Kemudi Kiri  (ikuti stang Roll)
-        - Servo 4: GroundSteering (26) -> Servo Kemudi Kanan (ikuti stang Roll)
-        """
-        params_to_set = {
-            "SERVO1_FUNCTION": 73,  # ThrottleLeft  (Differential Thrust Kiri, mati saat Disarm)
-            "SERVO2_FUNCTION": 74,  # ThrottleRight (Differential Thrust Kanan, mati saat Disarm)
-            "SERVO3_FUNCTION": 26,  # GroundSteering (Servo kemudi kiri)
-            "SERVO4_FUNCTION": 26,  # GroundSteering (Servo kemudi kanan)
-            "FS_THR_ENABLE":   0,   # Disable RC failsafe agar bisa arming tanpa sinyal stabil
-            "ARMING_CHECK":    0,   # Disable pre-arm checks (agar bisa langsung arming)
-            "BRD_SAFETY_DEFLT": 0,  # Disable safety button
-        }
-        results = {}
-        for name, value in params_to_set.items():
-            ok = self.set_param(name, value)
-            results[name] = "OK" if ok else "FAILED"
-            import time; time.sleep(0.05)
-        print(f"[ASVController] apply_rc_mode results: {results}")
-        return results
-
-    def restore_default_failsafe(self) -> dict:
-        """
-        Memulihkan failsafe & fungsi servo ke nilai default ArduRover setelah selesai testing.
-        Memungkinkan remote RC fisik mengendalikan kapal secara penuh.
-        """
-        return self.apply_rc_mode()
 
     # --- PERINTAH KONTROL (CONTROL COMMANDS) ---
     def arm(self, force: bool = False) -> bool:
@@ -211,9 +147,10 @@ class ASVController:
         """
         return self._navigation.goto_target(target_lat=lat, target_lon=lon)
 
-    def stop_movement(self) -> bool:
+    def stop_movement(self, silent: bool = False) -> bool:
         """Menghentikan pergerakan kapal segera (Set kecepatan ke 0)."""
-        return self._navigation.stop()
+        return self._navigation.stop(silent=silent)
+
 
     # --- KENDALI MANUAL / JOYSTICK (TELEOPERATION) ---
     def send_rc_override(self, channels: list) -> bool:
@@ -234,24 +171,7 @@ class ASVController:
         """Melepaskan semua override RC agar kontrol kembali ke remote atau mode otomatis autopilot."""
         return self._motion.release_all_rc()
 
-    def set_servo(self, channel: int, pwm: int) -> bool:
-        """
-        Mengontrol posisi satu output servo secara langsung (misal untuk 2 Servo Belokan Thruster).
-        :param channel: Nomor channel di Pixhawk (1 - 16)
-        :param pwm: Nilai PWM (1000 = minimum/kiri, 1500 = tengah, 2000 = maksimum/kanan)
-        """
-        return self._motion.set_servo(channel, pwm)
 
-    def drive_dual_vectored(self, throttle_left: int = 1500, throttle_right: int = 1500,
-                            servo_left: int = 1500, servo_right: int = 1500, channels_map: dict = None) -> bool:
-        """
-        Kendali serentak khusus kapal 2 Thruster + 2 Servo Steering (Vectored Thrust).
-        :param throttle_left: PWM Thruster Kiri (1000 mundur, 1500 stop, 2000 maju)
-        :param throttle_right: PWM Thruster Kanan (1000 mundur, 1500 stop, 2000 maju)
-        :param servo_left: PWM Servo Kiri (1000 kiri, 1500 lurus, 2000 kanan)
-        :param servo_right: PWM Servo Kanan (1000 kiri, 1500 lurus, 2000 kanan)
-        """
-        return self._motion.drive_dual_vectored(throttle_left, throttle_right, servo_left, servo_right, channels_map)
 
     # --- MANAJEMEN MISI WAYPOINT (AUTONOMOUS SURVEY) ---
     def upload_mission(self, waypoints: list) -> bool:

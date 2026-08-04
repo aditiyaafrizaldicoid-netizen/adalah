@@ -11,14 +11,16 @@ import (
 )
 
 type WSHandler struct {
-	hub           *WSHub
-	configService service.AsvConfigService
+	hub              *WSHub
+	configService    service.AsvConfigService
+	pidConfigService service.PidConfigService
 }
 
-func NewWSHandler(hub *WSHub, configService service.AsvConfigService) *WSHandler {
+func NewWSHandler(hub *WSHub, configService service.AsvConfigService, pidConfigService service.PidConfigService) *WSHandler {
 	return &WSHandler{
-		hub:           hub,
-		configService: configService,
+		hub:              hub,
+		configService:    configService,
+		pidConfigService: pidConfigService,
 	}
 }
 
@@ -66,6 +68,24 @@ func (h *WSHandler) HandleASV(c *websocket.Conn) {
 			},
 		}
 		if cmdBytes, err := json.Marshal(initialCmd); err == nil {
+			c.WriteMessage(websocket.TextMessage, cmdBytes)
+		}
+	}
+
+	// Send initial PID config from DB to ASV
+	if pidCfg, err := h.pidConfigService.GetConfig(); err == nil && pidCfg != nil {
+		initialPidCmd := map[string]interface{}{
+			"type": "COMMAND",
+			"cmd": map[string]interface{}{
+				"action":             "update_pid",
+				"kp":                 pidCfg.Kp,
+				"ki":                 pidCfg.Ki,
+				"kd":                 pidCfg.Kd,
+				"forward_speed":      pidCfg.ForwardSpeed,
+				"align_threshold_px": pidCfg.AlignThresholdPx,
+			},
+		}
+		if cmdBytes, err := json.Marshal(initialPidCmd); err == nil {
 			c.WriteMessage(websocket.TextMessage, cmdBytes)
 		}
 	}
@@ -150,9 +170,39 @@ func (h *WSHandler) HandleWeb(c *websocket.Conn) {
 			break
 		}
 		if mt == websocket.TextMessage {
+			// Intercept update_pid to persist in Database
+			var payload map[string]interface{}
+			if err := json.Unmarshal(msg, &payload); err == nil {
+				if msgType, ok := payload["type"].(string); ok && msgType == "COMMAND" {
+					if cmd, ok := payload["cmd"].(map[string]interface{}); ok {
+						if action, ok := cmd["action"].(string); ok && action == "update_pid" {
+							if pidCfg, err := h.pidConfigService.GetConfig(); err == nil && pidCfg != nil {
+								if val, ok := cmd["kp"].(float64); ok {
+									pidCfg.Kp = val
+								}
+								if val, ok := cmd["ki"].(float64); ok {
+									pidCfg.Ki = val
+								}
+								if val, ok := cmd["kd"].(float64); ok {
+									pidCfg.Kd = val
+								}
+								if val, ok := cmd["forward_speed"].(float64); ok {
+									pidCfg.ForwardSpeed = val
+								}
+								if val, ok := cmd["align_threshold_px"].(float64); ok {
+									pidCfg.AlignThresholdPx = val
+								}
+								h.pidConfigService.SaveConfig(pidCfg)
+								log.Println("[WSHandler] Saved updated PID config to Database")
+							}
+						}
+					}
+				}
+			}
 			// Broadcast commands from Web UI to ASV
 			h.hub.BroadcastToASV(msg)
 		}
 	}
 }
+
 

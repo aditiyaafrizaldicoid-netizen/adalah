@@ -9,37 +9,43 @@ export const useScoringStore = defineStore("scoring", () => {
   const imb = ref(0); // Image Quality Underwater (0, 1, 3, 5)
   const dc = ref(0);  // Docking balls (0, 5, 10, 15)
 
-  // NM calculation based on buoys and other tasks
+  // NM calculation based on buoy passes and mission step progress
   const nm = computed(() => {
-    // Basic scoring for KKI: buoys passed (up to 10) + imaging + docking
-    let score = missionStore.buoysPassed.length; // max 10
-    if (missionStore.currentStep > 4) score += 4; // Surface Imaging completion
-    if (missionStore.currentStep > 5) score += 3; // Underwater Imaging completion
-    if (missionStore.currentStep > 6) score += 3; // Docking completion
+    // Hitung dari buoyPassCount (berapa gate yang sudah dilewati)
+    let score = Math.min(missionStore.buoyPassCount ?? 0, 10); // max 10
+    const stepIdx = missionStore.currentStepIdx ?? 0;
+    const total = missionStore.totalSteps ?? 0;
+    // Bonus poin berdasarkan progress langkah misi
+    if (total > 0 && stepIdx > Math.floor(total * 0.6)) score += 4; // past 60%
+    if (total > 0 && stepIdx > Math.floor(total * 0.8)) score += 3; // past 80%
+    if (missionStore.missionStatus === 'FINISHED') score += 3;
     return Math.min(score, 20);
   });
 
-  const nt = computed(() => missionStore.missionElapsedSeconds);
-  const p = computed(() => missionStore.penalties * 5); // 5 points per penalty
+  const nt = computed(() => Math.max(missionStore.elapsedSec ?? 1, 1)); // avoid div/0
+  const p = ref(0); // penalty poin manual, bisa diset dari UI Scoring
 
   const totalScore = computed(() => {
-    if (nm.value === 20) {
-      // Formula if all tasks completed
-      return 100 * ((2 * nm.value - p.value) / nt.value) + imh.value + imb.value + dc.value;
+    const nmVal = nm.value;
+    const pVal = p.value;
+    const ntVal = nt.value;
+    if (nmVal === 20) {
+      const raw = 100 * ((2 * nmVal - pVal) / ntVal) + imh.value + imb.value + dc.value;
+      return isFinite(raw) ? raw : 0;
     } else {
-      // Formula if tasks incomplete
-      return 10 * ((2 * nm.value - p.value) / 900);
+      return 10 * ((2 * nmVal - pVal) / 900);
     }
   });
 
   function setImh(val) { imh.value = val; }
   function setImb(val) { imb.value = val; }
   function setDc(val) { dc.value = val; }
+  function setPenalty(val) { p.value = val; }
 
   return {
     imh, imb, dc,
     nm, nt, p,
     totalScore,
-    setImh, setImb, setDc
+    setImh, setImb, setDc, setPenalty
   };
 });

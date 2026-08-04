@@ -148,56 +148,10 @@ const formattedTime = computed(() => {
   return currentTime.value.toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
 });
 
-// --- MOCK SIMULATION FOR DEMO ---
-let simInterval = null;
-const startSimulation = () => {
-  if (simInterval) return;
-  console.log("Starting ASV movement simulation...");
-  vessel.isSimulating = true;
-
-  // Sync initial position if it's way off
-  if (Math.abs(vessel.lat - defaultLat) > 2) {
-    vessel.lat = defaultLat;
-    vessel.lng = defaultLng;
-  }
-
-  if (vessel.heading === 0) {
-    vessel.heading = 45; // Start pointing North-East
-  }
-
-  simInterval = setInterval(() => {
-    // Move forward slightly
-    const speed = 0.00002; // Approx 22cm per tick (2.2m per sec)
-
-    // Convert heading to radians for math
-    const headingRad = (vessel.heading - 90) * (Math.PI / 180);
-
-    vessel.lat += Math.sin(headingRad) * -speed;
-    vessel.lng += Math.cos(headingRad) * speed;
-
-    // Slightly turn right continuously
-    // vessel.heading += 0.5;
-    // if (vessel.heading >= 360) vessel.heading = 0;
-    // Normalize heading to -180 .. 180
-    // if (vessel.heading > 180) {
-    //   vessel.heading -= 360;
-    // } else if (vessel.heading < -180) {
-    //   vessel.heading += 360;
-    // }
-
-  }, 100); // 10Hz update
-};
-
-const stopSimulation = () => {
-  vessel.isSimulating = false;
-  if (simInterval) clearInterval(simInterval);
-  simInterval = null;
-};
-// --------------------------------
-
 // Render Waypoints based on Mission Store
 const renderWaypoints = () => {
   if (!map) return;
+
 
   // Clear existing markers
   waypointMarkers.forEach(m => map.removeLayer(m));
@@ -255,7 +209,6 @@ watch(() => props.visibleLayers, (layers) => {
 
 onUnmounted(() => {
   if (timeInterval) clearInterval(timeInterval);
-  stopSimulation();
   if (map) {
     map.remove();
     map = null;
@@ -269,14 +222,6 @@ onUnmounted(() => {
     <!-- Leaflet Map Container -->
     <div ref="mapContainer" class="w-full h-full z-0 cursor-crosshair"></div>
 
-    <!-- DEV: Simulation Toggle -->
-    <div class="absolute top-6 left-1/2 -translate-x-1/2 z-10 flex gap-2">
-      <button @click="simInterval ? stopSimulation() : startSimulation()"
-        class="px-4 py-2 rounded-full font-black text-xs uppercase shadow-xl transition-all"
-        :class="simInterval ? 'bg-danger text-white' : 'bg-primary text-black'">
-        {{ simInterval ? '🛑 Stop Demo' : '▶️ Play Movement Demo' }}
-      </button>
-    </div>
 
     <!-- Map Controls Overlay -->
     <div class="absolute bottom-6 right-6 flex flex-col gap-3 z-10">

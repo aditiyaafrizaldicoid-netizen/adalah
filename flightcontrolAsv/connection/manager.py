@@ -2,8 +2,9 @@ import threading
 import time
 from pymavlink import mavutil
 from config import ASVConfig
-from sensors.state import ASVState
-from sensors.parser import MAVLinkParser
+from core.state import ASVState
+from connection.parser import MAVLinkParser
+
 
 class ConnectionManager:
     """
@@ -212,3 +213,19 @@ class ConnectionManager:
             print(f"[ConnectionManager] Berhasil meminta stream telemetri ({self.config.STREAM_RATE_HZ} Hz)")
         except Exception as e:
             print(f"[ConnectionManager] Gagal meminta data stream: {e}")
+
+    def _send_heartbeat_loop(self):
+        """Pancar MAVLink Heartbeat (1 Hz) dari Companion Computer ke Pixhawk."""
+        while self._is_running:
+            if self.master and self.state.get_data().is_connected:
+                try:
+                    with self._write_lock:
+                        self.master.mav.heartbeat_send(
+                            mavutil.mavlink.MAV_TYPE_ONBOARD_CONTROLLER,
+                            mavutil.mavlink.MAV_AUTOPILOT_INVALID,
+                            0, 0, 0
+                        )
+                except Exception:
+                    pass
+            time.sleep(1.0)
+

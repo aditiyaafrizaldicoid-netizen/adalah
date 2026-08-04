@@ -38,14 +38,10 @@ export const useVesselStore = defineStore("vessel", () => {
   // Format: { id, level, code, message, timestamp }
   const warnings = ref([]);
 
-  // Simulation State
-  const isSimulating = ref(false);
-  let simInterval = null;
-
   // Advanced Navigation Data
   const xte = ref(0);
-  const dtw = ref(150.5);
-  const nextWp = ref(1);
+  const dtw = ref(0);
+  const nextWp = ref(0);
 
   // Engine Stats
   const thrusterL = ref(0);
@@ -63,12 +59,9 @@ export const useVesselStore = defineStore("vessel", () => {
 
   // Actions to update telemetry
   function updateTelemetry(data) {
-    if (!isSimulating.value) {
-      if (data.lat !== undefined && data.lat !== 0) lat.value = data.lat;
-      if (data.lng !== undefined && data.lng !== 0) lng.value = data.lng;
-    }
+    if (data.lat !== undefined && data.lat !== 0) lat.value = data.lat;
+    if (data.lng !== undefined && data.lng !== 0) lng.value = data.lng;
 
-    // Always update these from real sensors even if simulating location
     if (data.heading !== undefined) {
       heading.value = data.heading;
       if (heading.value > 180) {
@@ -87,15 +80,27 @@ export const useVesselStore = defineStore("vessel", () => {
     if (data.gps_fix !== undefined) gpsFix.value = data.gps_fix;
     if (data.satellites !== undefined) satellites.value = data.satellites;
     if (data.signal_strength !== undefined) signalStrength.value = data.signal_strength;
-    // Status Pixhawk
+
+    // Advanced Nav & Engines
+    if (data.dtw !== undefined) dtw.value = data.dtw;
+    if (data.xte !== undefined) xte.value = data.xte;
+    if (data.next_wp !== undefined) nextWp.value = data.next_wp;
+    if (data.thruster_l !== undefined) thrusterL.value = data.thruster_l;
+    if (data.thruster_r !== undefined) thrusterR.value = data.thruster_r;
+    if (data.rpm_l !== undefined) rpmL.value = data.rpm_l;
+    if (data.rpm_r !== undefined) rpmR.value = data.rpm_r;
+
+    // Status Pixhawk & Kamera
     if (data.is_connected !== undefined) isConnected.value = data.is_connected;
     if (data.is_armed !== undefined) isArmed.value = data.is_armed;
     if (data.mode !== undefined) mode.value = data.mode;
+    if (data.camera_connected !== undefined) cameraConnected.value = data.camera_connected;
     // Status Recording Video Mentah
     if (data.is_recording !== undefined) isRecording.value = data.is_recording;
     if (data.recording_filename !== undefined) recordingFilename.value = data.recording_filename;
     if (data.recording_resolution !== undefined) recordingResolution.value = data.recording_resolution;
   }
+
 
   /**
    * Tambahkan warning ke antrian.
@@ -132,48 +137,6 @@ export const useVesselStore = defineStore("vessel", () => {
     warnings.value = [];
   }
 
-  function toggleSimulation() {
-    isSimulating.value = !isSimulating.value;
-    if (isSimulating.value) {
-      simInterval = setInterval(() => {
-        // Mock movement
-        heading.value = (heading.value + (Math.random() - 0.4) * 2 + 360) % 360;
-        sog.value = Math.max(0, sog.value + (Math.random() - 0.5) * 0.1);
-
-        // Mock attitude
-        pitch.value = Math.sin(Date.now() / 1000) * 5;
-        roll.value = Math.cos(Date.now() / 1000) * 8;
-
-        // Mock battery drain
-        if (batteryPct.value > 0) batteryPct.value -= 0.001;
-
-        // Mock GPS
-        satellites.value = 12 + Math.floor(Math.random() * 3);
-        gpsFix.value = 3;
-        signalStrength.value = -60 + Math.floor(Math.random() * 10);
-        // Mock Nav
-        xte.value = Math.sin(Date.now() / 2000) * 1.5;
-        dtw.value = Math.max(0, dtw.value - 0.05);
-        if (dtw.value <= 0) {
-          dtw.value = 200;
-          nextWp.value = (nextWp.value % 7) + 1;
-        }
-
-        // Mock Engines
-        thrusterL.value = 40 + Math.random() * 20;
-        thrusterR.value = 40 + Math.random() * 20;
-        rpmL.value = 1000 + thrusterL.value * 10;
-        rpmR.value = 1000 + thrusterR.value * 10;
-      }, 100);
-    } else {
-      if (simInterval) clearInterval(simInterval);
-      thrusterL.value = 0;
-      thrusterR.value = 0;
-      rpmL.value = 0;
-      rpmR.value = 0;
-    }
-  }
-
   return {
     lat, lng, heading, sog, cog,
     pitch, roll, yaw,
@@ -185,8 +148,9 @@ export const useVesselStore = defineStore("vessel", () => {
     isRecording, recordingFilename, recordingResolution,
     cameraConnected, asvConnected,
     warnings,
-    isGpsValid, batteryColor, isSimulating,
-    updateTelemetry, toggleSimulation,
+    isGpsValid, batteryColor,
+    updateTelemetry,
     addWarning, clearWarning, clearAllWarnings,
   };
 });
+

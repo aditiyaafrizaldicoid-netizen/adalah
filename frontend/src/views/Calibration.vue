@@ -1,27 +1,27 @@
 <script setup>
 import { onMounted, ref } from 'vue';
-import { Settings2, Compass, MapPin, Camera, Zap, Cpu } from "lucide-vue-next";
+import { Settings2, Compass, MapPin, Camera, Zap, Cpu, Sliders } from "lucide-vue-next";
 
 // Sub-components
 import ImuCalibration from "../components/calibration/ImuCalibration.vue";
 import GpsCalibration from "../components/calibration/GpsCalibration.vue";
 import CameraCalibration from "../components/calibration/CameraCalibration.vue";
 import ThrusterCalibration from "../components/calibration/ThrusterCalibration.vue";
-import ServoCalibration from "../components/calibration/ServoCalibration.vue";
 import CalibrationProfile from "../components/calibration/CalibrationProfile.vue";
 import ChannelConfig from "../components/calibration/ChannelConfig.vue";
+import PidTuningCard from "../components/calibration/PidTuningCard.vue";
 import { useRouter, useRoute } from 'vue-router';
 const router = useRouter();
 const route = useRoute();
 const activeTab = ref('channel');
 
 const tabs = [
+  { id: 'pid', name: 'AI PID Tuning', icon: Sliders },
   { id: 'channel', name: 'Channel Map', icon: Cpu },
   { id: 'imu', name: 'IMU / Attitude', icon: Compass },
   { id: 'gps', name: 'GPS Offset', icon: MapPin },
   { id: 'camera', name: 'Vision / Camera', icon: Camera },
   { id: 'thruster', name: 'Thruster / Trim', icon: Zap },
-  { id: 'servo', name: 'Servo / Actuator', icon: Settings2 },
   { id: 'profile', name: 'Profiles', icon: Settings2 },
 ];
 const changeTab = (tabId) => {
@@ -29,7 +29,7 @@ const changeTab = (tabId) => {
   router.push({ name: 'Calibration', query: { tab: tabId } });
 };
 onMounted(() => {
-  activeTab.value = route.query.tab || 'channel';
+  activeTab.value = route.query.tab || 'pid';
 })
 </script>
 
@@ -38,10 +38,9 @@ onMounted(() => {
     <div>
       <h1 class="text-2xl font-bold text-(--text-primary) tracking-tight flex items-center gap-3">
         <Settings2 class="text-primary w-6 h-6" />
-        SENSOR CALIBRATION
+        SENSOR & AI CALIBRATION
       </h1>
-      <p class="text-(--text-secondary) text-xs mt-1 uppercase tracking-widest font-bold">Hardware Fine-Tuning &
-        Alignment</p>
+      <p class="text-(--text-secondary) text-xs mt-1 uppercase tracking-widest font-bold">Hardware Fine-Tuning & AI PID Control</p>
     </div>
 
     <div class="flex-1 flex gap-6 overflow-hidden">
@@ -62,16 +61,18 @@ onMounted(() => {
       <div class="flex-1 glass-card p-8 overflow-y-auto">
         <transition name="fade" mode="out-in">
           <div :key="activeTab">
+            <PidTuningCard v-if="activeTab === 'pid'" />
             <ChannelConfig v-if="activeTab === 'channel'" />
             <ImuCalibration v-if="activeTab === 'imu'" />
             <GpsCalibration v-if="activeTab === 'gps'" />
             <CameraCalibration v-if="activeTab === 'camera'" />
             <ThrusterCalibration v-if="activeTab === 'thruster'" />
-            <ServoCalibration v-if="activeTab === 'servo'" />
             <CalibrationProfile v-if="activeTab === 'profile'" />
           </div>
         </transition>
       </div>
+
+
     </div>
   </div>
 </template>

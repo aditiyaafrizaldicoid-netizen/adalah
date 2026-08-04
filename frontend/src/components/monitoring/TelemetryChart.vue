@@ -1,10 +1,22 @@
 <script setup>
-import { ref } from 'vue';
+import { ref, watch } from 'vue';
+import { useVesselStore } from '@/stores/vesselStore';
+
+const vessel = useVesselStore();
+const historyData = ref([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+
+watch(() => vessel.sog, (newSog) => {
+  historyData.value.push(Number(newSog.toFixed(2)));
+  if (historyData.value.length > 20) {
+    historyData.value.shift();
+  }
+}, { immediate: true });
 
 const series = ref([{
   name: 'SOG (Knots)',
-  data: [1.2, 1.5, 1.8, 2.1, 2.0, 2.4, 2.8, 3.1, 3.0, 3.2]
+  data: historyData
 }]);
+
 
 const chartOptions = ref({
   chart: {

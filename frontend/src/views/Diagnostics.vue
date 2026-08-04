@@ -1,5 +1,8 @@
 <script setup>
+import { computed } from 'vue';
 import { useDiagnosticsStore } from '@/stores/diagnosticsStore';
+import { useVesselStore } from '@/stores/vesselStore';
+import { useWebsocketStore } from '@/stores/websocketStore';
 import SensorHealthCard from "../components/diagnostics/SensorHealthCard.vue";
 import ConnectionTest from "../components/diagnostics/ConnectionTest.vue";
 import ErrorLogTable from "../components/diagnostics/ErrorLogTable.vue";
@@ -7,18 +10,49 @@ import SystemHealthOverview from "../components/diagnostics/SystemHealthOverview
 import { Stethoscope, RefreshCw } from "lucide-vue-next";
 
 const diag = useDiagnosticsStore();
+const vessel = useVesselStore();
+const ws = useWebsocketStore();
 
-const sensors = [
-  { name: "GPS Module", status: "success", value: "3D FIX (12 Sats)", lastUpdate: "0.2s ago" },
-  { name: "IMU / Compass", status: "success", value: "STABLE", lastUpdate: "0.1s ago" },
-  { name: "Telemetry Link", status: "success", value: "42ms Latency", lastUpdate: "0.5s ago" },
-  { name: "Battery BMS", status: "warning", value: "11.2V (Low)", lastUpdate: "1.2s ago" },
-  { name: "Motor Controller L", status: "success", value: "IDLE (32°C)", lastUpdate: "0.4s ago" },
-  { name: "Motor Controller R", status: "success", value: "IDLE (34°C)", lastUpdate: "0.4s ago" },
-  { name: "Surface Camera", status: "success", value: "STREAMING", lastUpdate: "0.1s ago" },
-  { name: "Underwater Camera", status: "danger", value: "NO SIGNAL", lastUpdate: "5.4s ago" },
-];
+const sensors = computed(() => [
+  {
+    name: "GPS Module",
+    status: vessel.isGpsValid ? "success" : "danger",
+    value: vessel.isGpsValid ? `FIX (${vessel.satellites} Sats)` : "NO FIX",
+    lastUpdate: vessel.isConnected ? "Live" : "Disconnected"
+  },
+  {
+    name: "IMU / Compass",
+    status: vessel.isConnected ? "success" : "danger",
+    value: `${vessel.heading.toFixed(1)}° Heading`,
+    lastUpdate: vessel.isConnected ? "Live" : "Offline"
+  },
+  {
+    name: "Telemetry Link",
+    status: ws.status === "CONNECTED" ? "success" : "danger",
+    value: `${ws.latency || 0}ms Latency`,
+    lastUpdate: ws.status
+  },
+  {
+    name: "Battery System",
+    status: vessel.batteryVolt > 11.5 ? "success" : "warning",
+    value: `${vessel.batteryVolt.toFixed(1)}V (${vessel.batteryPct.toFixed(0)}%)`,
+    lastUpdate: vessel.isConnected ? "Live" : "Offline"
+  },
+  {
+    name: "Pixhawk FC",
+    status: vessel.isConnected ? "success" : "danger",
+    value: vessel.isConnected ? `ONLINE (${vessel.mode})` : "OFFLINE",
+    lastUpdate: vessel.isConnected ? "Connected" : "No Heartbeat"
+  },
+  {
+    name: "Video Camera Stream",
+    status: vessel.cameraConnected ? "success" : "danger",
+    value: vessel.cameraConnected ? "STREAMING" : "NO SIGNAL",
+    lastUpdate: vessel.cameraConnected ? "Active" : "Disconnected"
+  },
+]);
 </script>
+
 
 <template>
   <div class="p-6 h-full overflow-y-auto space-y-6">

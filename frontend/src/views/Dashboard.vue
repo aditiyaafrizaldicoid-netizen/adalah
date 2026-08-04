@@ -39,59 +39,25 @@ const handleToggleRecord = () => {
   wsStore.toggleRecording(parseInt(w), parseInt(h));
 };
 
-// ── Camera Loss Detection ────────────────────────────────────────────
-// Kita tracking kapan frame terakhir diterima dari MJPEG stream.
-// Jika lebih dari 5 detik tidak ada frame baru → kamera dianggap putus.
-const cameraLostSentStop = ref(false);
+// ── Camera Stream Status ────────────────────────────────────────────
+// Frontend hanya menerima status koneksi dari Flight Controller via WebSocket / Telemetri.
+// Frontend TIDAK mengirim perintah emergency_stop balik ke Flight Controller.
 const lastFrameTime = ref(Date.now());
 const imgRef = ref(null);
-let cameraCheckInterval = null;
 
 function onCameraLoad() {
-  // Frame berhasil diterima → update timestamp & clear warning
   lastFrameTime.value = Date.now();
   if (!vessel.cameraConnected) {
     vessel.cameraConnected = true;
     vessel.clearWarning('CAMERA_LOST');
-    cameraLostSentStop.value = false;
   }
 }
 
 function onCameraError() {
-  handleCameraLost();
-}
-
-function handleCameraLost() {
   vessel.cameraConnected = false;
-  vessel.addWarning(
-    'critical',
-    'CAMERA_LOST',
-    '🎥 KRITIS: Stream kamera terputus! Mengirim perintah EMERGENCY STOP ke kapal.'
-  );
-  // Kirim emergency stop hanya sekali per kejadian
-  if (!cameraLostSentStop.value && wsStore.status === 'CONNECTED') {
-    wsStore.sendCommand({ action: 'emergency_stop', reason: 'camera_lost' });
-    cameraLostSentStop.value = true;
-    console.warn('[Dashboard] Camera lost — emergency_stop sent');
-  }
 }
-
-onMounted(() => {
-  // Cek setiap 3 detik apakah frame sudah lama tidak diperbarui
-  cameraCheckInterval = setInterval(() => {
-    const now = Date.now();
-    const elapsed = now - lastFrameTime.value;
-    // Jika kamera pernah terhubung (ada 1 load sukses) tapi sekarang hilang > 5 detik
-    if (vessel.cameraConnected && elapsed > 5000) {
-      handleCameraLost();
-    }
-  }, 3000);
-});
-
-onUnmounted(() => {
-  if (cameraCheckInterval) clearInterval(cameraCheckInterval);
-});
 </script>
+
 
 <template>
   <div class="p-6 h-full overflow-y-auto space-y-6">
@@ -182,11 +148,12 @@ onUnmounted(() => {
         />
         <MetricCard
           label="TOTAL SCORE"
-          :value="scoring.totalScore.toFixed(2)"
+          :value="(isFinite(scoring.totalScore) ? scoring.totalScore : 0).toFixed(2)"
           unit="PTS"
           :icon="Trophy"
           color="primary"
         />
+
       </div>
 
       <!-- Live Mission Progress -->
@@ -206,33 +173,42 @@ onUnmounted(() => {
           <div class="space-y-4">
             <div class="flex justify-between items-end">
               <span class="text-sm font-semibold text-(--text-primary)"
-                >Buoy 04 / 10</span
+                >{{ mission.activeStepLabel }}</span
               >
-              <span class="text-xs text-(--text-secondary)">40% Complete</span>
+              <span class="text-xs text-(--text-secondary)">{{ mission.progressPct }}% Complete</span>
             </div>
-            <ProgressBar :progress="40" color="primary" />
+            <ProgressBar :progress="mission.progressPct" color="primary" />
           </div>
         </div>
         <div class="mt-6 flex gap-2">
           <button
-            v-if="mission.missionStatus !== 'RUNNING'"
+            v-if="mission.missionStatus === 'IDLE' || mission.missionStatus === 'ABORTED' || mission.missionStatus === 'FINISHED'"
             @click="mission.startMission()"
             class="btn-primary flex-1 py-2 text-xs uppercase tracking-tighter"
           >
             Start Run
           </button>
           <button
-            v-else
-            @click="mission.stopMission()"
+            v-else-if="mission.missionStatus === 'RUNNING'"
+            @click="mission.pauseMission()"
             class="bg-warning hover:bg-yellow-500 text-slate-900 font-bold flex-1 py-2 rounded-lg text-xs uppercase tracking-tighter transition-all"
           >
             Pause
           </button>
           <button
-            class="bg-(--bg-secondary) hover:bg-slate-600 text-(--text-primary) px-3 py-2 rounded-lg transition-all"
+            v-else-if="mission.missionStatus === 'PAUSED'"
+            @click="mission.resumeMission()"
+            class="bg-success hover:bg-emerald-400 text-slate-900 font-bold flex-1 py-2 rounded-lg text-xs uppercase tracking-tighter transition-all"
+          >
+            Resume
+          </button>
+          <router-link
+            to="/mission"
+            class="bg-(--bg-secondary) hover:bg-slate-600 text-(--text-primary) px-3 py-2 rounded-lg transition-all flex items-center justify-center"
+            title="Open Mission Control"
           >
             <ChevronRight class="w-4 h-4" />
-          </button>
+          </router-link>
         </div>
       </div>
 
@@ -341,8 +317,44 @@ onUnmounted(() => {
         <!-- ARM / DISARM Control -->
         <ArmingControl />
 
+        <!-- 3-in-1 Waypoint Determination Panel -->
+        <div class="glass-card p-4 space-y-3 border-t-4 border-t-primary">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold uppercase tracking-widest text-(--text-primary) flex items-center gap-1.5">
+              <MapPin class="w-4 h-4 text-primary" />
+              Waypoint Control
+            </span>
+            <span class="text-[9px] px-2 py-0.5 rounded bg-primary/10 text-primary font-bold">HYBRID AI</span>
+          </div>
+
+          <div class="grid grid-cols-1 gap-2">
+            <!-- Method 1: Relative Meters -->
+            <button
+              @click="wsStore.setRelativeWaypoints([
+                { x: 15, y: 0 },
+                { x: 30, y: 5 },
+                { x: 45, y: -5 }
+              ])"
+              class="w-full text-left p-2.5 rounded-lg border bg-primary/5 border-primary/20 hover:bg-primary/15 transition-all text-xs font-bold flex items-center justify-between text-(--text-primary)"
+            >
+              <span>📐 Set Meter Course (15m, 30m, 45m)</span>
+              <ChevronRight class="w-3.5 h-3.5 text-primary" />
+            </button>
+
+            <!-- Method 3: Save Current GPS Spot -->
+            <button
+              @click="wsStore.saveCurrentWaypoint()"
+              class="w-full text-left p-2.5 rounded-lg border bg-warning/5 border-warning/20 hover:bg-warning/15 transition-all text-xs font-bold flex items-center justify-between text-(--text-primary)"
+            >
+              <span>📍 Save Current GPS Spot</span>
+              <MapPin class="w-3.5 h-3.5 text-warning" />
+            </button>
+          </div>
+        </div>
+
         <!-- Alerts Panel -->
         <div class="glass-card p-5 border-t-4 border-t-danger">
+
           <div class="flex items-center justify-between gap-2 mb-4">
             <div class="flex items-center gap-2">
               <ShieldAlert class="w-5 h-5 text-danger" />
