@@ -23,36 +23,40 @@ class ModeControl:
             print("[ModeControl] Gagal ganti mode: Tidak ada koneksi ke Pixhawk.")
             return False
 
-        # Coba ambil ID mode dari mode_mapping pymavlink
+        # Dapatkan ID mode dari mapping pymavlink atau default ArduRover
         mode_mapping = self.connection.master.mode_mapping()
-        if not mode_mapping or mode_name_upper not in mode_mapping:
-            # Fallback untuk ArduRover / ArduBoat standar
-            default_rover_modes = {
-                "MANUAL": 0,
-                "ACRO": 1,
-                "STEERING": 3,
-                "HOLD": 4,
-                "LOITER": 5,
-                "FOLLOW": 6,
-                "SIMPLE": 7,
-                "AUTO": 10,
-                "RTL": 11,
-                "SMART_RTL": 12,
-                "GUIDED": 15,
-            }
-            if mode_name_upper not in default_rover_modes:
-                print(f"[ModeControl] Mode '{mode_name}' tidak dikenal untuk kapal/rover ini.")
-                return False
-            mode_id = default_rover_modes[mode_name_upper]
-        else:
-            mode_id = mode_mapping[mode_name_upper]
+        default_rover_modes = {
+            "MANUAL": 0, "ACRO": 1, "STEERING": 3, "HOLD": 4,
+            "LOITER": 5, "FOLLOW": 6, "SIMPLE": 7, "AUTO": 10,
+            "RTL": 11, "SMART_RTL": 12, "GUIDED": 15,
+        }
+        mode_id = (mode_mapping or {}).get(mode_name_upper, default_rover_modes.get(mode_name_upper, 15))
 
         print(f"[ModeControl] Mengirim perintah ganti mode ke: {mode_name_upper} (ID: {mode_id})")
-        
-        # Kirim perintah SET_MODE atau MAV_CMD_DO_SET_MODE
-        # Untuk ArduPilot, COMMAND_LONG dengan MAV_CMD_DO_SET_MODE adalah yang paling handal
-        return self.connection.send_command_long(
-            mavutil.mavlink.MAV_CMD_DO_SET_MODE,
-            mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
-            mode_id
-        )
+
+        try:
+            # 1. Pilihan Utama: Gunakan method master.set_mode() bawaan pymavlink
+            if hasattr(self.connection.master, 'set_mode'):
+                try:
+                    self.connection.master.set_mode(mode_name_upper)
+                except Exception:
+                    self.connection.master.set_mode(mode_id)
+
+            # 2. Kirim pesan MAVLink SET_MODE (Message ID #11)
+            self.connection.master.mav.set_mode_send(
+                self.connection.config.TARGET_SYSTEM,
+                mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
+                mode_id
+            )
+
+            # 3. Kirim COMMAND_LONG MAV_CMD_DO_SET_MODE untuk redundansi
+            self.connection.send_command_long(
+                mavutil.mavlink.MAV_CMD_DO_SET_MODE,
+                mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
+                mode_id
+            )
+            return True
+        except Exception as e:
+            print(f"[ModeControl] Error ganti mode: {e}")
+            return False
+

@@ -58,13 +58,14 @@ class MissionEngine:
 
         self._lock = threading.RLock()
 
-
         # Counter berapa gate PASSING sudah terjadi di step TRACKING saat ini
         self._buoy_pass_count: int = 0
         self._last_tracking_state: str = ""
 
-        # Waktu mulai step TAKE_IMAGE / HOLD
+        # Waktu mulai step aktif & offset saat pause
         self._step_start_time: Optional[float] = None
+        self._paused_step_elapsed: float = 0.0
+        self._last_goto_time: float = 0.0
 
         # Callback → kirim status live ke Base Station via WebSocket
         self._status_callback = None
@@ -88,13 +89,14 @@ class MissionEngine:
         """Load mission steps dari JSON array. Return True jika valid."""
         with self._lock:
             if self._status == self.STATUS_RUNNING:
-                print("[MissionEngine] ⚠️ Tidak bisa load mission saat RUNNING!")
+                print("[MissionEngine] Tidak bisa load mission saat RUNNING!")
                 return False
             self._steps = list(steps)
             self._current_step_idx = 0
             self._status = self.STATUS_IDLE
             self._buoy_pass_count = 0
             self._step_start_time = None
+            self._paused_step_elapsed = 0.0
             print(f"[MissionEngine] Mission loaded: {len(self._steps)} steps.")
             self._broadcast_status()
             return True
@@ -107,25 +109,32 @@ class MissionEngine:
                 self._current_step_idx = 0
                 self._buoy_pass_count = 0
                 self._step_start_time = None
+                self._paused_step_elapsed = 0.0
                 print(f"[MissionEngine] Mission loaded: {len(self._steps)} steps.")
 
             if not self._steps:
-                print("[MissionEngine] ⚠️ Tidak ada mission steps yang di-load!")
+                print("[MissionEngine] Tidak ada mission steps yang di-load!")
                 return False
             if self._status == self.STATUS_RUNNING:
-                print("[MissionEngine] ⚠️ Mission sudah RUNNING!")
+                print("[MissionEngine] Mission sudah RUNNING!")
                 return False
+
             self._status = self.STATUS_RUNNING
             self._current_step_idx = 0
             self._buoy_pass_count = 0
-            self._step_start_time = time.time()
+            self._step_start_time = None
+            self._paused_step_elapsed = 0.0
+            self._last_goto_time = 0.0
             self._mission_start_time = time.time()
             self._elapsed_sec = 0
+
+            if hasattr(self.tracking_controller, 'reset'):
+                self.tracking_controller.reset()
+
             self._start_elapsed_timer()
-            print(f"[MissionEngine] 🚀 MISSION STARTED! ({len(self._steps)} steps)")
+            print(f"[MissionEngine]  MISSION STARTED! ({len(self._steps)} steps)")
             self._broadcast_status()
             return True
-
 
     def pause_mission(self):
         """Pause mission (ASV berhenti di posisi)."""
@@ -133,9 +142,12 @@ class MissionEngine:
             if self._status != self.STATUS_RUNNING:
                 return
             self._status = self.STATUS_PAUSED
+            if self._step_start_time:
+                self._paused_step_elapsed += time.time() - self._step_start_time
+                self._step_start_time = None
             self._stop_elapsed_timer()
             self.asv.stop_movement()
-            print("[MissionEngine] ⏸ MISSION PAUSED.")
+            print(f"[MissionEngine] ⏸ MISSION PAUSED (Step elapsed: {self._paused_step_elapsed:.1f}s).")
             self._broadcast_status()
 
     def resume_mission(self):
@@ -144,9 +156,9 @@ class MissionEngine:
             if self._status != self.STATUS_PAUSED:
                 return
             self._status = self.STATUS_RUNNING
-            self._step_start_time = time.time()
+            self._step_start_time = time.time() - self._paused_step_elapsed
             self._start_elapsed_timer()
-            print("[MissionEngine] ▶️ MISSION RESUMED.")
+            print("[MissionEngine]  MISSION RESUMED.")
             self._broadcast_status()
 
     def abort_mission(self):
@@ -154,8 +166,8 @@ class MissionEngine:
         with self._lock:
             self._status = self.STATUS_ABORTED
             self._stop_elapsed_timer()
-            self.asv.stop_movement()  # Hentikan gerak, JANGAN ubah mode
-            print("[MissionEngine] 🛑 MISSION ABORTED!")
+            self.asv.stop_movement()
+            print("[MissionEngine]  MISSION ABORTED!")
             self._broadcast_status()
 
     def reset_mission(self):
@@ -165,8 +177,12 @@ class MissionEngine:
             self._current_step_idx = 0
             self._buoy_pass_count = 0
             self._step_start_time = None
+            self._paused_step_elapsed = 0.0
             self._elapsed_sec = 0
             self._stop_elapsed_timer()
+            self.asv.stop_movement()
+            if hasattr(self.tracking_controller, 'reset'):
+                self.tracking_controller.reset()
             print("[MissionEngine] 🔄 MISSION RESET.")
             self._broadcast_status()
 
@@ -188,8 +204,10 @@ class MissionEngine:
                 current_step_info = self._steps[self._current_step_idx]
 
             step_elapsed = 0.0
-            if self._step_start_time and self._status == self.STATUS_RUNNING:
+            if self._status == self.STATUS_RUNNING and self._step_start_time is not None:
                 step_elapsed = round(time.time() - self._step_start_time, 1)
+            elif self._status == self.STATUS_PAUSED:
+                step_elapsed = round(self._paused_step_elapsed, 1)
 
             return {
                 "status": self._status,
@@ -197,10 +215,9 @@ class MissionEngine:
                 "current_step": current_step_info,
                 "total_steps": len(self._steps),
                 "elapsed_sec": self._elapsed_sec,
-                "step_elapsed_sec": step_elapsed,
+                "step_elapsed_sec": max(0.0, step_elapsed),
                 "buoy_pass_count": self._buoy_pass_count,
             }
-
 
     # ------------------------------------------------------------------ #
     #  Frame Update Loop (dipanggil dari video_streamer callback ~30FPS)  #
@@ -222,29 +239,37 @@ class MissionEngine:
             step = self._steps[self._current_step_idx]
             step_type = step.get("type", "")
 
+            # Inisialisasi timer & state saat baru masuk ke langkah ini
+            if self._step_start_time is None:
+                self._step_start_time = time.time() - self._paused_step_elapsed
+                if step_type == self.STEP_TYPE_TRACKING_BUOY:
+                    if hasattr(self.tracking_controller, 'reset'):
+                        self.tracking_controller.reset()
+                elif step_type in (self.STEP_TYPE_HOLD, self.STEP_TYPE_TAKE_IMAGE):
+                    self.asv.stop_movement()
+
             # ---- TRACKING_BUOY ----
             if step_type == self.STEP_TYPE_TRACKING_BUOY:
                 return self._handle_tracking(step, gate_x)
 
             # ---- GOTO_GPS ----
             elif step_type == self.STEP_TYPE_GOTO_GPS:
-                return self._handle_goto_gps(step)
+                return self._handle_goto_gps(step, frame, gate_x)
 
             # ---- TAKE_IMAGE ----
             elif step_type == self.STEP_TYPE_TAKE_IMAGE:
-                return self._handle_take_image(step)
+                return self._handle_take_image(step, frame, gate_x)
 
             # ---- HOLD ----
             elif step_type == self.STEP_TYPE_HOLD:
-                return self._handle_hold(step)
+                return self._handle_hold(step, frame, gate_x)
 
             # ---- START (warmup sebentar) ----
             elif step_type == self.STEP_TYPE_START:
-                if self._step_start_time is None:
-                    self._step_start_time = time.time()
-                warmup_sec = step.get("duration_sec", 2.0)
+                warmup_sec = float(step.get("duration_sec", 2.0))
                 if time.time() - self._step_start_time >= warmup_sec:
                     self._advance_step()
+                    return self.update_frame(frame, gate_x)
                 return 0.0, 0.0, "START"
 
             # ---- FINISH ----
@@ -255,81 +280,67 @@ class MissionEngine:
             else:
                 # Unknown step — skip
                 self._advance_step()
-                return 0.0, 0.0, "UNKNOWN"
+                return self.update_frame(frame, gate_x)
 
     # ------------------------------------------------------------------ #
     #  Step Handlers                                                      #
     # ------------------------------------------------------------------ #
 
     def _handle_tracking(self, step, gate_x):
-        """Handle TRACKING_BUOY step."""
-        target_passes = int(step.get("pass_count", 1))
+        """Handle TRACKING_BUOY step (Tanpa FSM State Machine)."""
+        duration = float(step.get("duration_sec", 60.0))
+        if self._step_start_time and (time.time() - self._step_start_time >= duration):
+            print("[MissionEngine] ✅ TRACKING_BUOY step selesai!")
+            self._advance_step()
+            return 0.0, 0.0, "TRACKING_BUOY"
 
         forward_speed, turn_rate, state = self.tracking_controller.compute_velocity(gate_x)
-
-        # Deteksi transisi ke PASSING → increment pass count
-        if state == "PASSING" and self._last_tracking_state != "PASSING":
-            print(f"[MissionEngine] 🟢 Gate pass #{self._buoy_pass_count + 1}/{target_passes}")
-
-        if state == "COOLDOWN" and self._last_tracking_state == "PASSING":
-            self._buoy_pass_count += 1
-            self._broadcast_status()
-            if self._buoy_pass_count >= target_passes:
-                print(f"[MissionEngine] ✅ TRACKING step selesai! {self._buoy_pass_count} gate dilewati.")
-                self._buoy_pass_count = 0
-                self._advance_step()
-                return 0.0, 0.0, "TRACKING_BUOY"
-
-        self._last_tracking_state = state
         return forward_speed, turn_rate, "TRACKING_BUOY"
 
-    def _handle_goto_gps(self, step):
+    def _handle_goto_gps(self, step, frame, gate_x):
         """Handle GOTO_GPS step."""
         target_lat = float(step.get("lat", 0.0))
         target_lon = float(step.get("lon", 0.0))
 
-        # Perintahkan Pixhawk menuju target GPS
-        self.asv.goto(target_lat, target_lon)
-
-        # Cek apakah sudah sampai (radius acceptance)
+        now = time.time()
         telemetry = self.asv.get_telemetry()
+
+        # Throttle pengiriman command goto_target agar tidak flooding MAVLink (setiap 1.5 detik)
+        if telemetry.is_armed and (now - self._last_goto_time >= 1.5):
+            self.asv.goto(target_lat, target_lon)
+            self._last_goto_time = now
+
+        # Cek apakah sudah sampai (radius acceptance) jika ada sinyal GPS valid
         if telemetry.lat != 0 and telemetry.lon != 0:
             dist = self._haversine(telemetry.lat, telemetry.lon, target_lat, target_lon)
-            print(f"[MissionEngine] 🧭 GOTO {step.get('name','?')}: dist={dist:.1f}m")
             if dist <= self.ARRIVAL_RADIUS_M:
                 print(f"[MissionEngine] ✅ GOTO step selesai! Tiba di {step.get('name','?')}")
                 self._advance_step()
-                return 0.0, 0.0, "GOTO_GPS"
+                return self.update_frame(frame, gate_x)
 
         return 0.0, 0.0, "GOTO_GPS"
 
-    def _handle_take_image(self, step):
+    def _handle_take_image(self, step, frame, gate_x):
         """Handle TAKE_IMAGE step."""
         duration = float(step.get("duration_sec", 3.0))
-        if self._step_start_time is None:
-            self._step_start_time = time.time()
-            self.asv.stop_movement()
-            print(f"[MissionEngine] 📷 TAKE_IMAGE: berhenti & ambil foto selama {duration}s...")
-
         elapsed = time.time() - self._step_start_time
+
         if elapsed >= duration:
             print(f"[MissionEngine] ✅ TAKE_IMAGE selesai!")
             self._advance_step()
+            return self.update_frame(frame, gate_x)
 
         return 0.0, 0.0, "TAKE_IMAGE"
 
-    def _handle_hold(self, step):
+    def _handle_hold(self, step, frame, gate_x):
         """Handle HOLD step."""
         duration = float(step.get("duration_sec", 5.0))
-        if self._step_start_time is None:
-            self._step_start_time = time.time()
-            self.asv.stop_movement()
-            print(f"[MissionEngine] ⚓ HOLD: berhenti selama {duration}s...")
-
         elapsed = time.time() - self._step_start_time
+
         if elapsed >= duration:
             print(f"[MissionEngine] ✅ HOLD selesai!")
             self._advance_step()
+            return self.update_frame(frame, gate_x)
 
         return 0.0, 0.0, "HOLD"
 
@@ -340,7 +351,10 @@ class MissionEngine:
     def _advance_step(self):
         self._current_step_idx += 1
         self._step_start_time = None
+        self._paused_step_elapsed = 0.0
         self._last_tracking_state = ""
+        self._last_goto_time = 0.0
+
         if self._current_step_idx < len(self._steps):
             next_step = self._steps[self._current_step_idx]
             print(f"[MissionEngine] ➡️ Step #{self._current_step_idx + 1}: {next_step.get('name', '?')} ({next_step.get('type', '?')})")

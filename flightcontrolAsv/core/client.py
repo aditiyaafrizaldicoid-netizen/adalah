@@ -107,6 +107,19 @@ class ASVController:
         """
         return self.connection.send_param_set(param_name, value)
 
+    def configure_guided_parameters(self, cruise_speed: float = 1.0, cruise_throttle: float = 50.0, atc_speed_p: float = 1.0) -> bool:
+        """
+        Mengonfigurasi parameter dasar Speed Controller ArduRover untuk Mode GUIDED.
+        - CRUISE_SPEED: Kecepatan acuan m/s (default: 1.0 m/s)
+        - CRUISE_THROTTLE: Persentase throttle dasar (%) untuk mencapai CRUISE_SPEED (default: 50.0%)
+        - ATC_SPEED_P: Gain Proportional PID Kecepatan ArduRover (default: 1.0)
+        """
+        print(f"[ASVController] Menyetel parameter Mode GUIDED -> CRUISE_SPEED={cruise_speed}m/s, CRUISE_THROTTLE={cruise_throttle}%, ATC_SPEED_P={atc_speed_p}...")
+        ok1 = self.set_param("CRUISE_SPEED", cruise_speed)
+        ok2 = self.set_param("CRUISE_THROTTLE", cruise_throttle)
+        ok3 = self.set_param("ATC_SPEED_P", atc_speed_p)
+        return ok1 and ok2 and ok3
+
 
 
     # --- PERINTAH KONTROL (CONTROL COMMANDS) ---
@@ -117,6 +130,9 @@ class ASVController:
     def disarm(self, force: bool = False) -> bool:
         """Mematikan (DISARM) motor kapal."""
         return self._arming.disarm(force=force)
+
+
+
 
     def set_mode(self, mode_name: str) -> bool:
         """

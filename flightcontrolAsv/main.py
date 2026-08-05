@@ -1,7 +1,8 @@
 import sys
-sys.dont_write_bytecode = True  # Mencegah Python membuat file cache __pycache__ / .pyc
-
 import os
+
+sys.dont_write_bytecode = True  # Mencegah Python membuat file cache __pycache__ / .pyc
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 import time
 import threading
 
@@ -25,10 +26,6 @@ def main():
     while not asv.is_connected():
         time.sleep(0.5)
 
-    ws_url = os.getenv("ASV_WS_URL", "ws://localhost:3000/api/v1/ws/asv")
-    ws_client = ASVWebSocketClient(asv, ws_url=ws_url)
-    ws_client.start()
-
     # ------------------------------------------------------------------ #
     #  Inisialisasi YOLO Tracker dan Tracking Controller                  #
     # ------------------------------------------------------------------ #
@@ -47,27 +44,32 @@ def main():
 
     controller = TrackingController(
         frame_width=camera_width,
-        kp=20,
-        ki=0,
-        kd=0,
-        forward_speed=1.0,
-        align_threshold_px=0.5,
-        pass_duration=1,
-        cooldown_duration=1
+        kp=0.04,
+        ki=0.001,
+        kd=0.008,
+        forward_speed=0.4,
+        max_turn_rate=15.0,
+        align_threshold_px=40.0,
+        pass_duration=2.5,
+        cooldown_duration=3.0
     )
-    ws_client.set_tracking_controller(controller)
 
-    # ------------------------------------------------------------------ #
-    #  Inisialisasi Mission Engine                                         #
-    # ------------------------------------------------------------------ #
+    # Inisialisasi Mission Engine
     mission_engine = MissionEngine(asv=asv, tracker=tracker, tracking_controller=controller)
+
+    ws_url = os.getenv("ASV_WS_URL", "ws://localhost:3000/api/v1/ws/asv")
+    ws_client = ASVWebSocketClient(asv, ws_url=ws_url)
+
+    ws_client.set_tracking_controller(controller)
+    ws_client.set_mission_engine(mission_engine)
 
     # Callback: kirim status misi ke Base Station via WebSocket setiap kali berubah
     def on_mission_status_change(status_dict):
         ws_client.send_mission_status(status_dict)
 
     mission_engine.set_status_callback(on_mission_status_change)
-    ws_client.set_mission_engine(mission_engine)
+
+    ws_client.start()
 
     # ------------------------------------------------------------------ #
     #  Inisialisasi Telemetry Blackbox Logger                              #
@@ -93,10 +95,11 @@ def main():
             _log_throttle[key] = now
 
     def process_and_control(frame):
-        # Deteksi bola dan hitung midpoint gate; sertakan state untuk OSD
+        # Deteksi bola dan hitung midpoint gate; sertakan state untuk OSD jika ada
+        state_name = getattr(controller, "state", None)
         processed_frame, gate_x, gate_y = tracker.process_frame(
             frame,
-            state_label=controller.state
+            state_label=state_name
         )
 
         if not asv.is_connected():
@@ -110,7 +113,7 @@ def main():
             pass
 
         elif mode == "GUIDED":
-            state = controller.state
+            state = getattr(controller, "state", "GUIDED")
 
             if mission_engine.status == "RUNNING":
                 # ----------------------------------------------------------------
@@ -129,7 +132,7 @@ def main():
                             asv.move_forward(forward_speed)
                         else:
                             asv.turn(forward_speed, turn_rate_deg)
-                if telemetry.is_armed:
+                else:
                     # Belum ARM → timer step tetap jalan, tapi servo diam
                     # (print di-throttle agar tidak spam tiap frame)
                     _throttled_print("mission_disarmed",

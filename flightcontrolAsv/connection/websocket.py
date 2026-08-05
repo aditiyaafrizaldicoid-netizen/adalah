@@ -61,6 +61,32 @@ class ASVWebSocketClient:
     def set_tracking_controller(self, tracking_controller):
         self.tracking_controller = tracking_controller
         print("[WS] TrackingController registered for live PID tuning")
+        self.fetch_and_apply_pid_config()
+
+    def fetch_and_apply_pid_config(self):
+        """Fetch PID & Motion parameters from backend database on startup."""
+        import urllib.request
+        import json
+        try:
+            url = "http://localhost:3000/api/v1/pid-config"
+            req = urllib.request.Request(url, headers={"User-Agent": "ASVFlightController"})
+            with urllib.request.urlopen(req, timeout=3.0) as resp:
+                if resp.status == 200:
+                    data = json.loads(resp.read().decode('utf-8'))
+                    if data.get("status") == "success" and data.get("data"):
+                        cfg = data["data"]
+                        if self.tracking_controller:
+                            self.tracking_controller.update_pid_params(
+                                kp=cfg.get("kp"),
+                                ki=cfg.get("ki"),
+                                kd=cfg.get("kd"),
+                                forward_speed=cfg.get("forward_speed"),
+                                max_turn_rate=cfg.get("max_turn_rate"),
+                                align_threshold_px=cfg.get("align_threshold_px")
+                            )
+                            print(f"[WS] 📥 Synced initial PID config from DB -> Speed: {cfg.get('forward_speed')}m/s, MaxTurn: {cfg.get('max_turn_rate')}deg/s")
+        except Exception as e:
+            print(f"[WS] Warning: Could not fetch initial PID config from DB ({e})")
 
     def set_mission_engine(self, mission_engine):
         self.mission_engine = mission_engine
@@ -206,14 +232,16 @@ class ASVWebSocketClient:
             ki = cmd.get("ki", None)
             kd = cmd.get("kd", None)
             speed = cmd.get("forward_speed", None)
+            max_turn = cmd.get("max_turn_rate", None)
             align_tol = cmd.get("align_threshold_px", None)
             if self.tracking_controller:
                 self.tracking_controller.update_pid_params(
                     kp=kp, ki=ki, kd=kd,
                     forward_speed=speed,
+                    max_turn_rate=max_turn,
                     align_threshold_px=align_tol
                 )
-                print(f"[WS] PID parameters dynamically tuned -> Kp:{kp}, Ki:{ki}, Kd:{kd}, Speed:{speed}")
+                print(f"[WS] PID parameters dynamically tuned -> Kp:{kp}, Ki:{ki}, Kd:{kd}, Speed:{speed}, MaxTurn:{max_turn}")
             else:
                 print("[WS] ⚠️ tracking_controller is not registered!")
 

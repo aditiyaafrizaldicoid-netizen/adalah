@@ -10,49 +10,50 @@ class NavigationControl:
 
     def send_velocity(self, forward_speed: float, turn_rate_deg: float = 0.0) -> bool:
         """
-        Menggerakkan kapal dengan kecepatan tertentu (dalam mode GUIDED).
-        - forward_speed: Kecepatan maju dalam m/s (negatif untuk mundur)
-        - turn_rate_deg: Kecepatan belok/rotation dalam derajat/detik (positif kanan, negatif kiri)
+        Menggerakkan ArduRover / ArduBoat dengan kecepatan maju & belokan (Mode GUIDED).
+        - forward_speed: Kecepatan maju dalam m/s (misal 0.5 m/s, negatif = mundur)
+        - turn_rate_deg: Kecepatan belok dalam deg/s (positif = kanan, negatif = kiri)
+
+        Spesifikasi MAVLink SET_POSITION_TARGET_LOCAL_NED untuk ArduRover Velocity + Yaw Rate:
+        - Frame: MAV_FRAME_BODY_OFFSET_NED (relatif terhadap haluan kapal)
+        - Bitmask (type_mask = 2023 / 0x07E7 / 0b0000_0111_1110_0111):
+          * Bit 3 = 0  -> Gunakan Velocity X (forward_speed m/s)
+          * Bit 4 = 0  -> Gunakan Velocity Y (0.0 m/s)
+          * Bit 10 = 1 -> Abaikan Yaw Angle Target (bit 10 = 1024)
+          * Bit 11 = 0 -> Gunakan Yaw Rate Target (yaw_rate_rad dalam rad/s)
         """
         if not self.connection.master:
             return False
 
-        # Bitmask MAVLink SET_POSITION_TARGET_LOCAL_NED:
-        # Aktifkan Vx (forward_speed) & Yaw Rate (turn_rate). Abaikan Posisi & Akselerasi.
-        # Bit 3 = 0 (Gunakan Vx), Bit 11 = 0 (Gunakan Yaw Rate). Ignore bits = 0x05F7 (0b0000_0101_1111_0111)
-        type_mask = 0b0000_0101_1111_0111
-
         import math
+
+        sys_id = getattr(self.connection.master, 'target_system', self.connection.config.TARGET_SYSTEM) or 1
+        comp_id = getattr(self.connection.master, 'target_component', self.connection.config.TARGET_COMPONENT) or 1
+
+        # Konversi kecepatan belok deg/s ke rad/s (+ = Kanan/CW, - = Kiri/CCW)
         yaw_rate_rad = math.radians(turn_rate_deg)
 
-        # 1. Pesan SET_POSITION_TARGET_LOCAL_NED dengan coordinate frame BODY_NED
-        msg_pos = self.connection.master.mav.set_position_target_local_ned_encode(
-            0, # time_boot_ms
-            self.connection.config.TARGET_SYSTEM,
-            self.connection.config.TARGET_COMPONENT,
-            mavutil.mavlink.MAV_FRAME_BODY_NED,
-            type_mask,
-            0, 0, 0,                   # Posisi x, y, z (diabaikan)
-            forward_speed, 0, 0,       # Kecepatan vx (maju m/s), vy, vz
-            0, 0, 0,                   # Akselerasi (diabaikan)
-            0,                         # Target yaw angle (diabaikan)
-            yaw_rate_rad               # Target yaw rate (belok rad/s)
-        )
-        self.connection.send_message(msg_pos)
+        # Bitmask 2023 (0x07E7): Aktifkan Vx (bit 3=0), Vy (bit 4=0), dan Yaw Rate (bit 11=0)
+        # Abaikan: Pos X(1) + Pos Y(2) + Pos Z(4) + Vz(32) + Acc(64+128+256) + Force(512) + Yaw(1024) = 2023
+        type_mask = 2023
 
-        # 2. Pesan SET_ATTITUDE_TARGET (Sangat kompatibel untuk kontrol Steering Rate & Thrust di ArduRover)
-        # Bitmask 128 (0x80) = Abaikan Orientasi Quaternion, Hanya paksa Roll/Pitch/Yaw Rate & Thrust
-        thrust = max(0.0, min(1.0, forward_speed / 2.0)) # Normalisasi kecepatan 0.0 - 1.0
-        msg_att = self.connection.master.mav.set_attitude_target_encode(
-            0, # time_boot_ms
-            self.connection.config.TARGET_SYSTEM,
-            self.connection.config.TARGET_COMPONENT,
-            128,                       # type_mask: Ignore orientation, use body roll/pitch/yaw rate
-            [1, 0, 0, 0],              # q (diabaikan)
-            0, 0, yaw_rate_rad,        # roll_rate, pitch_rate, yaw_rate (rad/s)
-            thrust                     # thrust (0.0 - 1.0)
+        msg = self.connection.master.mav.set_position_target_local_ned_encode(
+            0,                                           # time_boot_ms
+            sys_id,
+            comp_id,
+            mavutil.mavlink.MAV_FRAME_BODY_OFFSET_NED,   # Body offset frame (relatif haluan kapal)
+            type_mask,
+            0, 0, 0,                                    # Posisi X, Y, Z (diabaikan)
+            forward_speed, 0.0, 0.0,                    # Vx (m/s), Vy (0.0), Vz (0.0)
+            0, 0, 0,                                    # Akselerasi (diabaikan)
+            0.0,                                        # Target Yaw Angle (diabaikan)
+            yaw_rate_rad                                # Target Yaw Rate (rad/s)
         )
-        return self.connection.send_message(msg_att)
+        return self.connection.send_message(msg)
+
+
+
+
 
 
 
