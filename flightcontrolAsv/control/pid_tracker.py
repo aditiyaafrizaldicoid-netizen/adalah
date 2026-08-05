@@ -42,14 +42,14 @@ class TrackingController:
         - Objek terdeteksi -> Maju forward_speed, Belok PID(error_px).
         - Objek tidak ada -> Maju 0.0, Belok 0.0.
         """
-        if gate_center_x is None:
-            return 0.0, 0.0, "NO_OBJECT"
-
         # Hitung error piksel dari tengah frame (range: -320 s/d +320)
+        # error_px > 0: Objek di KANAN frame -> kapal harus Belok Kanan (+turn_rate)
+        # error_px < 0: Objek di KIRI frame  -> kapal harus Belok Kiri (-turn_rate)
         error_px = float(gate_center_x - self.center_x)
 
-        # Feed error langsung ke PID -> turn_rate deg/s
-        turn_rate = float(self.pid(error_px))
+        # simple_pid secara internal menghitung: (setpoint - input) = 0 - (-error_px) = +error_px
+        # Ini memastikan error_px > 0 menghasilkan turn_rate POSITIF (+deg/s = Belok Kanan MAVLink)
+        turn_rate = float(self.pid(-error_px))
 
         # Mengembalikan kecepatan maju & belokan presisi
         return self.forward_speed, turn_rate, "TRACKING"
