@@ -64,7 +64,7 @@ class MissionEngine:
 
         # Counter berapa gate PASSING sudah terjadi di step TRACKING saat ini
         self._buoy_pass_count: int = 0
-        self._last_tracking_state: str = ""
+        self._gate_in_view: bool = False  # True saat target sedang terlihat di kamera
 
         # Waktu mulai step aktif & offset saat pause
         self._step_start_time: Optional[float] = None
@@ -99,6 +99,7 @@ class MissionEngine:
             self._current_step_idx = 0
             self._status = self.STATUS_IDLE
             self._buoy_pass_count = 0
+            self._gate_in_view = False
             self._step_start_time = None
             self._paused_step_elapsed = 0.0
             print(f"[MissionEngine] Mission loaded: {len(self._steps)} steps.")
@@ -112,6 +113,7 @@ class MissionEngine:
                 self._steps = list(steps)
                 self._current_step_idx = 0
                 self._buoy_pass_count = 0
+                self._gate_in_view = False
                 self._step_start_time = None
                 self._paused_step_elapsed = 0.0
                 print(f"[MissionEngine] Mission loaded: {len(self._steps)} steps.")
@@ -126,6 +128,7 @@ class MissionEngine:
             self._status = self.STATUS_RUNNING
             self._current_step_idx = 0
             self._buoy_pass_count = 0
+            self._gate_in_view = False
             self._step_start_time = None
             self._paused_step_elapsed = 0.0
             self._last_goto_time = 0.0
@@ -295,9 +298,21 @@ class MissionEngine:
 
     def _handle_tracking(self, step, gate_x):
         """Handle TRACKING_BUOY step (Mode MANUAL via RC Override)."""
-        duration = float(step.get("duration_sec", 60.0))
-        if self._step_start_time and (time.time() - self._step_start_time >= duration):
-            print("[MissionEngine] ✅ TRACKING_BUOY step selesai!")
+        target_pass_count = int(step.get("pass_count", 0))  # 0 = tidak pakai counter, pakai duration
+        duration = float(step.get("duration_sec", 0.0))     # 0 = tidak pakai duration, pakai counter
+
+        # --- Cek kondisi selesai berdasarkan pass_count ---
+        if target_pass_count > 0 and self._buoy_pass_count >= target_pass_count:
+            print(f"[MissionEngine] ✅ TRACKING_BUOY selesai! Pass count: {self._buoy_pass_count}/{target_pass_count}")
+            self._buoy_pass_count = 0
+            self._gate_in_view = False
+            self._advance_step()
+            return 0.0, 0.0, "TRACKING_BUOY"
+
+        # --- Cek kondisi selesai berdasarkan duration (fallback jika pass_count tidak diset) ---
+        if target_pass_count == 0 and duration > 0 and self._step_start_time and (time.time() - self._step_start_time >= duration):
+            print(f"[MissionEngine] ✅ TRACKING_BUOY selesai! Durasi {duration}s terpenuhi.")
+            self._gate_in_view = False
             self._advance_step()
             return 0.0, 0.0, "TRACKING_BUOY"
 
@@ -307,12 +322,24 @@ class MissionEngine:
             self.asv.set_mode("MANUAL")
 
         if gate_x is not None:
+            # Target terlihat → catat bahwa gate sedang dalam jangkauan kamera
+            if not self._gate_in_view:
+                self._gate_in_view = True
+
             steer_norm = self.tracking_controller.compute_normalized_steering(gate_x)
             # Throttle langsung dari max_base_throttle — FC internal yang mengontrol PID throttle
-            return steer_norm, self.speed_scheduler.max_base_throttle, "TRACKING_BUOY (MANUAL)"
+            label = f"TRACKING_BUOY ({self._buoy_pass_count}/{target_pass_count} pass)" if target_pass_count > 0 else "TRACKING_BUOY (MANUAL)"
+            return steer_norm, self.speed_scheduler.max_base_throttle, label
         else:
-            # FAILSAFE: Target tidak terdeteksi -> Stop motor (1000us) & Steer Netral (1500us)
-            return 0.0, 0.0, "🔴 FAILSAFE: TARGET LOST"
+            # Target hilang dari kamera
+            if self._gate_in_view:
+                # Transisi visible -> tidak visible = 1 gate berhasil dilewati
+                self._buoy_pass_count += 1
+                self._gate_in_view = False
+                print(f"[MissionEngine] 🏁 Gate PASSED! Count: {self._buoy_pass_count}/{target_pass_count}")
+                self._broadcast_status()
+
+            return 0.0, 0.0, f"🔴 FAILSAFE: TARGET LOST (pass {self._buoy_pass_count}/{target_pass_count})"
 
     def _handle_goto_gps(self, step, frame, gate_x):
         """Handle GOTO_GPS step."""
