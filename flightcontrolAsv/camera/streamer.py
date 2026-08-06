@@ -6,13 +6,14 @@ import numpy as np
 import urllib.request
 
 class VideoStreamer:
-    def __init__(self, camera_index=0, width=640, height=480, fps=15, backend_url="http://10.196.68.119:3000/api/v1/video/upload", frame_callback=None):
+    def __init__(self, camera_index=0, width=640, height=480, fps=15, backend_url="http://10.196.68.119:3000/api/v1/video/upload", frame_callback=None, flip_horizontal=False):
         self.camera_index = camera_index
         self.width = width
         self.height = height
         self.fps = fps
         self.backend_url = backend_url
         self.frame_callback = frame_callback
+        self.flip_horizontal = flip_horizontal
         self._is_running = False
         self._capture_thread = None
         self._upload_thread = None
@@ -168,7 +169,8 @@ class VideoStreamer:
 
             if ret:
                 fail_count = 0
-                frame = cv2.flip(frame, 1)  # Flip horizontal (kiri <-> kanan)
+                if self.flip_horizontal:
+                    frame = cv2.flip(frame, 1)  # Flip horizontal hanya jika flip_horizontal=True
             else:
                 fail_count += 1
 

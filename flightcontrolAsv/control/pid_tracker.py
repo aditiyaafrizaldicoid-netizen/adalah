@@ -54,3 +54,20 @@ class TrackingController:
         # Mengembalikan kecepatan maju & belokan presisi
         return self.forward_speed, turn_rate, "TRACKING"
 
+    def compute_normalized_steering(self, gate_center_x) -> float:
+        """
+        Hitung nilai steering ter-normalisasi (-1.0 s/d +1.0) untuk MANUAL Mode RC Override.
+        -1.0 = Belok Kiri Penuh (PWM 1000us)
+         0.0 = Lurus Presisi (PWM 1500us)
+        +1.0 = Belok Kanan Penuh (PWM 2000us)
+        """
+        if gate_center_x is None:
+            return 0.0
+
+        error_px = float(gate_center_x - self.center_x)
+        raw_output = float(self.pid(-error_px))
+
+        # Normalisasi output dari range [-max_turn_rate, +max_turn_rate] ke [-1.0, +1.0]
+        steering_norm = raw_output / self.max_turn_rate if self.max_turn_rate > 0 else 0.0
+        return max(-1.0, min(1.0, steering_norm))
+

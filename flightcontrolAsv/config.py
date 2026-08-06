@@ -44,7 +44,7 @@ class ChannelConfig:
 @dataclass
 class ASVConfig:
     CONNECTION_STRING: str = os.getenv("ASV_CONNECTION_STRING", "/dev/ttyACM0")
-    BAUDRATE: int = int(os.getenv("ASV_BAUDRATE", "9600")) 
+    BAUDRATE: int = int(os.getenv("ASV_BAUDRATE", "115200")) 
 
     TARGET_SYSTEM: int = int(os.getenv("ASV_TARGET_SYSTEM", "1"))
     TARGET_COMPONENT: int = int(os.getenv("ASV_TARGET_COMPONENT", "1"))

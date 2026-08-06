@@ -6,27 +6,13 @@ from control.arming import ArmingControl
 from control.mode import ModeControl
 from control.navigation import NavigationControl
 from control.motion import MotionControl
+from control.manual_controller import ManualRCController
 from control.mission import MissionControl
 
 
 class ASVController:
     """
     Class utama (Facade) untuk mengendalikan Autonomous Surface Vehicle (ASV) dari Mini PC.
-    
-    Contoh Penggunaan di Backend Mini PC:
-        from flight_controller.client import ASVController
-        
-        asv = ASVController(port="/dev/ttyACM0", baudrate=115200)
-        asv.start()
-        
-        # Baca telemetri
-        data = asv.get_telemetry()
-        print(f"Baterai: {data.battery_voltage} V, GPS: {data.lat}, {data.lon}")
-        
-        # Kontrol kapal
-        asv.arm()
-        asv.set_mode("GUIDED")
-        asv.move_forward(speed=1.5) # m/s
     """
     def __init__(self, port: Optional[str] = None, baudrate: Optional[int] = None):
         # Gunakan custom config jika diberikan argumen
@@ -48,6 +34,7 @@ class ASVController:
         self._mode = ModeControl(self.connection)
         self._navigation = NavigationControl(self.connection)
         self._motion = MotionControl(self.connection, self.channel_config)
+        self._manual_rc = ManualRCController(self.connection, ch_steering=1, ch_throttle=3)
         self._mission = MissionControl(self.connection)
 
     # --- SIKLUS HIDUP KONEKSI ---
@@ -186,6 +173,14 @@ class ASVController:
     def release_rc(self) -> bool:
         """Melepaskan semua override RC agar kontrol kembali ke remote atau mode otomatis autopilot."""
         return self._motion.release_all_rc()
+
+    def send_manual_rc_drive(self, steering_norm: float, throttle_norm: float) -> bool:
+        """
+        Mengirim sinyal kemudi (Ch 1) & throttle (Ch 3) langsung ke Pixhawk via MAVLink RC Override (MANUAL Mode).
+        - steering_norm: -1.0 (Belok Kiri 1000us) s/d +1.0 (Belok Kanan 2000us), 0.0 = Netral (1500us)
+        - throttle_norm: 0.0 (Stop 1000us) s/d 1.0 (Full Forward 2000us)
+        """
+        return self._manual_rc.send_drive_command(steering_norm, throttle_norm)
 
 
 

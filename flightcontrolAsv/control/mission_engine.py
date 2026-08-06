@@ -23,12 +23,15 @@ import threading
 from typing import Optional, List, Dict, Any
 
 
+from control.speed_scheduler import SpeedScheduler
+
+
 class MissionEngine:
     """
     Finite State Machine untuk mengeksekusi mission steps otonom.
 
-    Tidak melakukan kontrol motor secara langsung -- hanya memanggil
-    metode ASVController (send_velocity, goto, stop_movement, dll).
+    Menggunakan Steering Normalized & SpeedScheduler Throttle Ratio
+    untuk kendali AI pada mode MANUAL via RC Override.
     """
 
     STATUS_IDLE       = "IDLE"
@@ -47,10 +50,11 @@ class MissionEngine:
     # Radius acceptance untuk GOTO_GPS: dianggap tiba jika < X meter dari target
     ARRIVAL_RADIUS_M = 2.0
 
-    def __init__(self, asv, tracker, tracking_controller):
+    def __init__(self, asv, tracker, tracking_controller, speed_scheduler: Optional[SpeedScheduler] = None):
         self.asv = asv
         self.tracker = tracker
         self.tracking_controller = tracking_controller
+        self.speed_scheduler = speed_scheduler or SpeedScheduler(max_base_throttle=0.4)
 
         self._steps: List[Dict[str, Any]] = []
         self._current_step_idx: int = 0
@@ -226,7 +230,7 @@ class MissionEngine:
     def update_frame(self, frame, gate_x: Optional[float]):
         """
         Dipanggil oleh process_and_control() setiap frame.
-        Return: (forward_speed, turn_rate_deg, step_type_label)
+        Return: (steer_norm, thr_norm, step_type_label)
         """
         with self._lock:
             if self._status != self.STATUS_RUNNING:
@@ -245,6 +249,9 @@ class MissionEngine:
                 if step_type == self.STEP_TYPE_TRACKING_BUOY:
                     if hasattr(self.tracking_controller, 'reset'):
                         self.tracking_controller.reset()
+                    if self.asv and self.asv.is_connected() and self.asv.get_telemetry().mode != "MANUAL":
+                        print("[MissionEngine] 🔄 Switch Flight Controller mode -> MANUAL for TRACKING_BUOY...")
+                        self.asv.set_mode("MANUAL")
                 elif step_type in (self.STEP_TYPE_HOLD, self.STEP_TYPE_TAKE_IMAGE):
                     self.asv.stop_movement()
 
@@ -287,15 +294,25 @@ class MissionEngine:
     # ------------------------------------------------------------------ #
 
     def _handle_tracking(self, step, gate_x):
-        """Handle TRACKING_BUOY step (Tanpa FSM State Machine)."""
+        """Handle TRACKING_BUOY step (Mode MANUAL via RC Override)."""
         duration = float(step.get("duration_sec", 60.0))
         if self._step_start_time and (time.time() - self._step_start_time >= duration):
             print("[MissionEngine] ✅ TRACKING_BUOY step selesai!")
             self._advance_step()
             return 0.0, 0.0, "TRACKING_BUOY"
 
-        forward_speed, turn_rate, state = self.tracking_controller.compute_velocity(gate_x)
-        return forward_speed, turn_rate, "TRACKING_BUOY"
+        # Pastikan FC selalu berada di mode MANUAL saat menjalankan TRACKING_BUOY
+        if self.asv and self.asv.is_connected() and self.asv.get_telemetry().mode != "MANUAL":
+            print("[MissionEngine] 🔄 Automatic mode switch to MANUAL for TRACKING_BUOY...")
+            self.asv.set_mode("MANUAL")
+
+        if gate_x is not None:
+            steer_norm = self.tracking_controller.compute_normalized_steering(gate_x)
+            # Throttle langsung dari max_base_throttle — FC internal yang mengontrol PID throttle
+            return steer_norm, self.speed_scheduler.max_base_throttle, "TRACKING_BUOY (MANUAL)"
+        else:
+            # FAILSAFE: Target tidak terdeteksi -> Stop motor (1000us) & Steer Netral (1500us)
+            return 0.0, 0.0, "🔴 FAILSAFE: TARGET LOST"
 
     def _handle_goto_gps(self, step, frame, gate_x):
         """Handle GOTO_GPS step."""

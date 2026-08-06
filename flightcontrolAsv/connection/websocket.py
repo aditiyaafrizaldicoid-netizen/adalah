@@ -46,9 +46,10 @@ class ASVWebSocketClient:
         self._send_lock = threading.Lock()  # Thread-safe lock untuk pengiriman pesan WebSocket
 
 
-        # Reference ke VideoStreamer & TrackingController
+        # Reference ke VideoStreamer, TrackingController & SpeedScheduler
         self.video_streamer = None
         self.tracking_controller = None
+        self.speed_scheduler = None
         self._camera_was_ok = False
         self.mission_engine = None
 
@@ -63,6 +64,10 @@ class ASVWebSocketClient:
         print("[WS] TrackingController registered for live PID tuning")
         self.fetch_and_apply_pid_config()
 
+    def set_speed_scheduler(self, speed_scheduler):
+        self.speed_scheduler = speed_scheduler
+        print("[WS] SpeedScheduler registered for live throttle scale tuning")
+
     def fetch_and_apply_pid_config(self):
         """Fetch PID & Motion parameters from backend database on startup."""
         import urllib.request
@@ -75,16 +80,19 @@ class ASVWebSocketClient:
                     data = json.loads(resp.read().decode('utf-8'))
                     if data.get("status") == "success" and data.get("data"):
                         cfg = data["data"]
+                        f_speed = cfg.get("forward_speed")
                         if self.tracking_controller:
                             self.tracking_controller.update_pid_params(
                                 kp=cfg.get("kp"),
                                 ki=cfg.get("ki"),
                                 kd=cfg.get("kd"),
-                                forward_speed=cfg.get("forward_speed"),
+                                forward_speed=f_speed,
                                 max_turn_rate=cfg.get("max_turn_rate"),
                                 align_threshold_px=cfg.get("align_threshold_px")
                             )
-                            print(f"[WS] 📥 Synced initial PID config from DB -> Speed: {cfg.get('forward_speed')}m/s, MaxTurn: {cfg.get('max_turn_rate')}deg/s")
+                        if self.speed_scheduler and f_speed is not None:
+                            self.speed_scheduler.update_throttle_limit(f_speed)
+                        print(f"[WS] 📥 Synced initial PID config from DB -> Speed/Throttle: {f_speed}, MaxTurn: {cfg.get('max_turn_rate')}deg/s")
         except Exception as e:
             print(f"[WS] Warning: Could not fetch initial PID config from DB ({e})")
 
@@ -187,12 +195,12 @@ class ASVWebSocketClient:
 
         # --- ARM / DISARM ---
         if action == "arm":
-            force = cmd.get("force", False)
+            force = cmd.get("force", True)
             self.asv.arm(force=force)
             print(f"[WS] Command: ARM (force={force})")
 
         elif action == "disarm":
-            force = cmd.get("force", False)
+            force = cmd.get("force", True)
             self.asv.disarm(force=force)
             print(f"[WS] Command: DISARM (force={force})")
 
@@ -234,6 +242,8 @@ class ASVWebSocketClient:
             speed = cmd.get("forward_speed", None)
             max_turn = cmd.get("max_turn_rate", None)
             align_tol = cmd.get("align_threshold_px", None)
+            throttle = cmd.get("max_base_throttle", None) or cmd.get("throttle", None) or speed
+
             if self.tracking_controller:
                 self.tracking_controller.update_pid_params(
                     kp=kp, ki=ki, kd=kd,
@@ -241,9 +251,10 @@ class ASVWebSocketClient:
                     max_turn_rate=max_turn,
                     align_threshold_px=align_tol
                 )
-                print(f"[WS] PID parameters dynamically tuned -> Kp:{kp}, Ki:{ki}, Kd:{kd}, Speed:{speed}, MaxTurn:{max_turn}")
-            else:
-                print("[WS] ⚠️ tracking_controller is not registered!")
+            if self.speed_scheduler and throttle is not None:
+                self.speed_scheduler.update_throttle_limit(throttle)
+
+            print(f"[WS] PID & Throttle parameters dynamically tuned -> Kp:{kp}, Ki:{ki}, Kd:{kd}, Speed/Throttle:{throttle}, MaxTurn:{max_turn}")
 
         # --- MANUAL CONTROL (Joystick / Gamepad MAVLink) ---
 

@@ -55,6 +55,9 @@ func (h *PidConfigHandler) SaveConfig(c *fiber.Ctx) error {
 	if body.ForwardSpeed != 0 {
 		config.ForwardSpeed = body.ForwardSpeed
 	}
+	if body.MaxTurnRate != 0 {
+		config.MaxTurnRate = body.MaxTurnRate
+	}
 	if body.AlignThresholdPx != 0 {
 		config.AlignThresholdPx = body.AlignThresholdPx
 	}

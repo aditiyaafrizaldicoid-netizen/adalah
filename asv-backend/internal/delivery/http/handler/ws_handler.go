@@ -82,6 +82,7 @@ func (h *WSHandler) HandleASV(c *websocket.Conn) {
 				"ki":                 pidCfg.Ki,
 				"kd":                 pidCfg.Kd,
 				"forward_speed":      pidCfg.ForwardSpeed,
+				"max_turn_rate":      pidCfg.MaxTurnRate,
 				"align_threshold_px": pidCfg.AlignThresholdPx,
 			},
 		}

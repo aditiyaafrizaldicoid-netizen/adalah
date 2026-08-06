@@ -1,0 +1,2 @@
+timestamp,iso_time,mode,armed,lat,lng,heading,sog_knots,battery_v,state,gate_x,error_px
+1786032864.514,2026-08-06 23:14:24,MANUAL,True,-7.9262347,112.5948881,230.53,0.0,0.0,IDLE,,
