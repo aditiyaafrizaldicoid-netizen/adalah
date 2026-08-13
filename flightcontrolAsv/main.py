@@ -3,6 +3,10 @@ import os
 
 sys.dont_write_bytecode = True  # Mencegah Python membuat file cache __pycache__ / .pyc
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+
+from dotenv import load_dotenv
+load_dotenv()  # Baca .env sebelum os.getenv() digunakan
+
 import time
 import threading
 
@@ -154,7 +158,7 @@ def main():
         camera_index=0,
         width=camera_width,
         height=480,
-        fps=30,
+        fps=5,  # Dikurangi dari 30 ke 5 agar tidak DDoS backend Next.js
         backend_url=video_upload_url,
         frame_callback=process_and_control,
         flip_horizontal=True
@@ -173,6 +177,7 @@ def main():
         ws_client.stop()
         asv.stop()
         print("\n[Main] Selesai. Semua koneksi ditutup.")
+        os._exit(0)  # Force exit untuk membunuh thread yang hang (jika ada)
 
 if __name__ == "__main__":
     main()

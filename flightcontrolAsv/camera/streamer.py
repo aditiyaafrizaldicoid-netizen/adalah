@@ -3,10 +3,10 @@ import cv2
 import time
 import threading
 import numpy as np
-import urllib.request
-
+import numpy as np
+import requests
 class VideoStreamer:
-    def __init__(self, camera_index=0, width=640, height=480, fps=15, backend_url="http://10.196.68.119:3000/api/v1/video/upload", frame_callback=None, flip_horizontal=False):
+    def __init__(self, camera_index=0, width=640, height=480, fps=15, backend_url="http://172.16.51.69:3000/api/v1/video/upload", frame_callback=None, flip_horizontal=False):
         self.camera_index = camera_index
         self.width = width
         self.height = height
@@ -246,19 +246,16 @@ class VideoStreamer:
                     
                 encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 60]
                 result, encimg = cv2.imencode('.jpg', processed_frame, encode_param)
-                
                 if result:
                     try:
-                        req = urllib.request.Request(
-                            self.backend_url,
-                            data=encimg.tobytes(),
-                            headers={'Content-Type': 'image/jpeg'},
-                            method='POST'
-                        )
-                        with urllib.request.urlopen(req, timeout=0.5) as response:
-                            pass
-                    except Exception:
-                        pass
+                        files = {'frame': ('frame.jpg', encimg.tobytes(), 'image/jpeg')}
+                        if not hasattr(self, 'session'):
+                            self.session = requests.Session()
+                        response = self.session.post(self.backend_url, files=files, timeout=(1.0, 2.0))
+                        if response.status_code != 200:
+                            print(f"[VideoStream] Backend error: {response.status_code} - {response.text}")
+                    except Exception as e:
+                        print(f"[VideoStream] Upload error: {e}")
                         
             time.sleep(1.0 / self.fps)
 

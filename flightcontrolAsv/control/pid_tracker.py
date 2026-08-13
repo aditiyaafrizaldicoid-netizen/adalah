@@ -47,9 +47,11 @@ class TrackingController:
         # error_px < 0: Objek di KIRI frame  -> kapal harus Belok Kiri (-turn_rate)
         error_px = float(gate_center_x - self.center_x)
 
-        # simple_pid secara internal menghitung: (setpoint - input) = 0 - (-error_px) = +error_px
-        # Ini memastikan error_px > 0 menghasilkan turn_rate POSITIF (+deg/s = Belok Kanan MAVLink)
-        turn_rate = float(self.pid(-error_px))
+        # simple_pid: output = Kp * (setpoint - input)
+        # Masukkan +error_px langsung agar:
+        #   error_px > 0 (objek di kanan) -> output POSITIF -> Belok Kanan
+        #   error_px < 0 (objek di kiri)  -> output NEGATIF -> Belok Kiri
+        turn_rate = float(self.pid(error_px))
 
         # Mengembalikan kecepatan maju & belokan presisi
         return self.forward_speed, turn_rate, "TRACKING"
@@ -65,7 +67,10 @@ class TrackingController:
             return 0.0
 
         error_px = float(gate_center_x - self.center_x)
-        raw_output = float(self.pid(-error_px))
+        # Masukkan +error_px agar arah belokan sesuai posisi objek:
+        #   error_px > 0 (objek di kanan) -> output POSITIF -> steering kanan (+1.0)
+        #   error_px < 0 (objek di kiri)  -> output NEGATIF -> steering kiri  (-1.0)
+        raw_output = float(self.pid(error_px))
 
         # Normalisasi output dari range [-max_turn_rate, +max_turn_rate] ke [-1.0, +1.0]
         steering_norm = raw_output / self.max_turn_rate if self.max_turn_rate > 0 else 0.0

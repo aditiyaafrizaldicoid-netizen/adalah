@@ -304,7 +304,7 @@ class MissionEngine:
         # --- Cek kondisi selesai berdasarkan pass_count ---
         if target_pass_count > 0 and self._buoy_pass_count >= target_pass_count:
             print(f"[MissionEngine] ✅ TRACKING_BUOY selesai! Pass count: {self._buoy_pass_count}/{target_pass_count}")
-            self._buoy_pass_count = 0
+            # Hapus self._buoy_pass_count = 0 agar frontend bisa merender nilai akhirnya (misal 5/5)
             self._gate_in_view = False
             self._advance_step()
             return 0.0, 0.0, "TRACKING_BUOY"
