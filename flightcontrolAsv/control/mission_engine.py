@@ -50,6 +50,22 @@ class MissionEngine:
     # Radius acceptance untuk GOTO_GPS: dianggap tiba jika < X meter dari target
     ARRIVAL_RADIUS_M = 2.0
 
+    # ---- Gate Lock FSM States ----
+    # SEARCHING        : Belum ada gate yang terkunci, mencari pasangan bola
+    # LOCKED           : Pasangan bola gate saat ini terkunci, tracking midpoint normal
+    # PASSING_LEFT_GONE: Bola kiri hilang duluan → manuver condong KIRI
+    # PASSING_RIGHT_GONE: Bola kanan hilang duluan → manuver condong KANAN
+    # CLEAR            : Kedua bola hilang, gate dilewati → reset ke SEARCHING
+    GATE_STATE_SEARCHING          = "SEARCHING"
+    GATE_STATE_LOCKED             = "LOCKED"
+    GATE_STATE_PASSING_LEFT_GONE  = "PASSING_LEFT_GONE"
+    GATE_STATE_PASSING_RIGHT_GONE = "PASSING_RIGHT_GONE"
+    GATE_STATE_CLEAR              = "CLEAR"
+
+    # Besaran steer manuver transisi (0.0–1.0 normalized)
+    # Dikurangi dari bola yang tersisa: jika kanan masih ada → steer kiri sekian
+    DEFAULT_TRANSITION_STEER = 0.35
+
     def __init__(self, asv, tracker, tracking_controller, speed_scheduler: Optional[SpeedScheduler] = None):
         self.asv = asv
         self.tracker = tracker
@@ -65,6 +81,11 @@ class MissionEngine:
         # Counter berapa gate PASSING sudah terjadi di step TRACKING saat ini
         self._buoy_pass_count: int = 0
         self._gate_in_view: bool = False  # True saat target sedang terlihat di kamera
+
+        # ---- Gate Lock FSM state ----
+        self._gate_state: str = self.GATE_STATE_SEARCHING
+        # Arah steer manuver transisi: +1.0 = kanan, -1.0 = kiri
+        self._transition_steer: float = 0.0
 
         # Waktu mulai step aktif & offset saat pause
         self._step_start_time: Optional[float] = None
@@ -100,6 +121,8 @@ class MissionEngine:
             self._status = self.STATUS_IDLE
             self._buoy_pass_count = 0
             self._gate_in_view = False
+            self._gate_state = self.GATE_STATE_SEARCHING
+            self._transition_steer = 0.0
             self._step_start_time = None
             self._paused_step_elapsed = 0.0
             print(f"[MissionEngine] Mission loaded: {len(self._steps)} steps.")
@@ -129,6 +152,8 @@ class MissionEngine:
             self._current_step_idx = 0
             self._buoy_pass_count = 0
             self._gate_in_view = False
+            self._gate_state = self.GATE_STATE_SEARCHING
+            self._transition_steer = 0.0
             self._step_start_time = None
             self._paused_step_elapsed = 0.0
             self._last_goto_time = 0.0
@@ -230,9 +255,15 @@ class MissionEngine:
     #  Frame Update Loop (dipanggil dari video_streamer callback ~30FPS)  #
     # ------------------------------------------------------------------ #
 
-    def update_frame(self, frame, gate_x: Optional[float]):
+    def update_frame(self, frame, gate_x: Optional[float],
+                     left_visible: bool = False, right_visible: bool = False):
         """
         Dipanggil oleh process_and_control() setiap frame.
+
+        :param frame:         Frame kamera (numpy array)
+        :param gate_x:        Koordinat X midpoint gate dari tracker (None jika tidak ada)
+        :param left_visible:  True jika bola kiri (hijau/class 0) terdeteksi di frame
+        :param right_visible: True jika bola kanan (merah/class 1) terdeteksi di frame
         Return: (steer_norm, thr_norm, step_type_label)
         """
         with self._lock:
@@ -260,26 +291,26 @@ class MissionEngine:
 
             # ---- TRACKING_BUOY ----
             if step_type == self.STEP_TYPE_TRACKING_BUOY:
-                return self._handle_tracking(step, gate_x)
+                return self._handle_tracking(step, gate_x, left_visible, right_visible)
 
             # ---- GOTO_GPS ----
             elif step_type == self.STEP_TYPE_GOTO_GPS:
-                return self._handle_goto_gps(step, frame, gate_x)
+                return self._handle_goto_gps(step, frame, gate_x, left_visible, right_visible)
 
             # ---- TAKE_IMAGE ----
             elif step_type == self.STEP_TYPE_TAKE_IMAGE:
-                return self._handle_take_image(step, frame, gate_x)
+                return self._handle_take_image(step, frame, gate_x, left_visible, right_visible)
 
             # ---- HOLD ----
             elif step_type == self.STEP_TYPE_HOLD:
-                return self._handle_hold(step, frame, gate_x)
+                return self._handle_hold(step, frame, gate_x, left_visible, right_visible)
 
             # ---- START (warmup sebentar) ----
             elif step_type == self.STEP_TYPE_START:
                 warmup_sec = float(step.get("duration_sec", 2.0))
                 if time.time() - self._step_start_time >= warmup_sec:
                     self._advance_step()
-                    return self.update_frame(frame, gate_x)
+                    return self.update_frame(frame, gate_x, left_visible, right_visible)
                 return 0.0, 0.0, "START"
 
             # ---- FINISH ----
@@ -290,22 +321,32 @@ class MissionEngine:
             else:
                 # Unknown step — skip
                 self._advance_step()
-                return self.update_frame(frame, gate_x)
+                return self.update_frame(frame, gate_x, left_visible, right_visible)
 
     # ------------------------------------------------------------------ #
     #  Step Handlers                                                      #
     # ------------------------------------------------------------------ #
 
-    def _handle_tracking(self, step, gate_x):
-        """Handle TRACKING_BUOY step (Mode MANUAL via RC Override)."""
+    def _handle_tracking(self, step, gate_x, left_visible: bool = False, right_visible: bool = False):
+        """
+        Handle TRACKING_BUOY step menggunakan Gate Lock FSM.
+
+        Gate Lock FSM States:
+          SEARCHING        → mencari pasangan bola (kedua bola terlihat)
+          LOCKED           → pasangan terkunci, tracking midpoint normal
+          PASSING_LEFT_GONE  → bola kiri hilang duluan, steer condong kiri
+          PASSING_RIGHT_GONE → bola kanan hilang duluan, steer condong kanan
+          CLEAR            → kedua bola hilang, gate dihitung dilewati
+        """
         target_pass_count = int(step.get("pass_count", 0))  # 0 = tidak pakai counter, pakai duration
         duration = float(step.get("duration_sec", 0.0))     # 0 = tidak pakai duration, pakai counter
+        transition_steer = float(step.get("transition_steer", self.DEFAULT_TRANSITION_STEER))
 
         # --- Cek kondisi selesai berdasarkan pass_count ---
         if target_pass_count > 0 and self._buoy_pass_count >= target_pass_count:
             print(f"[MissionEngine] ✅ TRACKING_BUOY selesai! Pass count: {self._buoy_pass_count}/{target_pass_count}")
-            # Hapus self._buoy_pass_count = 0 agar frontend bisa merender nilai akhirnya (misal 5/5)
             self._gate_in_view = False
+            self._gate_state = self.GATE_STATE_SEARCHING
             self._advance_step()
             return 0.0, 0.0, "TRACKING_BUOY"
 
@@ -313,6 +354,7 @@ class MissionEngine:
         if target_pass_count == 0 and duration > 0 and self._step_start_time and (time.time() - self._step_start_time >= duration):
             print(f"[MissionEngine] ✅ TRACKING_BUOY selesai! Durasi {duration}s terpenuhi.")
             self._gate_in_view = False
+            self._gate_state = self.GATE_STATE_SEARCHING
             self._advance_step()
             return 0.0, 0.0, "TRACKING_BUOY"
 
@@ -321,27 +363,95 @@ class MissionEngine:
             print("[MissionEngine] 🔄 Automatic mode switch to MANUAL for TRACKING_BUOY...")
             self.asv.set_mode("MANUAL")
 
-        if gate_x is not None:
-            # Target terlihat → catat bahwa gate sedang dalam jangkauan kamera
-            if not self._gate_in_view:
+        thr = self.speed_scheduler.max_base_throttle
+        pass_label = f"{self._buoy_pass_count}/{target_pass_count}" if target_pass_count > 0 else str(self._buoy_pass_count)
+
+        # ================================================================
+        #  Gate Lock FSM
+        # ================================================================
+
+        # ---------- STATE: SEARCHING ----------
+        if self._gate_state == self.GATE_STATE_SEARCHING:
+            if left_visible and right_visible:
+                # Kedua bola terdeteksi → kunci pasangan gate ini
+                self._gate_state = self.GATE_STATE_LOCKED
                 self._gate_in_view = True
+                print(f"[MissionEngine] 🔒 Gate LOCKED! (pass #{pass_label})")
+            # Selama SEARCHING, boleh pakai gate_x normal dari tracker
+            if gate_x is not None:
+                steer = self.tracking_controller.compute_normalized_steering(gate_x)
+                return steer, thr, f"TRACKING_BUOY [SEARCHING] ({pass_label} pass)"
+            else:
+                return 0.0, 0.0, f"🔴 SEARCHING: tidak ada gate terdeteksi ({pass_label} pass)"
 
-            steer_norm = self.tracking_controller.compute_normalized_steering(gate_x)
-            # Throttle langsung dari max_base_throttle — FC internal yang mengontrol PID throttle
-            label = f"TRACKING_BUOY ({self._buoy_pass_count}/{target_pass_count} pass)" if target_pass_count > 0 else "TRACKING_BUOY (MANUAL)"
-            return steer_norm, self.speed_scheduler.max_base_throttle, label
-        else:
-            # Target hilang dari kamera
-            if self._gate_in_view:
-                # Transisi visible -> tidak visible = 1 gate berhasil dilewati
-                self._buoy_pass_count += 1
-                self._gate_in_view = False
-                print(f"[MissionEngine] 🏁 Gate PASSED! Count: {self._buoy_pass_count}/{target_pass_count}")
-                self._broadcast_status()
+        # ---------- STATE: LOCKED ----------
+        elif self._gate_state == self.GATE_STATE_LOCKED:
+            if left_visible and right_visible:
+                # Kedua bola masih terlihat → tracking midpoint normal
+                steer = self.tracking_controller.compute_normalized_steering(gate_x) if gate_x is not None else 0.0
+                return steer, thr, f"TRACKING_BUOY [LOCKED] ({pass_label} pass)"
 
-            return 0.0, 0.0, f"🔴 FAILSAFE: TARGET LOST (pass {self._buoy_pass_count}/{target_pass_count})"
+            elif not left_visible and right_visible:
+                # Bola KIRI hilang duluan → mulai manuver condong KIRI
+                self._gate_state = self.GATE_STATE_PASSING_LEFT_GONE
+                self._transition_steer = -transition_steer  # negatif = belok kiri
+                print(f"[MissionEngine] 🔄 PASSING: Bola KIRI hilang → Steer kiri ({self._transition_steer:.2f})")
+                return self._transition_steer, thr, f"TRACKING_BUOY [PASSING_LEFT_GONE] ({pass_label} pass)"
 
-    def _handle_goto_gps(self, step, frame, gate_x):
+            elif left_visible and not right_visible:
+                # Bola KANAN hilang duluan → mulai manuver condong KANAN
+                self._gate_state = self.GATE_STATE_PASSING_RIGHT_GONE
+                self._transition_steer = +transition_steer  # positif = belok kanan
+                print(f"[MissionEngine] 🔄 PASSING: Bola KANAN hilang → Steer kanan ({self._transition_steer:.2f})")
+                return self._transition_steer, thr, f"TRACKING_BUOY [PASSING_RIGHT_GONE] ({pass_label} pass)"
+
+            else:
+                # Kedua bola tiba-tiba hilang bersamaan dari state LOCKED
+                # Anggap gate selesai dilewati
+                self._gate_state = self.GATE_STATE_CLEAR
+                print(f"[MissionEngine] ⚡ Kedua bola hilang bersamaan dari LOCKED → langsung CLEAR")
+                # Jatuh ke handler CLEAR di bawah
+
+        # ---------- STATE: PASSING_LEFT_GONE ----------
+        #  Bola kiri sudah hilang, tunggu bola kanan juga hilang.
+        #  DILARANG menggunakan gate_x dari tracker (bisa salah pasang dengan gate berikutnya).
+        if self._gate_state == self.GATE_STATE_PASSING_LEFT_GONE:
+            if right_visible:
+                # Bola kanan masih terlihat → pertahankan steer condong kiri
+                return self._transition_steer, thr, f"TRACKING_BUOY [PASSING_LEFT_GONE] ({pass_label} pass)"
+            else:
+                # Bola kanan juga sudah hilang → gate berhasil dilewati
+                self._gate_state = self.GATE_STATE_CLEAR
+                print(f"[MissionEngine] ✅ Gate CLEAR! (bola kanan hilang). Transisi ke SEARCHING.")
+                # Jatuh ke handler CLEAR di bawah
+
+        # ---------- STATE: PASSING_RIGHT_GONE ----------
+        #  Bola kanan sudah hilang, tunggu bola kiri juga hilang.
+        #  DILARANG menggunakan gate_x dari tracker.
+        if self._gate_state == self.GATE_STATE_PASSING_RIGHT_GONE:
+            if left_visible:
+                # Bola kiri masih terlihat → pertahankan steer condong kanan
+                return self._transition_steer, thr, f"TRACKING_BUOY [PASSING_RIGHT_GONE] ({pass_label} pass)"
+            else:
+                # Bola kiri juga sudah hilang → gate berhasil dilewati
+                self._gate_state = self.GATE_STATE_CLEAR
+                print(f"[MissionEngine] ✅ Gate CLEAR! (bola kiri hilang). Transisi ke SEARCHING.")
+                # Jatuh ke handler CLEAR di bawah
+
+        # ---------- STATE: CLEAR (transisi instan) ----------
+        if self._gate_state == self.GATE_STATE_CLEAR:
+            self._buoy_pass_count += 1
+            self._gate_in_view = False
+            self._gate_state = self.GATE_STATE_SEARCHING
+            self._transition_steer = 0.0
+            print(f"[MissionEngine] 🏁 Gate PASSED! Count: {self._buoy_pass_count}/{target_pass_count} → 🔍 SEARCHING gate berikutnya...")
+            self._broadcast_status()
+            return 0.0, 0.0, f"TRACKING_BUOY [SEARCHING] ({self._buoy_pass_count}/{target_pass_count} pass)"
+
+        # Fallback (seharusnya tidak tercapai)
+        return 0.0, 0.0, f"TRACKING_BUOY [UNKNOWN_STATE] ({pass_label} pass)"
+
+    def _handle_goto_gps(self, step, frame, gate_x, left_visible: bool = False, right_visible: bool = False):
         """Handle GOTO_GPS step."""
         target_lat = float(step.get("lat", 0.0))
         target_lon = float(step.get("lon", 0.0))
@@ -360,11 +470,11 @@ class MissionEngine:
             if dist <= self.ARRIVAL_RADIUS_M:
                 print(f"[MissionEngine] ✅ GOTO step selesai! Tiba di {step.get('name','?')}")
                 self._advance_step()
-                return self.update_frame(frame, gate_x)
+                return self.update_frame(frame, gate_x, left_visible, right_visible)
 
         return 0.0, 0.0, "GOTO_GPS"
 
-    def _handle_take_image(self, step, frame, gate_x):
+    def _handle_take_image(self, step, frame, gate_x, left_visible: bool = False, right_visible: bool = False):
         """Handle TAKE_IMAGE step."""
         duration = float(step.get("duration_sec", 3.0))
         elapsed = time.time() - self._step_start_time
@@ -372,11 +482,11 @@ class MissionEngine:
         if elapsed >= duration:
             print(f"[MissionEngine] ✅ TAKE_IMAGE selesai!")
             self._advance_step()
-            return self.update_frame(frame, gate_x)
+            return self.update_frame(frame, gate_x, left_visible, right_visible)
 
         return 0.0, 0.0, "TAKE_IMAGE"
 
-    def _handle_hold(self, step, frame, gate_x):
+    def _handle_hold(self, step, frame, gate_x, left_visible: bool = False, right_visible: bool = False):
         """Handle HOLD step."""
         duration = float(step.get("duration_sec", 5.0))
         elapsed = time.time() - self._step_start_time
@@ -384,7 +494,7 @@ class MissionEngine:
         if elapsed >= duration:
             print(f"[MissionEngine] ✅ HOLD selesai!")
             self._advance_step()
-            return self.update_frame(frame, gate_x)
+            return self.update_frame(frame, gate_x, left_visible, right_visible)
 
         return 0.0, 0.0, "HOLD"
 
@@ -396,8 +506,11 @@ class MissionEngine:
         self._current_step_idx += 1
         self._step_start_time = None
         self._paused_step_elapsed = 0.0
-        self._last_tracking_state = ""
         self._last_goto_time = 0.0
+        # Reset Gate FSM state untuk step tracking berikutnya
+        self._gate_state = self.GATE_STATE_SEARCHING
+        self._transition_steer = 0.0
+        self._gate_in_view = False
 
         if self._current_step_idx < len(self._steps):
             next_step = self._steps[self._current_step_idx]

@@ -102,11 +102,15 @@ def main():
             _log_throttle[key] = now
 
     def process_and_control(frame):
+        # Ambil gate FSM state dari mission_engine untuk ditampilkan di OSD tracker
+        gate_fsm_state = getattr(mission_engine, '_gate_state', None) if mission_engine.status == "RUNNING" else None
+
         # Deteksi bola dan hitung midpoint gate; sertakan state untuk OSD jika ada
         state_name = getattr(controller, "state", None)
-        processed_frame, gate_x, gate_y = tracker.process_frame(
+        processed_frame, gate_x, gate_y, left_visible, right_visible = tracker.process_frame(
             frame,
-            state_label=state_name
+            state_label=state_name,
+            gate_state=gate_fsm_state
         )
 
         if not asv.is_connected():
@@ -122,7 +126,9 @@ def main():
             # update_frame() mengembalikan steer_norm (-1..+1) dan thr_norm (0..1)
             # Perintah RC override dikirim ke Pixhawk jika sudah ARM & mode MANUAL.
             # ----------------------------------------------------------------
-            steer_norm, thr_norm, step_label = mission_engine.update_frame(frame, gate_x)
+            steer_norm, thr_norm, step_label = mission_engine.update_frame(
+                frame, gate_x, left_visible, right_visible
+            )
             state = step_label
 
             if telemetry.is_armed and mode == "MANUAL":

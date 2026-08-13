@@ -28,10 +28,17 @@ class BallTracker:
         self.conf_threshold = conf_threshold
         print("[BallTracker] Model loaded successfully.")
 
-    def process_frame(self, frame, state_label: str = None):
+    def process_frame(self, frame, state_label: str = None, gate_state: str = None):
         """
         Mendeteksi bola hijau & merah, menggambar anotasi gate, dan mengembalikan
-        koordinat midpoint gate secara langsung.
+        koordinat midpoint gate beserta status visibilitas masing-masing bola.
+
+        Return:
+            frame         : Frame dengan anotasi visual
+            gate_center_x : Koordinat X midpoint gate (int atau None)
+            gate_center_y : Koordinat Y midpoint gate (int atau None)
+            left_visible  : True jika bola KIRI (class 0 / hijau) terdeteksi
+            right_visible : True jika bola KANAN (class 1 / merah) terdeteksi
         """
         h, w = frame.shape[:2]
         frame_center_x = w // 2
@@ -90,6 +97,10 @@ class BallTracker:
                 cv2.putText(frame, label, (x1, max(y1 - 10, 0)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
+        # Status visibilitas per bola (digunakan oleh MissionEngine Gate Lock FSM)
+        left_visible  = len(green_balls) > 0   # class 0 = hijau = kiri
+        right_visible = len(red_balls) > 0     # class 1 = merah = kanan
+
         # ---- Hitung midpoint gate murni ----
         gate_center_x = None
         gate_center_y = None
@@ -99,7 +110,7 @@ class BallTracker:
         sorted_green = sorted(green_balls, key=lambda b: ((b[4] - b[2]) * (b[5] - b[3])) * (b[1] ** 0.5), reverse=True)
 
         if len(sorted_red) > 0 and len(sorted_green) > 0:
-            # Pasangan bola merah (kiri) & hijau (kanan) TERDEKAT di depan kapal
+            # Pasangan bola merah (kanan) & hijau (kiri) TERDEKAT di depan kapal
             closest_red = sorted_red[0]
             closest_green = sorted_green[0]
             red_pt = (closest_red[0], closest_red[1])
@@ -112,14 +123,14 @@ class BallTracker:
             cv2.line(frame, red_pt, green_pt, self.COLOR_GATE_LINE, 2, cv2.LINE_AA)
 
         elif len(sorted_green) > 0 and len(sorted_red) == 0:
-            # Hanya bola hijau terdeteksi -> offset target ke kiri (-120px)
+            # Hanya bola hijau terdeteksi → offset target ke kiri (-20% lebar frame)
             g = sorted_green[0]
             offset_px = int(w * 0.2)
             gate_center_x = max(0, g[0] - offset_px)
             gate_center_y = g[1]
 
         elif len(sorted_red) > 0 and len(sorted_green) == 0:
-            # Hanya bola merah terdeteksi -> offset target ke kanan (+120px)
+            # Hanya bola merah terdeteksi → offset target ke kanan (+20% lebar frame)
             r = sorted_red[0]
             offset_px = int(w * 0.2)
             gate_center_x = min(w, r[0] + offset_px)
@@ -144,10 +155,25 @@ class BallTracker:
                         (min(frame_center_x, gate_center_x), gate_center_y - 8),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, self.COLOR_ERROR_LINE, 1)
 
+        # ---- OSD: Gate FSM State (jika tersedia) ----
+        if gate_state:
+            # Pilih warna berdasarkan state
+            state_colors = {
+                "SEARCHING":          (200, 200, 200),  # abu-abu
+                "LOCKED":             (0, 255, 0),       # hijau
+                "PASSING_LEFT_GONE":  (0, 200, 255),     # kuning-orange
+                "PASSING_RIGHT_GONE": (0, 200, 255),     # kuning-orange
+                "CLEAR":              (255, 255, 0),     # cyan
+            }
+            gs_color = state_colors.get(gate_state, (200, 200, 200))
+            cv2.rectangle(frame, (8, 42), (260, 72), (0, 0, 0), -1)
+            cv2.putText(frame, f"GATE: {gate_state}", (12, 64),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, gs_color, 2)
+
         # ---- OSD: State label ----
         if state_label:
             cv2.rectangle(frame, (8, 8), (220, 38), (0, 0, 0), -1)
             cv2.putText(frame, f"STATE: {state_label}", (12, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 255), 2)
 
-        return frame, gate_center_x, gate_center_y
+        return frame, gate_center_x, gate_center_y, left_visible, right_visible
