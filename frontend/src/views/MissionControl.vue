@@ -2,14 +2,48 @@
 import { ref, computed } from 'vue';
 import { useMissionStore, STEP_TYPES, getStepTypeDef } from '@/stores/missionStore';
 import { useVesselStore } from '@/stores/vesselStore';
+import { useWebsocketStore } from '@/stores/websocketStore';
 import {
   Flag, Play, Square, RotateCcw, Plus, Trash2, ChevronUp, ChevronDown,
   ListOrdered, Cpu, Zap, Navigation, Camera, Anchor, CheckCircle2, Clock,
-  AlertTriangle, FolderOpen, GripVertical, CircleStop, PauseCircle, Save
+  AlertTriangle, FolderOpen, GripVertical, CircleStop, PauseCircle, Save,
+  WifiOff, Send
 } from 'lucide-vue-next';
 
 const mission = useMissionStore();
 const vessel = useVesselStore();
+const wsStore = useWebsocketStore();
+
+// ── Upload to ASV ──────────────────────────────────────────────────────────
+const uploadState = ref('idle'); // 'idle' | 'sending' | 'ok' | 'err'
+let _uploadTimer = null;
+
+function handleUploadToASV() {
+  if (!mission.steps.length) return;
+  if (wsStore.status !== 'CONNECTED') {
+    uploadState.value = 'err';
+    scheduleResetUpload();
+    return;
+  }
+  uploadState.value = 'sending';
+  const sent = wsStore.loadMissionToASV(mission.steps);
+  uploadState.value = sent ? 'ok' : 'err';
+  scheduleResetUpload();
+}
+
+function scheduleResetUpload() {
+  if (_uploadTimer) clearTimeout(_uploadTimer);
+  _uploadTimer = setTimeout(() => { uploadState.value = 'idle'; }, 3000);
+}
+
+const uploadBtnClass = computed(() => {
+  const base = 'flex items-center gap-2 font-black px-5 py-2.5 rounded-xl transition-all text-xs uppercase disabled:opacity-40 disabled:cursor-not-allowed border';
+  if (uploadState.value === 'ok')      return `${base} bg-success/20 text-success border-success/40 shadow-lg shadow-success/10`;
+  if (uploadState.value === 'err')     return `${base} bg-danger/20 text-danger border-danger/40`;
+  if (uploadState.value === 'sending') return `${base} bg-primary/20 text-primary border-primary/40 animate-pulse`;
+  if (wsStore.status !== 'CONNECTED')  return `${base} bg-card text-[var(--text-muted)] border-[var(--border-subtle)]`;
+  return `${base} bg-primary/10 text-primary border-primary/30 hover:bg-primary hover:text-slate-900 hover:border-primary shadow-md shadow-primary/10`;
+});
 
 const showStepPicker = ref(false);
 const editingStepIdx = ref(null);
@@ -94,7 +128,7 @@ function getStepStatus(idx) {
     </div>
 
     <!-- ─── Control Bar ──────────────────────────────────────────────────── -->
-    <div class="flex gap-3 flex-shrink-0">
+    <div class="flex gap-3 flex-shrink-0 flex-wrap">
       <!-- Start / Pause / Resume -->
       <button v-if="mission.missionStatus === 'IDLE' || mission.missionStatus === 'ABORTED' || mission.missionStatus === 'FINISHED'"
         @click="mission.startMission()"
@@ -126,6 +160,23 @@ function getStepStatus(idx) {
       <button @click="mission.resetMission()"
         class="flex items-center gap-2 bg-(--bg-secondary) text-(--text-primary) font-bold px-5 py-2.5 rounded-xl hover:bg-card transition-all border border-(--border-subtle) text-xs uppercase">
         <RotateCcw class="w-4 h-4" /> RESET
+      </button>
+
+      <!-- Divider -->
+      <div class="w-px bg-(--border-subtle) self-stretch"></div>
+
+      <!-- Upload Mission to ASV -->
+      <button @click="handleUploadToASV"
+        :disabled="!mission.steps.length || mission.missionStatus === 'RUNNING'"
+        :class="uploadBtnClass"
+        :title="wsStore.status !== 'CONNECTED' ? 'WebSocket tidak terhubung ke Mini PC' : 'Kirim pipeline misi ke flight controller Mini PC'">
+        <WifiOff v-if="wsStore.status !== 'CONNECTED'" class="w-4 h-4" />
+        <CheckCircle2 v-else-if="uploadState === 'ok'" class="w-4 h-4" />
+        <AlertTriangle v-else-if="uploadState === 'err'" class="w-4 h-4" />
+        <Send v-else class="w-4 h-4" :class="{ 'animate-pulse': uploadState === 'sending' }" />
+        <span>
+          {{ uploadState === 'ok' ? 'TERKIRIM!' : uploadState === 'err' ? 'GAGAL' : uploadState === 'sending' ? 'MENGIRIM...' : 'UPLOAD KE ASV' }}
+        </span>
       </button>
     </div>
 

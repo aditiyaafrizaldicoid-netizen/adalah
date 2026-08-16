@@ -1,20 +1,41 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from "vue";
-import { 
-  Battery, 
-  Clock, 
+import {
+  Battery,
+  Clock,
   Zap,
   Radio,
   Sun,
-  Moon
+  Moon,
+  ShieldOff
 } from "lucide-vue-next";
 import { useVesselStore } from '@/stores/vesselStore';
 import { useThemeStore } from '@/stores/themeStore';
 import { useWebsocketStore } from '@/stores/websocketStore';
+import { useMissionStore } from '@/stores/missionStore';
 
 const vessel = useVesselStore();
 const themeStore = useThemeStore();
 const wsStore = useWebsocketStore();
+const mission = useMissionStore();
+
+const isKillActive = ref(false);
+
+function handleKillSwitch() {
+  isKillActive.value = true;
+  // 1. Abort mission (sends abort_mission command via WebSocket)
+  mission.abortMission();
+  // 2. Disarm vehicle
+  wsStore.sendCommand({ action: 'disarm' });
+  // Reset visual feedback after 2s
+  setTimeout(() => { isKillActive.value = false; }, 2000);
+}
+
+const killLabel = computed(() => {
+  if (isKillActive.value) return 'STOPPING...';
+  if (mission.missionStatus === 'RUNNING') return 'KILL MISSION';
+  return 'KILL SWITCH';
+});
 
 const currentTime = ref(new Date().toLocaleTimeString());
 const isDark = computed(() => themeStore.theme === 'dark');
@@ -81,9 +102,19 @@ onUnmounted(() => {
         </div>
       </div>
       
-      <button class="bg-(--accent-primary) hover:bg-(--accent-primary-hover) text-white px-6 py-2 rounded-lg font-bold text-sm flex items-center gap-2 shadow-lg shadow-primary/20 transition-all active:scale-95">
-        <Zap class="w-4 h-4 fill-current" />
-        STOP
+      <button
+        @click="handleKillSwitch"
+        :disabled="isKillActive"
+        :class="[
+          'px-5 py-2 rounded-lg font-black text-xs flex items-center gap-2 transition-all active:scale-95 uppercase tracking-wider shadow-lg',
+          isKillActive
+            ? 'bg-orange-600 text-white cursor-not-allowed shadow-orange-600/30 animate-pulse'
+            : (mission.missionStatus === \'RUNNING\' || vessel.isArmed)
+              ? \'bg-danger hover:bg-red-600 text-white shadow-danger/30 animate-pulse\'
+              : \'bg-danger/80 hover:bg-danger text-white shadow-danger/20\'
+        ]">
+        <ShieldOff class="w-4 h-4" />
+        {{ killLabel }}
       </button>
     </div>
   </header>

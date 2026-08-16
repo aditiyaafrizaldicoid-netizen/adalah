@@ -151,6 +151,19 @@ export const useWebsocketStore = defineStore("websocket", () => {
     sendCommand({ action: "upload_mission", waypoints });
   }
 
+  /**
+   * Kirim pipeline misi (array of step objects) ke Python flight controller.
+   * Python akan me-load steps ke MissionEngine tanpa langsung start.
+   * Setelah berhasil, Python membalas dengan MISSION_STATUS → missionStore.updateMissionStatus().
+   * @param {Array} steps - Array step dari missionStore.steps
+   * @returns {boolean} true jika berhasil terkirim (WS connected), false jika tidak
+   */
+  function loadMissionToASV(steps) {
+    if (!steps || !steps.length) return false;
+    sendCommand({ action: "load_mission", steps });
+    return status.value === "CONNECTED";
+  }
+
   function setRelativeWaypoints(meterWaypoints) {
     sendCommand({ action: "set_relative_waypoints", meter_waypoints: meterWaypoints });
   }
@@ -216,7 +229,7 @@ export const useWebsocketStore = defineStore("websocket", () => {
     connect, disconnect, sendCommand,
     startRecording, stopRecording, toggleRecording,
     startStreaming, stopStreaming, toggleStreaming,
-    saveCurrentWaypoint, uploadMission, setRelativeWaypoints, updatePid,
+    saveCurrentWaypoint, uploadMission, loadMissionToASV, setRelativeWaypoints, updatePid,
   };
 });
 

@@ -113,9 +113,13 @@ def main():
             print(message)
             _log_throttle[key] = now
 
+    # State OSD: gunakan label frame sebelumnya karena update_frame dipanggil SETELAH
+    # tracker.process_frame(). TrackingController tidak punya atribut 'state'.
+    _osd: dict = {"last_label": None}
+
     def process_and_control(frame):
         # Ambil gate_state dari mission_engine untuk OSD (agar tracker bisa menampilkan label)
-        state_name  = getattr(controller, "state", None)
+        state_name  = _osd["last_label"]   # label dari frame sebelumnya (1-frame lag OK)
         gate_state  = mission_engine.gate_lock_state if mission_engine.status == "RUNNING" else None
 
         # Deteksi bola, hitung midpoint fallback, dan dapatkan detected_balls per class
@@ -141,29 +145,33 @@ def main():
             # MISSION ENGINE RUNNING (Mode MANUAL RC Override):
             # update_frame() mengembalikan steer_norm (-1..+1) dan thr_norm (0..1)
             # detected_balls diteruskan ke Gate State Machine di MissionEngine.
-            # Perintah RC override dikirim ke Pixhawk jika sudah ARM & mode MANUAL.
+            # PENTING: RC override dikirim selama ARM — tidak menunggu konfirmasi
+            # mode == "MANUAL" dari telemetry karena mode switch butuh beberapa frame
+            # untuk terkonfirmasi balik, dan setiap frame yang terlewat = koreksi hilang.
             # ----------------------------------------------------------------
             steer_norm, thr_norm, step_label = mission_engine.update_frame(
                 frame, gate_x, detected_balls=detected_balls
             )
             state = step_label
+            _osd["last_label"] = step_label  # simpan untuk OSD frame berikutnya
 
-            if telemetry.is_armed and mode == "MANUAL":
+            if telemetry.is_armed:
+                if mode != "MANUAL":
+                    # Mode belum terkonfirmasi MANUAL dari telemetry — kirim tetap
+                    # agar tidak ada frame koreksi yang terlewat
+                    _throttled_print("mode_not_manual",
+                        f"[MISSION] ⚠️ Mode saat ini: {mode} (bukan MANUAL). RC override tetap dikirim.",
+                        interval=2.0)
                 asv.send_manual_rc_drive(steer_norm, thr_norm)
-            elif not telemetry.is_armed:
+            else:
                 _throttled_print("mission_disarmed",
                     f"[MISSION] ⚠️ DISARMED — step '{step_label}' berjalan, gerakan ditahan.")
         else:
             # ---- Mission IDLE / PAUSED / FINISHED ----
             state = "IDLE"
-            # if telemetry.is_armed and mode == "MANUAL":
-            #     if gate_x is not None:
-            #         # Live tracking test di mode MANUAL saat ARM
-            #         # Throttle langsung dari max_base_throttle — FC internal yang mengontrol PID throttle
-            #         steer_norm = controller.compute_normalized_steering(gate_x)
-            #         asv.send_manual_rc_drive(steer_norm, speed_scheduler.max_base_throttle)
-            #     else:
-            asv.send_manual_rc_drive(0.0, 0.0)  # Stop motor & netralkan kemudi
+            _osd["last_label"] = None
+            # Netralkan kemudi & hentikan motor saat tidak ada mission aktif
+            asv.send_manual_rc_drive(0.0, 0.0)
 
         # Catat log blackbox
         error_px = gate_x - camera_width // 2 if gate_x is not None else None

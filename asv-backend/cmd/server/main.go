@@ -103,9 +103,10 @@ func main() {
 	calibHandler := handler.NewCalibrationProfileHandler(calibService)
 	pidConfigHandler := handler.NewPidConfigHandler(pidConfigService)
 	missionPresetHandler := handler.NewMissionPresetHandler(missionPresetService)
+	sessionHandler := handler.NewSessionHandler()
 
 	// 9. Initialize Router & Get App
-	r := route.NewRouter(cfg, mid, authHandler, userHandler, healthHandler, wsHandler, videoHandler, calibHandler, pidConfigHandler, missionPresetHandler)
+	r := route.NewRouter(cfg, mid, authHandler, userHandler, healthHandler, wsHandler, videoHandler, calibHandler, pidConfigHandler, missionPresetHandler, sessionHandler)
 
 
 	app := r.New()

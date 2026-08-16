@@ -109,6 +109,33 @@ export const STEP_TYPES = [
     ],
   },
   {
+    type: "TIMED_STEER",
+    label: "Timed Steer (Manual Mode)",
+    icon: "⏱️",
+    color: "text-rose-400",
+    bg: "bg-rose-500/10 border-rose-500/30",
+    fields: [
+      {
+        key: "steer",
+        label: "Steering (-1 kiri, 0 lurus, +1 kanan)",
+        type: "number",
+        default: 0,
+      },
+      {
+        key: "throttle",
+        label: "Throttle (0-1)",
+        type: "number",
+        default: 0.3,
+      },
+      {
+        key: "duration_sec",
+        label: "Duration (s)",
+        type: "number",
+        default: 3,
+      },
+    ],
+  },
+  {
     type: "FINISH",
     label: "Mission Complete",
     icon: "🏁",
@@ -137,6 +164,43 @@ export const useMissionStore = defineStore("mission", () => {
   const currentStep_legacy = ref(1);
   const missionElapsedSeconds = ref(0);
   const waypoints = ref([]);
+
+  // ─── Waypoint Management ──────────────────────────────────────────────────
+  function addWaypoint(lat, lng) {
+    waypoints.value.push({ lat, lng });
+  }
+
+  function removeWaypoint(index) {
+    waypoints.value.splice(index, 1);
+  }
+
+  function clearWaypoints() {
+    waypoints.value = [];
+  }
+
+  // Konversi waypoints ke GOTO_GPS steps dan sisipkan ke pipeline misi.
+  // Jika sudah ada step dengan tipe GOTO_GPS, mereka digantikan;
+  // jika tidak ada, waypoints disisipkan sebelum step FINISH (atau di akhir).
+  function loadWaypointsAsMission() {
+    if (!waypoints.value.length) return;
+    const gotoSteps = waypoints.value.map((wp, i) => ({
+      id: Date.now() + i,
+      type: 'GOTO_GPS',
+      name: `Waypoint ${(i + 1).toString().padStart(2, '0')}`,
+      lat: parseFloat(wp.lat.toFixed(7)),
+      lon: parseFloat(wp.lng.toFixed(7)),
+    }));
+    // Hapus step GOTO_GPS yang sudah ada, sisipkan yang baru sebelum FINISH
+    const nonGoto = steps.value.filter(s => s.type !== 'GOTO_GPS');
+    const finishIdx = nonGoto.findIndex(s => s.type === 'FINISH');
+    if (finishIdx !== -1) {
+      nonGoto.splice(finishIdx, 0, ...gotoSteps);
+    } else {
+      nonGoto.push(...gotoSteps);
+    }
+    steps.value = nonGoto;
+    console.log(`[MissionStore] Loaded ${gotoSteps.length} waypoints as GOTO_GPS steps.`);
+  }
 
   // Timer for UI elapsed counter
   let _timerInterval = null;
@@ -460,6 +524,8 @@ export const useMissionStore = defineStore("mission", () => {
     // Status updater
     updateMissionStatus,
     // Presets & Database
-    loadPreset, fetchPresets, saveCurrentAsPreset, deletePreset
+    loadPreset, fetchPresets, saveCurrentAsPreset, deletePreset,
+    // Waypoints
+    addWaypoint, removeWaypoint, clearWaypoints, loadWaypointsAsMission, stepElapsedSec
   };
 });

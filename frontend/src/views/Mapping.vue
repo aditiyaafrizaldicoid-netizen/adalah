@@ -1,23 +1,65 @@
 <script setup>
 import { ref } from 'vue';
+import { useRouter } from 'vue-router';
 import GridMap from '../components/mapping/GridMap.vue';
 import WaypointEditor from '../components/mapping/WaypointEditor.vue';
 import { useMissionStore } from '@/stores/missionStore';
-import { 
-  Map as MapIcon, 
-  Layers, 
-  Download
+import {
+  Map as MapIcon,
+  Layers,
+  Download,
+  CheckCircle2
 } from 'lucide-vue-next';
 
 const mission = useMissionStore();
+const router = useRouter();
 const activeTool = ref('select');
 const visibleLayers = ref(['grid', 'vessel', 'buoys', 'trail']);
+const uploadFeedback = ref('');  // toast feedback setelah upload waypoints
 
 const toggleLayer = (layer) => {
   const index = visibleLayers.value.indexOf(layer);
   if (index > -1) visibleLayers.value.splice(index, 1);
   else visibleLayers.value.push(layer);
 };
+
+// ── WaypointEditor event handlers ──────────────────────────────────────────
+function handleWaypointDelete(index) {
+  mission.removeWaypoint(index);
+}
+
+function handleWaypointClear() {
+  mission.clearWaypoints();
+}
+
+// "Send to Mission" — konversi semua waypoints ke GOTO_GPS steps lalu navigasi ke MissionControl
+function handleWaypointUpload() {
+  if (!mission.waypoints.length) return;
+  mission.loadWaypointsAsMission();
+  uploadFeedback.value = `${mission.waypoints.length} waypoint dikirim ke misi`;
+  setTimeout(() => { uploadFeedback.value = ''; }, 3000);
+  router.push({ name: 'MissionControl' });
+}
+
+// ── Download map as GeoJSON ─────────────────────────────────────────────────
+function downloadWaypoints() {
+  if (!mission.waypoints.length) return;
+  const geojson = {
+    type: 'FeatureCollection',
+    features: mission.waypoints.map((wp, i) => ({
+      type: 'Feature',
+      properties: { name: `WP ${i + 1}` },
+      geometry: { type: 'Point', coordinates: [wp.lng, wp.lat] }
+    }))
+  };
+  const blob = new Blob([JSON.stringify(geojson, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `asv_waypoints_${new Date().toISOString().slice(0,10)}.geojson`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 </script>
 
 <template>
@@ -45,7 +87,9 @@ const toggleLayer = (layer) => {
             </button>
           </div>
         </div>
-        <button class="bg-(--bg-secondary) hover:bg-slate-600 text-(--text-primary) p-2 rounded-lg transition-all">
+        <button @click="downloadWaypoints" title="Download waypoints sebagai GeoJSON"
+          :disabled="!mission.waypoints.length"
+          class="bg-(--bg-secondary) hover:bg-slate-600 text-(--text-primary) p-2 rounded-lg transition-all disabled:opacity-30 disabled:cursor-not-allowed">
           <Download class="w-4 h-4" />
         </button>
       </div>
@@ -55,11 +99,19 @@ const toggleLayer = (layer) => {
     <div class="flex-1 relative overflow-hidden bg-background">
       <GridMap :width="1920" :height="1080" :visible-layers="visibleLayers" />
       
+      <!-- Upload feedback toast -->
+      <div v-if="uploadFeedback"
+        class="absolute top-6 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-success text-slate-900 px-4 py-2 rounded-full text-xs font-black shadow-lg z-20 animate-pulse">
+        <CheckCircle2 class="w-4 h-4" /> {{ uploadFeedback }}
+      </div>
+
       <!-- Waypoint Editor Component -->
       <div class="absolute top-6 right-6 w-72">
-        <WaypointEditor 
-          :waypoints="mission.waypoints" 
-          @upload="console.log('Upload clicked')"
+        <WaypointEditor
+          :waypoints="mission.waypoints"
+          @delete="handleWaypointDelete"
+          @clear="handleWaypointClear"
+          @upload="handleWaypointUpload"
         />
       </div>
 

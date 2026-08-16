@@ -116,20 +116,6 @@ class ConnectionManager:
                 print(f"[ConnectionManager] Error PARAM_SET ({param_name}): {e}")
                 return False
 
-    def _send_heartbeat_loop(self):
-        """Mengirimkan heartbeat periodik (keep-alive) ke Pixhawk setiap 1 detik."""
-        while self._is_running:
-            if self.master and self.state.get_data().is_connected:
-                try:
-                    with self._write_lock:
-                        self.master.mav.heartbeat_send(
-                            mavutil.mavlink.MAV_TYPE_GCS,              # Tipe: Ground Control Station / Companion PC
-                            mavutil.mavlink.MAV_AUTOPILOT_INVALID,     # Autopilot: Invalid (karena kita adalah GCS)
-                            0, 0, 0
-                        )
-                except Exception:
-                    pass
-            time.sleep(1.0)
 
     def _connection_loop(self):
         """Loop utama background thread untuk auto-connect dan read telemetri."""

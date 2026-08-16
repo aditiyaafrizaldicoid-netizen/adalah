@@ -64,6 +64,7 @@ class MissionEngine:
     STEP_TYPE_START          = "START"
     STEP_TYPE_CUSTOM_FORWARD = "CUSTOM_FORWARD"  # Maju lurus/serong dengan heading offset konstan
     STEP_TYPE_PRECISION_TURN = "PRECISION_TURN"  # Belok presisi ke sudut target
+    STEP_TYPE_TIMED_STEER    = "TIMED_STEER"     # Manuver timer RC override (MANUAL mode)
 
     # Radius acceptance untuk GOTO_GPS: dianggap tiba jika < X meter dari target
     ARRIVAL_RADIUS_M = 2.0
@@ -83,7 +84,16 @@ class MissionEngine:
 
     # Jarak maksimum (piksel) untuk mengenali bola yang sama saat LOCKED/TRANSITIONING.
     # Bola yang lebih jauh dari ini dianggap bola dari gerbang lain dan diabaikan.
-    GATE_IDENTITY_MAX_DIST_PX = 200
+    # Nilai 300px (~47% frame 640px) memberi toleransi cukup saat kapal berbelok/bergerak.
+    GATE_IDENTITY_MAX_DIST_PX = 300
+
+    # Timeout (detik) maksimum di state LOCKED sebelum di-reset ke SEARCHING.
+    # Handle kasus kapal berhenti menghadap gate tapi tidak maju / bola tidak hilang-hilang.
+    GATE_LOCKED_TIMEOUT_SEC = 8.0
+
+    # Timeout (detik) maksimum di state TRANSITIONING sebelum dipaksa CLEARED.
+    # Handle kasus bola tersisa terus terlihat (kapal tidak maju / false detection).
+    GATE_TRANSITIONING_TIMEOUT_SEC = 4.0
 
     def __init__(self, asv, tracker, tracking_controller, speed_scheduler: Optional[SpeedScheduler] = None):
         self.asv = asv
@@ -107,8 +117,13 @@ class MissionEngine:
         self._locked_green_pos: Optional[Tuple[int, int]] = None
         # Sisi bola mana yang hilang duluan saat TRANSITIONING ("left"=merah, "right"=hijau)
         self._missing_side: Optional[str] = None
-        # Steer yang dipertahankan selama TRANSITIONING
+        # Steer fallback yang dipertahankan selama TRANSITIONING jika bola tersisa tidak terdeteksi
         self._transition_steer: float = 0.0
+        # Timestamp saat masuk ke state LOCKED / TRANSITIONING (untuk timeout guard)
+        self._gate_state_entered_at: float = 0.0
+        # Timestamp saat mission di-pause dalam state LOCKED/TRANSITIONING.
+        # Digunakan untuk mengkompensasi durasi pause agar timeout tidak salah tembak saat resume.
+        self._gate_pause_start: float = 0.0
 
         # Waktu mulai step aktif & offset saat pause
         self._step_start_time: Optional[float] = None
@@ -211,6 +226,11 @@ class MissionEngine:
             if self._step_start_time:
                 self._paused_step_elapsed += time.time() - self._step_start_time
                 self._step_start_time = None
+            # Simpan timestamp pause gate timer agar timeout tidak salah tembak saat resume.
+            # Tanpa ini, jika paused >8s saat LOCKED maka resume langsung timeout → SEARCHING.
+            if (self._gate_lock_state in (self.GATE_LOCKED, self.GATE_TRANSITIONING)
+                    and self._gate_state_entered_at > 0):
+                self._gate_pause_start = time.time()
             self._stop_elapsed_timer()
             self.asv.stop_movement()
             print(f"[MissionEngine] ⏸ MISSION PAUSED (Step elapsed: {self._paused_step_elapsed:.1f}s).")
@@ -223,6 +243,12 @@ class MissionEngine:
                 return
             self._status = self.STATUS_RUNNING
             self._step_start_time = time.time() - self._paused_step_elapsed
+            # Kompensasi gate timer: geser entered_at maju sebesar durasi pause
+            # sehingga timeout dihitung dari waktu aktif saja, bukan termasuk waktu pause.
+            if self._gate_pause_start > 0 and self._gate_state_entered_at > 0:
+                paused_duration = time.time() - self._gate_pause_start
+                self._gate_state_entered_at += paused_duration
+                self._gate_pause_start = 0.0
             self._start_elapsed_timer()
             print("[MissionEngine]  MISSION RESUMED.")
             self._broadcast_status()
@@ -331,6 +357,10 @@ class MissionEngine:
                     if self.asv and self.asv.is_connected() and self.asv.get_telemetry().mode != "MANUAL":
                         print("[MissionEngine] 🔄 Switch Flight Controller mode -> MANUAL for TRACKING_BUOY...")
                         self.asv.set_mode("MANUAL")
+                elif step_type == self.STEP_TYPE_TIMED_STEER:
+                    if self.asv and self.asv.is_connected() and self.asv.get_telemetry().mode != "MANUAL":
+                        print("[MissionEngine] 🔄 Switch mode → MANUAL untuk TIMED_STEER...")
+                        self.asv.set_mode("MANUAL")
                 elif step_type in (self.STEP_TYPE_HOLD, self.STEP_TYPE_TAKE_IMAGE):
                     # Pastikan mode GUIDED agar stop_movement() (send_velocity 0) efektif
                     if self.asv and self.asv.is_connected():
@@ -346,15 +376,15 @@ class MissionEngine:
 
             # ---- GOTO_GPS ----
             elif step_type == self.STEP_TYPE_GOTO_GPS:
-                return self._handle_goto_gps(step, frame, gate_x)
+                return self._handle_goto_gps(step, frame, gate_x, detected_balls)
 
             # ---- TAKE_IMAGE ----
             elif step_type == self.STEP_TYPE_TAKE_IMAGE:
-                return self._handle_take_image(step, frame, gate_x)
+                return self._handle_take_image(step, frame, gate_x, detected_balls)
 
             # ---- HOLD ----
             elif step_type == self.STEP_TYPE_HOLD:
-                return self._handle_hold(step, frame, gate_x)
+                return self._handle_hold(step, frame, gate_x, detected_balls)
 
             # ---- START (warmup sebentar) ----
             elif step_type == self.STEP_TYPE_START:
@@ -371,6 +401,10 @@ class MissionEngine:
             # ---- PRECISION_TURN ----
             elif step_type == self.STEP_TYPE_PRECISION_TURN:
                 return self._handle_precision_turn(step)
+
+            # ---- TIMED_STEER ----
+            elif step_type == self.STEP_TYPE_TIMED_STEER:
+                return self._handle_timed_steer(step)
 
             # ---- FINISH ----
             elif step_type == self.STEP_TYPE_FINISH:
@@ -437,6 +471,7 @@ class MissionEngine:
                 self._locked_red_pos   = (closest_red[0],   closest_red[1])
                 self._locked_green_pos = (closest_green[0], closest_green[1])
                 self._gate_lock_state  = self.GATE_LOCKED
+                self._gate_state_entered_at = time.time()
                 print(f"[GATE] SEARCHING → LOCKED "
                       f"(red=({self._locked_red_pos}), green=({self._locked_green_pos}))")
 
@@ -467,6 +502,16 @@ class MissionEngine:
             red_visible_locked = nearest_red is not None
             green_visible_locked = nearest_green is not None
 
+            # ── Timeout guard: jika terlalu lama LOCKED tanpa bola hilang, kembali ke SEARCHING
+            # Ini handle kasus kapal stuck menghadap gate tapi tidak bergerak maju.
+            now = time.time()
+            locked_duration = now - self._gate_state_entered_at
+            if locked_duration > self.GATE_LOCKED_TIMEOUT_SEC and red_visible_locked and green_visible_locked:
+                print(f"[GATE] LOCKED TIMEOUT ({locked_duration:.1f}s) → SEARCHING (reset untuk coba lagi)")
+                self._reset_gate_state_machine()
+                label = f"GATE:SEARCHING (timeout) | TRACKING_BUOY ({pass_label} pass)"
+                return 0.0, throttle, label
+
             if red_visible_locked and green_visible_locked:
                 # Kedua bola masih terlihat → update posisi locked pair (supaya smooth tracking)
                 self._locked_red_pos   = (nearest_red[0],   nearest_red[1])
@@ -480,10 +525,18 @@ class MissionEngine:
             elif not red_visible_locked and green_visible_locked:
                 # ★ Bola MERAH (kiri) hilang duluan → condong ke KIRI
                 self._missing_side     = "left"
-                self._transition_steer = -abs(self.TRANSITION_LEAN_MAGNITUDE)
                 self._gate_lock_state  = self.GATE_TRANSITIONING
-                # Update posisi terakhir bola hijau yang terlihat (untuk tracking selama transition)
+                self._gate_state_entered_at = time.time()
+                # Update posisi terakhir bola hijau yang terlihat
                 self._locked_green_pos = (nearest_green[0], nearest_green[1])
+                # Hitung steer adaptif: arahkan kapal ke bola hijau yang tersisa
+                self._transition_steer = self.tracking_controller.compute_normalized_steering(
+                    self._locked_green_pos[0]
+                )
+                # Override lean: paksa condong ke KIRI terlepas dari output PID
+                # agar kapal mengarah ke sisi gate yang terbuka (merah hilang = arah kiri)
+                lean = -abs(self.TRANSITION_LEAN_MAGNITUDE)
+                self._transition_steer = min(self._transition_steer, lean)
                 print(f"[GATE] LOCKED → TRANSITIONING (missing=LEFT/red, lean={self._transition_steer:+.2f})")
                 label = f"GATE:TRANSITIONING(←) | TRACKING_BUOY ({pass_label} pass)"
                 return self._transition_steer, throttle, label
@@ -491,10 +544,17 @@ class MissionEngine:
             elif red_visible_locked and not green_visible_locked:
                 # ★ Bola HIJAU (kanan) hilang duluan → condong ke KANAN
                 self._missing_side     = "right"
-                self._transition_steer = +abs(self.TRANSITION_LEAN_MAGNITUDE)
                 self._gate_lock_state  = self.GATE_TRANSITIONING
+                self._gate_state_entered_at = time.time()
                 # Update posisi terakhir bola merah yang terlihat
                 self._locked_red_pos   = (nearest_red[0], nearest_red[1])
+                # Hitung steer adaptif: arahkan kapal ke bola merah yang tersisa
+                self._transition_steer = self.tracking_controller.compute_normalized_steering(
+                    self._locked_red_pos[0]
+                )
+                # Override lean: paksa condong ke KANAN
+                lean = +abs(self.TRANSITION_LEAN_MAGNITUDE)
+                self._transition_steer = max(self._transition_steer, lean)
                 print(f"[GATE] LOCKED → TRANSITIONING (missing=RIGHT/green, lean={self._transition_steer:+.2f})")
                 label = f"GATE:TRANSITIONING(→) | TRACKING_BUOY ({pass_label} pass)"
                 return self._transition_steer, throttle, label
@@ -513,34 +573,48 @@ class MissionEngine:
             
             if self._missing_side == "left":
                 # Bola merah sudah hilang, tinggal tunggu bola hijau juga hilang.
-                # Cek apakah bola hijau dari gerbang INI masih ada.
                 nearest_green = self._find_nearest_ball(detected_balls.get("green", []), self._locked_green_pos)
                 if nearest_green:
                     remaining_visible = True
                     self._locked_green_pos = (nearest_green[0], nearest_green[1])
+                    # Update steer adaptif: terus arahkan ke bola hijau yang tersisa
+                    # Kombinasi: min(steer_adaptif, -lean_min) agar selalu condong ke kiri
+                    adaptive_steer = self.tracking_controller.compute_normalized_steering(
+                        self._locked_green_pos[0]
+                    )
+                    self._transition_steer = min(adaptive_steer, -abs(self.TRANSITION_LEAN_MAGNITUDE))
             elif self._missing_side == "right":
                 # Bola hijau sudah hilang, tinggal tunggu bola merah juga hilang.
                 nearest_red = self._find_nearest_ball(detected_balls.get("red", []), self._locked_red_pos)
                 if nearest_red:
                     remaining_visible = True
                     self._locked_red_pos = (nearest_red[0], nearest_red[1])
+                    # Update steer adaptif: terus arahkan ke bola merah yang tersisa
+                    # Kombinasi: max(steer_adaptif, +lean_min) agar selalu condong ke kanan
+                    adaptive_steer = self.tracking_controller.compute_normalized_steering(
+                        self._locked_red_pos[0]
+                    )
+                    self._transition_steer = max(adaptive_steer, +abs(self.TRANSITION_LEAN_MAGNITUDE))
+
+            # ── Timeout guard TRANSITIONING ───────────────────
+            # Jika terlalu lama di TRANSITIONING (bola tersisa terus terlihat), paksa CLEARED.
+            # Ini handle kasus bola dari gerbang BERIKUTNYA masuk frame sebelum bola ini hilang.
+            transitioning_duration = time.time() - self._gate_state_entered_at
+            if transitioning_duration > self.GATE_TRANSITIONING_TIMEOUT_SEC:
+                print(f"[GATE] TRANSITIONING TIMEOUT ({transitioning_duration:.1f}s) → CLEARED (paksa)")
+                self._gate_lock_state = self.GATE_CLEARED
+                return self._handle_gate_cleared(pass_label, step)
 
             if remaining_visible:
-                # Bola tersisa masih ada di frame → pertahankan manuver condong
+                # Bola tersisa masih ada di frame → pertahankan manuver condong adaptif
                 lean_dir = "←" if self._missing_side == "left" else "→"
-                label = f"GATE:TRANSITIONING({lean_dir}) | TRACKING_BUOY ({pass_label} pass)"
+                label = f"GATE:TRANSITIONING({lean_dir}) steer={self._transition_steer:+.2f} | TRACKING_BUOY ({pass_label} pass)"
                 return self._transition_steer, throttle, label
             else:
                 # Bola terakhir juga hilang → gate CLEARED!
                 self._gate_lock_state = self.GATE_CLEARED
                 print("[GATE] TRANSITIONING → CLEARED (bola terakhir hilang)")
                 return self._handle_gate_cleared(pass_label, step)
-
-        elif self._gate_lock_state == self.GATE_CLEARED:
-            # ── CLEARED ───────────────────────────────────────
-            # Seharusnya sudah ditangani oleh _handle_gate_cleared(),
-            # tapi guard di sini untuk keamanan.
-            return self._handle_gate_cleared(pass_label, step)
 
         # Fallback safety
         return 0.0, 0.0, f"GATE:UNKNOWN | TRACKING_BUOY ({pass_label} pass)"
@@ -563,7 +637,7 @@ class MissionEngine:
         # Hentikan throttle sejenak agar tidak menabrak gate berikutnya
         return 0.0, 0.0, label
 
-    def _handle_goto_gps(self, step, frame, gate_x):
+    def _handle_goto_gps(self, step, frame, gate_x, detected_balls=None):
         """Handle GOTO_GPS step."""
         target_lat = float(step.get("lat", 0.0))
         target_lon = float(step.get("lon", 0.0))
@@ -582,11 +656,11 @@ class MissionEngine:
             if dist <= self.ARRIVAL_RADIUS_M:
                 print(f"[MissionEngine] ✅ GOTO step selesai! Tiba di {step.get('name','?')}")
                 self._advance_step()
-                return self.update_frame(frame, gate_x)
+                return self.update_frame(frame, gate_x, detected_balls)
 
         return 0.0, 0.0, "GOTO_GPS"
 
-    def _handle_take_image(self, step, frame, gate_x):
+    def _handle_take_image(self, step, frame, gate_x, detected_balls=None):
         """Handle TAKE_IMAGE step."""
         duration = float(step.get("duration_sec", 3.0))
         elapsed = time.time() - self._step_start_time
@@ -594,11 +668,11 @@ class MissionEngine:
         if elapsed >= duration:
             print(f"[MissionEngine] ✅ TAKE_IMAGE selesai!")
             self._advance_step()
-            return self.update_frame(frame, gate_x)
+            return self.update_frame(frame, gate_x, detected_balls)
 
         return 0.0, 0.0, "TAKE_IMAGE"
 
-    def _handle_hold(self, step, frame, gate_x):
+    def _handle_hold(self, step, frame, gate_x, detected_balls=None):
         """Handle HOLD step."""
         duration = float(step.get("duration_sec", 5.0))
         elapsed = time.time() - self._step_start_time
@@ -606,7 +680,7 @@ class MissionEngine:
         if elapsed >= duration:
             print(f"[MissionEngine] ✅ HOLD selesai!")
             self._advance_step()
-            return self.update_frame(frame, gate_x)
+            return self.update_frame(frame, gate_x, detected_balls)
 
         # Kirim perintah stop berulang setiap frame agar motor betul-betul berhenti
         # (MAVLink GUIDED velocity = 0, tidak membutuhkan RC override)
@@ -754,6 +828,38 @@ class MissionEngine:
                  f"target={self._turn_target_heading:.1f}° err={heading_error:+.1f}°")
         return 0.0, 0.0, label
 
+    def _handle_timed_steer(self, step: Dict) -> Tuple[float, float, str]:
+        """
+        Handle TIMED_STEER step.
+
+        Kapal bergerak dengan steer dan throttle yang ditentukan selama `duration_sec` detik
+        menggunakan RC override pada mode MANUAL. Tidak ada feedback GPS/kompas — murni timer.
+
+        Cocok untuk: belok kiri/kanan di tempat, maju sambil belok, atau gerak lurus singkat
+        sebelum/sesudah TRACKING_BUOY tanpa perlu switch ke mode GUIDED.
+
+        Variabel step yang digunakan:
+          step['steer']        (float) — Steering normalized: -1.0 (kiri penuh) .. +1.0 (kanan penuh). Default: 0.0
+          step['throttle']     (float) — Throttle ratio: 0.0 (berhenti) .. 1.0 (full maju). Default: 0.3
+          step['duration_sec'] (float) — Durasi maneuver dalam detik. Default: 3.0
+        """
+        steer       = max(-1.0, min(1.0, float(step.get("steer", 0.0))))
+        throttle    = max(0.0, min(1.0, float(step.get("throttle", 0.3))))
+        duration_sec = float(step.get("duration_sec", 3.0))
+
+        elapsed = time.time() - self._step_start_time
+
+        if elapsed >= duration_sec:
+            print(f"[MissionEngine] ✅ TIMED_STEER selesai! Durasi {duration_sec:.1f}s terpenuhi.")
+            self._advance_step()
+            return 0.0, 0.0, "TIMED_STEER"
+
+        remaining = max(0.0, duration_sec - elapsed)
+        dir_label = "←" if steer < -0.05 else ("→" if steer > 0.05 else "↑")
+        label = (f"TIMED_STEER {dir_label} | steer={steer:+.2f} thr={throttle:.2f} "
+                 f"rem={remaining:.1f}s")
+        return steer, throttle, label
+
     @staticmethod
     def _angular_diff(current_deg: float, target_deg: float) -> float:
         """
@@ -775,11 +881,13 @@ class MissionEngine:
 
     def _reset_gate_state_machine(self):
         """Reset semua variabel Gate State Machine ke kondisi awal (SEARCHING)."""
-        self._gate_lock_state  = self.GATE_SEARCHING
-        self._locked_red_pos   = None
-        self._locked_green_pos = None
-        self._missing_side     = None
-        self._transition_steer = 0.0
+        self._gate_lock_state      = self.GATE_SEARCHING
+        self._locked_red_pos       = None
+        self._locked_green_pos     = None
+        self._missing_side         = None
+        self._transition_steer     = 0.0
+        self._gate_state_entered_at = 0.0
+        self._gate_pause_start     = 0.0
 
     def _find_nearest_ball(self, balls: List[Tuple], locked_pos: Optional[Tuple[int, int]]) -> Optional[Tuple]:
         """

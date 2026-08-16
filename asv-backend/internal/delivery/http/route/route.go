@@ -24,6 +24,7 @@ type Router struct {
 	calibHandler         *handler.CalibrationProfileHandler
 	pidConfigHandler     *handler.PidConfigHandler
 	missionPresetHandler *handler.MissionPresetHandler
+	sessionHandler       *handler.SessionHandler
 }
 
 func NewRouter(
@@ -37,6 +38,7 @@ func NewRouter(
 	calibHandler *handler.CalibrationProfileHandler,
 	pidConfigHandler *handler.PidConfigHandler,
 	missionPresetHandler *handler.MissionPresetHandler,
+	sessionHandler *handler.SessionHandler,
 ) *Router {
 	return &Router{
 		cfg:                  cfg,
@@ -49,6 +51,7 @@ func NewRouter(
 		calibHandler:         calibHandler,
 		pidConfigHandler:     pidConfigHandler,
 		missionPresetHandler: missionPresetHandler,
+		sessionHandler:       sessionHandler,
 	}
 }
 
@@ -121,6 +124,12 @@ func (r *Router) New() *fiber.App {
 	presetGroup.Post("", r.missionPresetHandler.Create)
 	presetGroup.Put("/:id", r.missionPresetHandler.Update)
 	presetGroup.Delete("/:id", r.missionPresetHandler.Delete)
+
+	// Session Log Routes
+	sessionGroup := api.Group("/sessions")
+	sessionGroup.Get("", r.sessionHandler.GetAll)
+	sessionGroup.Get("/:filename", r.sessionHandler.Download)
+	sessionGroup.Delete("/:filename", r.sessionHandler.Delete)
 
 	app.Use(r.mw.NotFoundRouteMiddleware())
 	return app

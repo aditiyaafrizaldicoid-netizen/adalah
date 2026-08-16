@@ -1,10 +1,10 @@
 <script setup>
-import { ref } from 'vue';
-import { Camera, RefreshCw, Maximize2, Video, VideoOff, CircleDot } from 'lucide-vue-next';
+import { ref, computed } from 'vue';
+import { Camera, RefreshCw, Maximize2, Minimize2, Video, VideoOff, CircleDot } from 'lucide-vue-next';
 import { useVesselStore } from '@/stores/vesselStore';
 import { useWebsocketStore } from '@/stores/websocketStore';
 
-defineProps({
+const props = defineProps({
   label: String,
   streamUrl: { type: String, default: 'http://localhost:3000/api/v1/video/stream' },
   status: { type: String, default: 'CONNECTED' }
@@ -14,6 +14,25 @@ const vessel = useVesselStore();
 const wsStore = useWebsocketStore();
 
 const selectedRes = ref('640x480');
+const streamKey = ref(0);            // increment → forces img reload
+const containerRef = ref(null);      // ref to root div for fullscreen
+const isFullscreen = ref(false);
+
+// Append cache-busting param to MJPEG URL on every refresh
+const liveStreamUrl = computed(() => `${props.streamUrl}?t=${streamKey.value}`);
+
+function handleRefresh() {
+  streamKey.value = Date.now();
+}
+
+function handleFullscreen() {
+  if (!containerRef.value) return;
+  if (!document.fullscreenElement) {
+    containerRef.value.requestFullscreen().then(() => { isFullscreen.value = true; });
+  } else {
+    document.exitFullscreen().then(() => { isFullscreen.value = false; });
+  }
+}
 
 const handleToggleRecord = () => {
   const [w, h] = selectedRes.value.split('x');
@@ -22,11 +41,11 @@ const handleToggleRecord = () => {
 </script>
 
 <template>
-  <div class="glass-card aspect-video relative overflow-hidden group">
+  <div ref="containerRef" class="glass-card aspect-video relative overflow-hidden group">
     <!-- Camera Overlay -->
     <div class="absolute inset-0 bg-(--bg-secondary) flex flex-col items-center justify-center">
       <Camera class="w-12 h-12 text-slate-800" />
-      <img :src="streamUrl" class="w-full h-full object-cover"
+      <img :src="liveStreamUrl" class="w-full h-full object-cover"
         onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
         onload="this.style.display='block'; this.nextElementSibling.style.display='none';" />
     </div>
@@ -71,11 +90,14 @@ const handleToggleRecord = () => {
         </button>
 
         <div class="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-          <button class="p-1.5 bg-card/80 rounded hover:bg-primary hover:text-slate-900 transition-all">
+          <button @click="handleRefresh" title="Reload stream"
+            class="p-1.5 bg-card/80 rounded hover:bg-primary hover:text-slate-900 transition-all">
             <RefreshCw class="w-3.5 h-3.5" />
           </button>
-          <button class="p-1.5 bg-card/80 rounded hover:bg-primary hover:text-slate-900 transition-all">
-            <Maximize2 class="w-3.5 h-3.5" />
+          <button @click="handleFullscreen" :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
+            class="p-1.5 bg-card/80 rounded hover:bg-primary hover:text-slate-900 transition-all">
+            <Minimize2 v-if="isFullscreen" class="w-3.5 h-3.5" />
+            <Maximize2 v-else class="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
