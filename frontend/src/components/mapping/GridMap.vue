@@ -2,17 +2,21 @@
 import { ref, onMounted, onUnmounted, watch, computed } from 'vue';
 import { useVesselStore } from '@/stores/vesselStore';
 import { useMissionStore } from '@/stores/missionStore';
+import { useArenaStore } from '@/stores/arenaStore';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 
 const props = defineProps({
   width: { type: Number, default: 800 },
   height: { type: Number, default: 600 },
-  visibleLayers: { type: Array, default: () => ['grid', 'vessel', 'trail', 'buoys'] }
+  visibleLayers: { type: Array, default: () => ['grid', 'vessel', 'trail', 'buoys'] },
+  // 'waypoint' | 'arena' | 'none'
+  mapMode: { type: String, default: 'waypoint' },
 });
 
 const vessel = useVesselStore();
 const mission = useMissionStore();
+const arenaStore = useArenaStore();
 
 const mapContainer = ref(null);
 let map = null;
@@ -21,6 +25,10 @@ let trailPolyline = null;
 let trailCoords = [];
 let waypointMarkers = [];
 let waypointPolyline = null;
+
+// Arena layers
+let arenaLayers = [];        // all active arena Leaflet layers
+let draftTrailPolyline = null; // preview polyline while drawing trail
 
 // Default starting point (e.g., somewhere in Indonesia or specific lake)
 const defaultLat = -7.9215169;
@@ -91,11 +99,22 @@ onMounted(() => {
     opacity: 0.8
   }).addTo(map);
 
-  // Map Click Event for Waypoints
+  // Draft trail preview polyline
+  draftTrailPolyline = L.polyline([], {
+    color: '#60a5fa',
+    weight: 2,
+    dashArray: '6, 6',
+    opacity: 0.7,
+  }).addTo(map);
+
+  // Map Click Event — routed by mapMode prop
   map.on('click', (e) => {
-    // Add waypoint to Pinia store
-    mission.addWaypoint(e.latlng.lat, e.latlng.lng);
-    renderWaypoints();
+    if (props.mapMode === 'arena') {
+      arenaStore.placeElement(e.latlng.lat, e.latlng.lng);
+    } else if (props.mapMode === 'waypoint') {
+      mission.addWaypoint(e.latlng.lat, e.latlng.lng);
+      renderWaypoints();
+    }
   });
 });
 
@@ -184,6 +203,91 @@ const renderWaypoints = () => {
 watch(() => mission.waypoints.length, () => {
   renderWaypoints();
 });
+
+// ── Arena Rendering ─────────────────────────────────────────────────────────
+function makeIcon(color, letter) {
+  return L.divIcon({
+    className: '',
+    html: `<div style="width:22px;height:22px;border-radius:50%;background:${color};border:2.5px solid white;
+                box-shadow:0 2px 6px rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;
+                font-size:9px;font-weight:900;color:white;line-height:1">${letter}</div>`,
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+  });
+}
+
+const BUOY_ICONS = {
+  red:   makeIcon('#ef4444', 'M'),
+  green: makeIcon('#22c55e', 'H'),
+};
+
+const TRAIL_COLORS = {
+  green: '#22c55e',
+  blue:  '#3b82f6',
+};
+
+function renderArena() {
+  if (!map) return;
+
+  // Remove existing arena layers
+  arenaLayers.forEach((l) => map.removeLayer(l));
+  arenaLayers = [];
+
+  const { buoys, trails } = arenaStore.activeArena;
+
+  // Render buoys
+  buoys.forEach((b) => {
+    const icon = BUOY_ICONS[b.type] || BUOY_ICONS.green;
+    const m = L.marker([b.lat, b.lng], { icon })
+      .bindTooltip(b.label, { permanent: false, direction: 'top', offset: [0, -14] })
+      .addTo(map);
+    m.on('contextmenu', () => {
+      arenaStore.removeBuoy(b.id);
+    });
+    arenaLayers.push(m);
+  });
+
+  // Render completed trails
+  trails.forEach((t) => {
+    if (!t.points || t.points.length < 2) return;
+    const coords = t.points.map((p) => [p.lat, p.lng]);
+    const line = L.polyline(coords, {
+      color: TRAIL_COLORS[t.type] || '#22c55e',
+      weight: 3,
+      opacity: 0.85,
+    })
+      .bindTooltip(t.label, { permanent: false, direction: 'center' })
+      .addTo(map);
+    line.on('contextmenu', () => {
+      arenaStore.removeTrail(t.id);
+    });
+    arenaLayers.push(line);
+
+    // Start/end markers for trail
+    const startIcon = L.divIcon({
+      className: '',
+      html: `<div style="width:10px;height:10px;border-radius:50%;background:${TRAIL_COLORS[t.type] || '#22c55e'};border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.5)"></div>`,
+      iconSize: [10, 10], iconAnchor: [5, 5],
+    });
+    arenaLayers.push(L.marker(coords[0], { icon: startIcon, interactive: false }).addTo(map));
+    arenaLayers.push(L.marker(coords[coords.length - 1], { icon: startIcon, interactive: false }).addTo(map));
+  });
+}
+
+// Draft trail preview
+watch(() => [...arenaStore.activeTrailPoints], (pts) => {
+  if (!draftTrailPolyline) return;
+  const color = arenaStore.activePlaceTool === 'trail_blue' ? '#3b82f6' : '#22c55e';
+  draftTrailPolyline.setStyle({ color });
+  draftTrailPolyline.setLatLngs(pts.map((p) => [p.lat, p.lng]));
+}, { deep: true });
+
+// Re-render arena when buoys/trails change
+watch(
+  () => [arenaStore.activeArena.buoys.length, arenaStore.activeArena.trails.length],
+  () => renderArena()
+);
+watch(() => arenaStore.activeArena.id, () => renderArena());
 
 onMounted(() => {
   timeInterval = setInterval(() => currentTime.value = new Date(), 1000);

@@ -387,33 +387,9 @@ export const useMissionStore = defineStore("mission", () => {
   }
 
   // ─── Presets & Database Persistence ───────────────────────────────────────
-  const defaultPresets = [
-    {
-      name: "Kompetisi Standar",
-      steps: [
-        { id: 1, type: "START", name: "System Warmup", duration_sec: 3 },
-        { id: 2, type: "TRACKING_BUOY", name: "Gate 1-10 Navigation", pass_count: 5 },
-        { id: 3, type: "GOTO_GPS", name: "Waypoint A - Sampling Area", lat: -7.9215169, lon: 112.5973649 },
-        { id: 4, type: "TAKE_IMAGE", name: "Surface Imaging", duration_sec: 5 },
-        { id: 5, type: "GOTO_GPS", name: "Waypoint B - Docking Zone", lat: -7.9220500, lon: 112.5981000 },
-        { id: 6, type: "FINISH", name: "Mission Complete" },
-      ],
-    },
-    {
-      name: "Quick Test Run",
-      steps: [
-        { id: 1, type: "START", name: "Warmup", duration_sec: 2 },
-        { id: 2, type: "TRACKING_BUOY", name: "Single Gate Pass", pass_count: 1 },
-        { id: 3, type: "FINISH", name: "Done" },
-      ],
-    },
-  ];
-
   const dbPresets = ref([]);
 
-  const presets = computed(() => {
-    return [...dbPresets.value, ...defaultPresets];
-  });
+  const presets = computed(() => dbPresets.value);
 
   async function fetchPresets() {
     try {
@@ -484,11 +460,8 @@ export const useMissionStore = defineStore("mission", () => {
     steps.value = preset.steps.map((s) => ({ ...s, id: Date.now() + Math.random() }));
   }
 
-  // Fetch presets on init & load default 6-step preset if steps empty
+  // Fetch presets from DB on init; steps mulai kosong
   fetchPresets();
-  if (!steps.value.length) {
-    loadPreset(defaultPresets[0]);
-  }
 
 
   // ─── Internal ─────────────────────────────────────────────────────────────

@@ -1,21 +1,28 @@
 <script setup>
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import GridMap from '../components/mapping/GridMap.vue';
 import WaypointEditor from '../components/mapping/WaypointEditor.vue';
+import ArenaEditor from '../components/mapping/ArenaEditor.vue';
 import { useMissionStore } from '@/stores/missionStore';
+import { useArenaStore } from '@/stores/arenaStore';
 import {
   Map as MapIcon,
   Layers,
   Download,
-  CheckCircle2
+  CheckCircle2,
+  Flag,
+  Navigation2,
 } from 'lucide-vue-next';
 
 const mission = useMissionStore();
+const arenaStore = useArenaStore();
 const router = useRouter();
-const activeTool = ref('select');
+
+// 'live' | 'waypoint' | 'arena'
+const mapMode = ref('waypoint');
+
 const visibleLayers = ref(['grid', 'vessel', 'buoys', 'trail']);
-const uploadFeedback = ref('');  // toast feedback setelah upload waypoints
 
 const toggleLayer = (layer) => {
   const index = visibleLayers.value.indexOf(layer);
@@ -23,7 +30,16 @@ const toggleLayer = (layer) => {
   else visibleLayers.value.push(layer);
 };
 
+// GridMap click mode: only route clicks in waypoint/arena mode
+const gridMapMode = computed(() => {
+  if (mapMode.value === 'waypoint') return 'waypoint';
+  if (mapMode.value === 'arena') return 'arena';
+  return 'none';
+});
+
 // ── WaypointEditor event handlers ──────────────────────────────────────────
+const uploadFeedback = ref('');
+
 function handleWaypointDelete(index) {
   mission.removeWaypoint(index);
 }
@@ -32,7 +48,6 @@ function handleWaypointClear() {
   mission.clearWaypoints();
 }
 
-// "Send to Mission" — konversi semua waypoints ke GOTO_GPS steps lalu navigasi ke MissionControl
 function handleWaypointUpload() {
   if (!mission.waypoints.length) return;
   mission.loadWaypointsAsMission();
@@ -56,9 +71,17 @@ function downloadWaypoints() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `asv_waypoints_${new Date().toISOString().slice(0,10)}.geojson`;
+  a.download = `asv_waypoints_${new Date().toISOString().slice(0, 10)}.geojson`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// Switch mode — clear arena tool when leaving arena mode
+function setMode(mode) {
+  if (mapMode.value === 'arena' && mode !== 'arena') {
+    arenaStore.clearTool();
+  }
+  mapMode.value = mode;
 }
 </script>
 
@@ -74,19 +97,22 @@ function downloadWaypoints() {
       </div>
 
       <div class="flex items-center gap-4">
+        <!-- Layer toggles -->
         <div class="flex items-center gap-2 px-3 py-1.5 bg-card/50 rounded-full border border-(--border-subtle)">
           <Layers class="w-3.5 h-3.5 text-(--text-secondary)" />
           <div class="flex gap-2">
-            <button 
-              v-for="layer in ['grid', 'vessel', 'buoys', 'trail']" 
+            <button
+              v-for="layer in ['grid', 'vessel', 'buoys', 'trail']"
               :key="layer"
               @click="toggleLayer(layer)"
-              :class="['text-[10px] font-bold uppercase px-2 py-0.5 rounded transition-all', visibleLayers.includes(layer) ? 'bg-primary/20 text-primary' : 'text-(--text-muted)']"
-            >
+              :class="['text-[10px] font-bold uppercase px-2 py-0.5 rounded transition-all',
+                visibleLayers.includes(layer) ? 'bg-primary/20 text-primary' : 'text-(--text-muted)']">
               {{ layer }}
             </button>
           </div>
         </div>
+
+        <!-- Download waypoints -->
         <button @click="downloadWaypoints" title="Download waypoints sebagai GeoJSON"
           :disabled="!mission.waypoints.length"
           class="bg-(--bg-secondary) hover:bg-slate-600 text-(--text-primary) p-2 rounded-lg transition-all disabled:opacity-30 disabled:cursor-not-allowed">
@@ -97,31 +123,59 @@ function downloadWaypoints() {
 
     <!-- Map Area -->
     <div class="flex-1 relative overflow-hidden bg-background">
-      <GridMap :width="1920" :height="1080" :visible-layers="visibleLayers" />
-      
-      <!-- Upload feedback toast -->
+      <GridMap
+        :width="1920"
+        :height="1080"
+        :visible-layers="visibleLayers"
+        :map-mode="gridMapMode"
+      />
+
+      <!-- Toast feedback -->
       <div v-if="uploadFeedback"
         class="absolute top-6 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-success text-slate-900 px-4 py-2 rounded-full text-xs font-black shadow-lg z-20 animate-pulse">
         <CheckCircle2 class="w-4 h-4" /> {{ uploadFeedback }}
       </div>
 
-      <!-- Waypoint Editor Component -->
-      <div class="absolute top-6 right-6 w-72">
-        <WaypointEditor
+      <!-- Right Panel — WaypointEditor or ArenaEditor -->
+      <div class="absolute top-6 right-6 w-72 z-10">
+        <WaypointEditor v-if="mapMode === 'waypoint'"
           :waypoints="mission.waypoints"
           @delete="handleWaypointDelete"
           @clear="handleWaypointClear"
           @upload="handleWaypointUpload"
         />
+        <ArenaEditor v-else-if="mapMode === 'arena'" />
       </div>
 
-      <!-- Map Mode Switcher -->
-      <div class="absolute bottom-6 left-6 flex gap-2">
-         <div class="bg-(--bg-secondary)/90 border border-(--border-subtle) p-1 rounded-xl flex">
-            <button class="px-4 py-2 bg-primary text-slate-900 rounded-lg text-[10px] font-black uppercase">LIVE Tracking</button>
-            <button class="px-4 py-2 text-(--text-secondary) text-[10px] font-black uppercase hover:text-(--text-primary) transition-all">Waypoint Editor</button>
-            <button class="px-4 py-2 text-(--text-secondary) text-[10px] font-black uppercase hover:text-(--text-primary) transition-all">Playback</button>
-         </div>
+      <!-- Map Mode Switcher (bottom-left) -->
+      <div class="absolute bottom-6 left-6 flex gap-2 z-10">
+        <div class="bg-(--bg-secondary)/90 backdrop-blur-md border border-(--border-subtle) p-1 rounded-xl flex">
+          <button
+            @click="setMode('live')"
+            :class="['px-4 py-2 rounded-lg text-[10px] font-black uppercase transition-all flex items-center gap-1.5',
+              mapMode === 'live' ? 'bg-primary text-slate-900' : 'text-(--text-secondary) hover:text-(--text-primary)']">
+            <span class="w-1.5 h-1.5 rounded-full bg-current"></span> LIVE Tracking
+          </button>
+          <button
+            @click="setMode('waypoint')"
+            :class="['px-4 py-2 rounded-lg text-[10px] font-black uppercase transition-all flex items-center gap-1.5',
+              mapMode === 'waypoint' ? 'bg-primary text-slate-900' : 'text-(--text-secondary) hover:text-(--text-primary)']">
+            <Navigation2 class="w-3 h-3" /> Waypoints
+          </button>
+          <button
+            @click="setMode('arena')"
+            :class="['px-4 py-2 rounded-lg text-[10px] font-black uppercase transition-all flex items-center gap-1.5',
+              mapMode === 'arena' ? 'bg-emerald-500 text-slate-900' : 'text-(--text-secondary) hover:text-(--text-primary)']">
+            <Flag class="w-3 h-3" /> Arena
+          </button>
+        </div>
+
+        <!-- Arena mode active indicator -->
+        <div v-if="mapMode === 'arena' && arenaStore.activePlaceTool"
+          class="flex items-center gap-2 px-3 py-2 bg-emerald-500/20 border border-emerald-500/40 rounded-xl text-[10px] text-emerald-400 font-bold backdrop-blur-md">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          {{ arenaStore.activePlaceTool.replace('_', ' ').toUpperCase() }} MODE
+        </div>
       </div>
     </div>
   </div>

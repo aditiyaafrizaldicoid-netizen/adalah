@@ -25,6 +25,7 @@ type Router struct {
 	pidConfigHandler     *handler.PidConfigHandler
 	missionPresetHandler *handler.MissionPresetHandler
 	sessionHandler       *handler.SessionHandler
+	arenaHandler         *handler.ArenaHandler
 }
 
 func NewRouter(
@@ -39,6 +40,7 @@ func NewRouter(
 	pidConfigHandler *handler.PidConfigHandler,
 	missionPresetHandler *handler.MissionPresetHandler,
 	sessionHandler *handler.SessionHandler,
+	arenaHandler *handler.ArenaHandler,
 ) *Router {
 	return &Router{
 		cfg:                  cfg,
@@ -52,6 +54,7 @@ func NewRouter(
 		pidConfigHandler:     pidConfigHandler,
 		missionPresetHandler: missionPresetHandler,
 		sessionHandler:       sessionHandler,
+		arenaHandler:         arenaHandler,
 	}
 }
 
@@ -130,6 +133,14 @@ func (r *Router) New() *fiber.App {
 	sessionGroup.Get("", r.sessionHandler.GetAll)
 	sessionGroup.Get("/:filename", r.sessionHandler.Download)
 	sessionGroup.Delete("/:filename", r.sessionHandler.Delete)
+
+	// Arena Routes
+	arenaGroup := api.Group("/arenas")
+	arenaGroup.Get("", r.arenaHandler.GetAll)
+	arenaGroup.Get("/:id", r.arenaHandler.GetByID)
+	arenaGroup.Post("", r.arenaHandler.Create)
+	arenaGroup.Put("/:id", r.arenaHandler.Update)
+	arenaGroup.Delete("/:id", r.arenaHandler.Delete)
 
 	app.Use(r.mw.NotFoundRouteMiddleware())
 	return app

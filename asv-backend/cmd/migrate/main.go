@@ -35,6 +35,7 @@ func main() {
 		&entity.CalibrationProfile{},
 		&entity.PidConfig{},
 		&entity.MissionPreset{},
+		&entity.Arena{},
 	)
 
 

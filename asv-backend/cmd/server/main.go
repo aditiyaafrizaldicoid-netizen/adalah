@@ -80,6 +80,7 @@ func main() {
 	calibRepo := repository.NewCalibrationProfileRepository(db, logger)
 	pidConfigRepo := repository.NewPidConfigRepository(db, logger)
 	missionPresetRepo := repository.NewMissionPresetRepository(db, logger)
+	arenaRepo := repository.NewArenaRepository(db, logger)
 
 	// 6. Initialize Services
 	userService := service.NewUserService(userRepo, logger)
@@ -88,6 +89,7 @@ func main() {
 	calibService := service.NewCalibrationProfileService(calibRepo, logger)
 	pidConfigService := service.NewPidConfigService(pidConfigRepo, logger)
 	missionPresetService := service.NewMissionPresetService(missionPresetRepo, logger)
+	arenaService := service.NewArenaService(arenaRepo, logger)
 
 	// 7. Initialize Middlewares
 	mid := middleware.NewMiddleware(cfg, logger, enforcer)
@@ -104,9 +106,10 @@ func main() {
 	pidConfigHandler := handler.NewPidConfigHandler(pidConfigService)
 	missionPresetHandler := handler.NewMissionPresetHandler(missionPresetService)
 	sessionHandler := handler.NewSessionHandler()
+	arenaHandler := handler.NewArenaHandler(arenaService)
 
 	// 9. Initialize Router & Get App
-	r := route.NewRouter(cfg, mid, authHandler, userHandler, healthHandler, wsHandler, videoHandler, calibHandler, pidConfigHandler, missionPresetHandler, sessionHandler)
+	r := route.NewRouter(cfg, mid, authHandler, userHandler, healthHandler, wsHandler, videoHandler, calibHandler, pidConfigHandler, missionPresetHandler, sessionHandler, arenaHandler)
 
 
 	app := r.New()
