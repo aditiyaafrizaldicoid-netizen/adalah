@@ -56,7 +56,7 @@ def main():
     tracker = BallTracker(
         model_path=model_path,
         target_class=[0, 1],
-        conf_threshold=0.6
+        conf_threshold=0.2
     )
 
     controller = TrackingController(

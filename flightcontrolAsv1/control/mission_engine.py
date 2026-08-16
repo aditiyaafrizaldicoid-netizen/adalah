@@ -453,9 +453,10 @@ class MissionEngine:
                     label = f"GATE:SEARCHING | TRACKING_BUOY ({pass_label} pass)"
                     return steer, throttle, label
                 else:
-                    # Tidak ada target sama sekali
-                    label = f"🔴 FAILSAFE: NO TARGET (gate {pass_label})"
-                    return 0.0, 0.0, label
+                    # Tidak ada target sama sekali → tetap maju lurus pelan agar tidak stuck diam
+                    # Kapal terus bergerak maju sehingga buoy masuk frame kembali
+                    label = f"GATE:SEARCHING (no target) | TRACKING_BUOY ({pass_label} pass)"
+                    return 0.0, throttle, label
 
         elif self._gate_lock_state == self.GATE_LOCKED:
             # ── LOCKED ────────────────────────────────────────

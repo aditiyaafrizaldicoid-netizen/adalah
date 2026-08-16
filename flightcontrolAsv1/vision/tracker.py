@@ -113,9 +113,9 @@ class BallTracker:
         gate_center_x = None
         gate_center_y = None
 
-        # Prioritaskan bola terdekat dengan kamera di foreground (Kombinasi Luas Box x Posisi Y)
-        sorted_red = sorted(red_balls, key=lambda b: ((b[4] - b[2]) * (b[5] - b[3])) * (b[1] ** 0.5), reverse=True)
-        sorted_green = sorted(green_balls, key=lambda b: ((b[4] - b[2]) * (b[5] - b[3])) * (b[1] ** 0.5), reverse=True)
+        # Prioritaskan bola dengan area terbesar (paling dekat ke kamera secara fisik)
+        sorted_red = sorted(red_balls, key=lambda b: (b[4] - b[2]) * (b[5] - b[3]), reverse=True)
+        sorted_green = sorted(green_balls, key=lambda b: (b[4] - b[2]) * (b[5] - b[3]), reverse=True)
 
         if len(sorted_red) > 0 and len(sorted_green) > 0:
             # Pasangan bola merah (kiri) & hijau (kanan) TERDEKAT di depan kapal

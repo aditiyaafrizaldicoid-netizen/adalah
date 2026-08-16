@@ -17,6 +17,10 @@ class TrackingController:
         self.forward_speed = forward_speed
         self.max_turn_rate = max_turn_rate
 
+        # Dead-zone: error di bawah nilai ini dianggap "lurus" (tidak ada steering output).
+        # Mencegah micro-correction flicker yang membuat kapal bergetar saat hampir lurus.
+        self.align_threshold_px: float = 15.0
+
         # PID Sederhana: error_px (pixel) -> output = turn_rate deg/s
         self.pid = PID(kp, ki, kd, setpoint=0.0)
         self.pid.output_limits = (-self.max_turn_rate, self.max_turn_rate)
@@ -29,7 +33,7 @@ class TrackingController:
         self._last_error_sign = 0.0
         print("[TrackingController] 🔄 Reset PID tracker.")
 
-    def update_pid_params(self, kp=None, ki=None, kd=None, forward_speed=None, max_turn_rate=None, **kwargs):
+    def update_pid_params(self, kp=None, ki=None, kd=None, forward_speed=None, max_turn_rate=None, align_threshold_px=None, **kwargs):
         if kp is not None:
             self.pid.Kp = float(kp)
         if ki is not None:
@@ -41,20 +45,26 @@ class TrackingController:
         if max_turn_rate is not None:
             self.max_turn_rate = max(5.0, min(60.0, float(max_turn_rate)))
             self.pid.output_limits = (-self.max_turn_rate, self.max_turn_rate)
+        if align_threshold_px is not None:
+            self.align_threshold_px = max(0.0, float(align_threshold_px))
         print(f"[TrackingController] PID Updated -> Kp:{self.pid.Kp}, Ki:{self.pid.Ki}, Kd:{self.pid.Kd}, Speed:{self.forward_speed}m/s, MaxTurn:{self.max_turn_rate}deg/s")
 
     def _check_and_reset_windup(self, error_px: float):
         """
-        Anti-windup: reset integrator PID saat error berganti tanda (zero-crossing).
-        Mencegah integral yang terakumulasi besar dari sisi berbelok terus mendorong
-        kapal ke arah yang sama meskipun gate sudah melewati titik tengah frame.
+        Anti-windup: reset HANYA komponen integral PID saat error berganti tanda (zero-crossing).
+        Hanya integral (_integral) yang di-reset — bukan seluruh PID state — agar:
+        - Respons proporsional tetap aktif secara instan (tidak ada "silent frame")
+        - Derivative history tetap terjaga agar tidak spike saat zero-crossing
+        - Mencegah integral yang terakumulasi mendorong kapal ke arah yang salah
         """
         current_sign = 1.0 if error_px > 0 else (-1.0 if error_px < 0 else 0.0)
         if (self._last_error_sign != 0.0
                 and current_sign != 0.0
                 and current_sign != self._last_error_sign):
-            # Error berganti tanda → reset integrator untuk respons segera
-            self.pid.reset()
+            # Error berganti tanda → reset HANYA integrator, bukan seluruh PID
+            # simple_pid menyimpan integral di atribut _integral
+            if hasattr(self.pid, '_integral'):
+                self.pid._integral = 0.0
         if current_sign != 0.0:
             self._last_error_sign = current_sign
 
@@ -62,7 +72,7 @@ class TrackingController:
         """
         Hitung kecepatan & belokan langsung tanpa FSM state machine.
         - Objek terdeteksi -> Maju forward_speed, Belok PID(error_px).
-        - Objek tidak ada -> Maju 0.0, Belok 0.0.
+        - Objek tidak ada  -> Maju 0.0, Belok 0.0.
         """
         # Hitung error piksel dari tengah frame.
         # simple_pid menghitung: output = Kp × (setpoint − measurement) = −Kp × measurement
@@ -72,6 +82,10 @@ class TrackingController:
         #   gate di kanan (gate_x > center) → error_px < 0 → output = −Kp×(−|e|) = +|e| ✓
         #   gate di kiri  (gate_x < center) → error_px > 0 → output = −Kp×(+|e|) = −|e| ✓
         error_px = float(self.center_x - gate_center_x)
+
+        # Dead-zone: error kecil di bawah threshold → anggap lurus, tidak ada koreksi
+        if abs(error_px) < self.align_threshold_px:
+            return self.forward_speed, 0.0, "TRACKING"
 
         # Anti-windup: reset integrator jika error berganti arah
         self._check_and_reset_windup(error_px)
@@ -95,6 +109,10 @@ class TrackingController:
         #   gate di kanan (gate_x > center) → error_px < 0 → output positif → steer kanan (+1.0) ✓
         #   gate di kiri  (gate_x < center) → error_px > 0 → output negatif → steer kiri  (-1.0) ✓
         error_px = float(self.center_x - gate_center_x)
+
+        # Dead-zone: error kecil dianggap lurus — tidak ada micro-correction
+        if abs(error_px) < self.align_threshold_px:
+            return 0.0
 
         # Anti-windup: reset integrator jika error berganti arah
         self._check_and_reset_windup(error_px)
