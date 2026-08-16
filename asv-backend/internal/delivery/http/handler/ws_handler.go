@@ -140,6 +140,12 @@ func (h *WSHandler) HandleASV(c *websocket.Conn) {
 						"⚠️ KRITIS: Mini PC terputus dari Flight Controller! Kapal tidak dapat dikontrol.",
 					)
 					log.Println("[WSHandler] FC_DISCONNECTED event received from ASV")
+
+				case "STREAMING_STATUS":
+					// ASV mengonfirmasi streaming ON/OFF → forward ke semua Web UI agar tombol sync
+					log.Printf("[WSHandler] STREAMING_STATUS dari ASV: %s", string(msg))
+					h.hub.BroadcastToWeb(msg)
+					continue // sudah di-forward, skip broadcast normal
 				}
 			}
 

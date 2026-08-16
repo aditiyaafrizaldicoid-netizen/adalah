@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed } from 'vue';
-import { RefreshCw, AlertCircle, Camera, Video, VideoOff, CircleDot } from 'lucide-vue-next';
+import { RefreshCw, AlertCircle, Camera, Video, VideoOff, CircleDot, Wifi, WifiOff } from 'lucide-vue-next';
 import { useMjpegStream } from '@/composables/useMjpegStream';
 import { useVesselStore } from '@/stores/vesselStore';
 import { useWebsocketStore } from '@/stores/websocketStore';
@@ -26,6 +26,10 @@ const handleToggleRecord = () => {
     const [w, h] = selectedRes.value.split('x');
     wsStore.toggleRecording(parseInt(w), parseInt(h));
 };
+
+const handleToggleStreaming = () => {
+    wsStore.toggleStreaming();
+};
 </script>
 
 <template>
@@ -43,6 +47,13 @@ const handleToggleRecord = () => {
                 {{ title || 'VIDEO STREAM' }}
             </h3>
             <div class="flex items-center gap-3">
+                <!-- Badge: Streaming OFF -->
+                <span v-if="!vessel.isStreaming"
+                    class="flex items-center gap-1.5 bg-slate-700/90 text-slate-300 text-[10px] px-2 py-0.5 rounded font-black tracking-widest border border-slate-500">
+                    <WifiOff class="w-3 h-3" />
+                    STREAM OFF
+                </span>
+                <!-- Badge: Recording -->
                 <span v-if="vessel.isRecording"
                     class="flex items-center gap-1.5 bg-red-600/90 text-white text-[10px] px-2 py-0.5 rounded font-black tracking-widest animate-pulse border border-red-400">
                     <CircleDot class="w-3 h-3 text-white" />
@@ -64,7 +75,7 @@ const handleToggleRecord = () => {
             <img ref="imgRef" :src="activeSrc" @error="onError" @load="onLoad" class="w-full h-full"
                 :class="[objectFit, { 'opacity-0': isError || activeSrc === BLANK }]" />
 
-            <!-- Record Overlay Controls (Top Right overlay inside video) -->
+            <!-- Record & Streaming Overlay Controls (Top Right overlay inside video) -->
             <div class="absolute top-3 right-3 z-10 flex items-center gap-2">
                 <select v-if="!vessel.isRecording" v-model="selectedRes"
                     class="text-[10px] font-mono bg-black/80 border border-white/20 text-white rounded px-1.5 py-1 focus:outline-none opacity-0 group-hover/video:opacity-100 transition-opacity">
@@ -73,6 +84,21 @@ const handleToggleRecord = () => {
                     <option value="1920x1080">1920x1080 (FHD)</option>
                 </select>
 
+                <!-- Tombol Toggle Streaming -->
+                <button @click="handleToggleStreaming"
+                    :class="[
+                        'px-2.5 py-1 rounded flex items-center gap-1.5 text-[10px] font-bold tracking-wider transition-all shadow-lg cursor-pointer opacity-0 group-hover/video:opacity-100',
+                        vessel.isStreaming
+                            ? 'bg-black/80 text-white border border-white/20 hover:bg-slate-600 hover:text-white'
+                            : 'bg-slate-700 text-slate-200 border border-slate-400 hover:bg-green-600 hover:text-white'
+                    ]"
+                    :title="vessel.isStreaming ? 'Matikan Streaming (hemat CPU/bandwidth, YOLO tetap aktif)' : 'Aktifkan Streaming ke Base Station'">
+                    <WifiOff v-if="vessel.isStreaming" class="w-3.5 h-3.5 text-slate-300" />
+                    <Wifi v-else class="w-3.5 h-3.5 text-green-400" />
+                    <span>{{ vessel.isStreaming ? 'STOP STREAM' : 'START STREAM' }}</span>
+                </button>
+
+                <!-- Tombol Toggle Recording -->
                 <button @click="handleToggleRecord"
                     :class="[
                         'px-2.5 py-1 rounded flex items-center gap-1.5 text-[10px] font-bold tracking-wider transition-all shadow-lg cursor-pointer',

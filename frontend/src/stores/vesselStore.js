@@ -30,6 +30,10 @@ export const useVesselStore = defineStore("vessel", () => {
   const recordingFilename = ref('');
   const recordingResolution = ref('640x480');
 
+  // Streaming ON/OFF State
+  // true = encode + upload aktif (default); false = hemat CPU/bandwidth
+  const isStreaming = ref(true);
+
   // Camera & Connectivity State
   const cameraConnected = ref(false);  // Apakah stream kamera aktif
   const asvConnected = ref(false);     // Apakah Mini PC (ASV) terkoneksi ke base station
@@ -99,6 +103,8 @@ export const useVesselStore = defineStore("vessel", () => {
     if (data.is_recording !== undefined) isRecording.value = data.is_recording;
     if (data.recording_filename !== undefined) recordingFilename.value = data.recording_filename;
     if (data.recording_resolution !== undefined) recordingResolution.value = data.recording_resolution;
+    // Status Streaming ON/OFF
+    if (data.is_streaming !== undefined) isStreaming.value = data.is_streaming;
   }
 
 
@@ -146,6 +152,7 @@ export const useVesselStore = defineStore("vessel", () => {
     thrusterL, thrusterR, rpmL, rpmR,
     isConnected, isArmed, mode,
     isRecording, recordingFilename, recordingResolution,
+    isStreaming,
     cameraConnected, asvConnected,
     warnings,
     isGpsValid, batteryColor,

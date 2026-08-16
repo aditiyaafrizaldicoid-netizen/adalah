@@ -48,6 +48,11 @@ export const useWebsocketStore = defineStore("websocket", () => {
               vesselStore.recordingResolution = `${data.payload.width}x${data.payload.height}`;
             }
           }
+        } else if (data.type === "STREAMING_STATUS") {
+          // ACK dari ASV setelah streaming ON/OFF berhasil dijalankan
+          if (data.payload && data.payload.is_streaming !== undefined) {
+            vesselStore.isStreaming = data.payload.is_streaming;
+          }
         } else if (data.type === "MISSION_UPDATE") {
           // Legacy mission update
         } else if (data.type === "MISSION_STATUS") {
@@ -181,6 +186,25 @@ export const useWebsocketStore = defineStore("websocket", () => {
     }
   }
 
+  // ── Streaming ON/OFF ────────────────────────────────────────────────────
+
+  function startStreaming() {
+    sendCommand({ action: "start_streaming" });
+  }
+
+  function stopStreaming() {
+    sendCommand({ action: "stop_streaming" });
+  }
+
+  /** Toggle streaming: matikan jika sedang ON, nyalakan jika sedang OFF. */
+  function toggleStreaming() {
+    if (vesselStore.isStreaming) {
+      stopStreaming();
+    } else {
+      startStreaming();
+    }
+  }
+
   function disconnect() {
     autoReconnect.value = false;
 
@@ -189,7 +213,9 @@ export const useWebsocketStore = defineStore("websocket", () => {
 
   return {
     socket, status, latency, lastMessage, autoReconnect,
-    connect, disconnect, sendCommand, startRecording, stopRecording, toggleRecording,
+    connect, disconnect, sendCommand,
+    startRecording, stopRecording, toggleRecording,
+    startStreaming, stopStreaming, toggleStreaming,
     saveCurrentWaypoint, uploadMission, setRelativeWaypoints, updatePid,
   };
 });

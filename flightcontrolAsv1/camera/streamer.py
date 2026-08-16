@@ -22,6 +22,15 @@ class VideoStreamer:
         self._latest_frame = None
         self._frame_lock = threading.Lock()
 
+        # ------------------------------------------------------------------ #
+        #  Streaming ON/OFF toggle                                            #
+        # ------------------------------------------------------------------ #
+        # is_streaming = True  → encode JPEG + upload ke backend (default ON)
+        # is_streaming = False → hanya proses YOLO untuk kontrol ASV,
+        #                        TIDAK encode/upload frame (hemat CPU & bandwidth)
+        self.is_streaming = True
+        self._streaming_lock = threading.Lock()
+
         # State Recording (Video mentah tanpa object detection)
         self.is_recording = False
         self.recording_writer = None
@@ -45,6 +54,29 @@ class VideoStreamer:
     def is_camera_ok(self) -> bool:
         """Mengembalikan status koneksi kamera saat ini."""
         return bool(self._camera_ok)
+
+    # ------------------------------------------------------------------ #
+    #  Streaming Toggle API                                                #
+    # ------------------------------------------------------------------ #
+
+    def start_streaming(self):
+        """Aktifkan encoding + upload frame ke backend."""
+        with self._streaming_lock:
+            if not self.is_streaming:
+                self.is_streaming = True
+                print("[VideoStream] 🟢 Streaming DIAKTIFKAN (encode + upload ke backend ON)")
+        return self.is_streaming
+
+    def stop_streaming(self):
+        """
+        Matikan encoding + upload ke backend.
+        YOLO detection & kontrol ASV tetap berjalan.
+        """
+        with self._streaming_lock:
+            if self.is_streaming:
+                self.is_streaming = False
+                print("[VideoStream] 🔴 Streaming DIMATIKAN (encode + upload ke backend OFF — YOLO tetap aktif)")
+        return self.is_streaming
 
     def start_recording(self, width=None, height=None, save_dir="recordings"):
         with self._recording_lock:
@@ -238,25 +270,37 @@ class VideoStreamer:
                     frame = self._latest_frame.copy()
 
             if frame is not None:
-                # Process frame with YOLO callback for live stream display
+                # --------------------------------------------------------
+                # 1. Selalu jalankan YOLO callback agar kontrol ASV tetap
+                #    berjalan meskipun streaming dimatikan.
+                # --------------------------------------------------------
                 if self.frame_callback:
                     processed_frame = self.frame_callback(frame)
                 else:
                     processed_frame = frame
-                    
-                encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 60]
-                result, encimg = cv2.imencode('.jpg', processed_frame, encode_param)
-                if result:
-                    try:
-                        files = {'frame': ('frame.jpg', encimg.tobytes(), 'image/jpeg')}
-                        if not hasattr(self, 'session'):
-                            self.session = requests.Session()
-                        response = self.session.post(self.backend_url, files=files, timeout=(1.0, 2.0))
-                        if response.status_code != 200:
-                            print(f"[VideoStream] Backend error: {response.status_code} - {response.text}")
-                    except Exception as e:
-                        print(f"[VideoStream] Upload error: {e}")
-                        
+
+                # --------------------------------------------------------
+                # 2. Encode + upload ke backend HANYA jika streaming ON.
+                #    Ketika streaming OFF: skip encode JPEG & HTTP POST
+                #    → hemat CPU (encode) + bandwidth (upload).
+                # --------------------------------------------------------
+                with self._streaming_lock:
+                    streaming_active = self.is_streaming
+
+                if streaming_active:
+                    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 60]
+                    result, encimg = cv2.imencode('.jpg', processed_frame, encode_param)
+                    if result:
+                        try:
+                            files = {'frame': ('frame.jpg', encimg.tobytes(), 'image/jpeg')}
+                            if not hasattr(self, 'session'):
+                                self.session = requests.Session()
+                            response = self.session.post(self.backend_url, files=files, timeout=(1.0, 2.0))
+                            if response.status_code != 200:
+                                print(f"[VideoStream] Backend error: {response.status_code} - {response.text}")
+                        except Exception as e:
+                            print(f"[VideoStream] Upload error: {e}")
+
             time.sleep(1.0 / self.fps)
 
 

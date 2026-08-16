@@ -378,6 +378,29 @@ class ASVWebSocketClient:
             else:
                 print("[WS] stop_recording: video_streamer tidak terhubung pada ws_client")
 
+        # --- STREAMING ON/OFF TOGGLE ---
+        elif action == "start_streaming":
+            if self.video_streamer:
+                self.video_streamer.start_streaming()
+                self._send_ws({
+                    "type": "STREAMING_STATUS",
+                    "payload": {"is_streaming": True}
+                })
+                print("[WS] 🟢 Streaming diaktifkan oleh base station")
+            else:
+                print("[WS] start_streaming: video_streamer tidak terhubung pada ws_client")
+
+        elif action == "stop_streaming":
+            if self.video_streamer:
+                self.video_streamer.stop_streaming()
+                self._send_ws({
+                    "type": "STREAMING_STATUS",
+                    "payload": {"is_streaming": False}
+                })
+                print("[WS] 🔴 Streaming dimatikan oleh base station")
+            else:
+                print("[WS] stop_streaming: video_streamer tidak terhubung pada ws_client")
+
         # --- MISSION ENGINE CONTROLS ---
         elif action == "load_mission":
             steps = cmd.get("steps", [])
@@ -599,7 +622,9 @@ class ASVWebSocketClient:
                         "camera_connected": self.video_streamer.is_camera_ok() if self.video_streamer else False,
                         "is_recording": self.video_streamer.is_recording if self.video_streamer else False,
                         "recording_filename": self.video_streamer.recording_filename if (self.video_streamer and self.video_streamer.is_recording) else "",
-                        "recording_resolution": f"{self.video_streamer.record_width}x{self.video_streamer.record_height}" if (self.video_streamer and self.video_streamer.is_recording) else ""
+                        "recording_resolution": f"{self.video_streamer.record_width}x{self.video_streamer.record_height}" if (self.video_streamer and self.video_streamer.is_recording) else "",
+                        # Streaming toggle state — base station bisa sync tombol ON/OFF
+                        "is_streaming": self.video_streamer.is_streaming if self.video_streamer else False,
                     }
 
                     self.ws.send(json.dumps({
