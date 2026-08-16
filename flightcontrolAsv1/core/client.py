@@ -25,6 +25,10 @@ class ASVController:
         # Shared channel config (singleton – bisa diupdate dari ws_client)
         self.channel_config = channel_config
 
+        # GPS offset: diterapkan saat mengirim telemetri ke base station
+        self._gps_lat_offset = 0.0
+        self._gps_lon_offset = 0.0
+
         # Inisialisasi state & manager
         self.state = ASVState()
         self.connection = ConnectionManager(self.config, self.state)
@@ -65,6 +69,52 @@ class ASVController:
     def get_telemetry_dict(self) -> Dict[str, Any]:
         """Mengembalikan data telemetri dalam format dictionary (siap untuk dikirim via WebSocket/REST API)."""
         return self.state.to_dict()
+
+    def get_telemetry_dict_with_offset(self) -> Dict[str, Any]:
+        """Sama seperti get_telemetry_dict() tapi menerapkan GPS offset jika ada."""
+        t = self.state.to_dict()
+        if self._gps_lat_offset != 0.0:
+            t['lat'] = (t.get('lat') or 0.0) + self._gps_lat_offset
+        if self._gps_lon_offset != 0.0:
+            t['lon'] = (t.get('lon') or 0.0) + self._gps_lon_offset
+        return t
+
+    def set_gps_offset(self, lat_offset: float, lng_offset: float) -> bool:
+        """Set offset koreksi GPS. Diterapkan ke telemetri yang dikirim ke base station."""
+        self._gps_lat_offset = float(lat_offset)
+        self._gps_lon_offset = float(lng_offset)
+        print(f"[ASVController] GPS offset: lat={lat_offset:+.7f}, lng={lng_offset:+.7f}")
+        return True
+
+    def set_thruster_trim(self, port_offset: float, starboard_offset: float) -> bool:
+        """Set trim offset thruster untuk kompensasi ketidakseimbangan motor."""
+        self._manual_rc.set_trim(
+            max(-1.0, min(1.0, float(port_offset))),
+            max(-1.0, min(1.0, float(starboard_offset)))
+        )
+        return True
+
+    def start_imu_calibration(self, cal_type: str = 'gyro') -> bool:
+        """
+        Mulai kalibrasi IMU via MAVLink MAV_CMD_PREFLIGHT_CALIBRATION.
+        cal_type: 'gyro' | 'accel_level' | 'compass'
+        """
+        MAV_CMD_PREFLIGHT_CALIBRATION = 241
+        p1 = p2 = p3 = p4 = p5 = p6 = p7 = 0
+
+        if cal_type == 'gyro':
+            p1 = 1          # Gyroscope calibration
+        elif cal_type == 'accel_level':
+            p5 = 2          # Simple accelerometer level calibration
+        elif cal_type == 'compass':
+            p2 = 1          # Magnetometer (compass) calibration
+        else:
+            p1 = 1          # Default: gyro
+
+        print(f"[ASVController] Starting IMU calibration: {cal_type} (p1={p1} p2={p2} p5={p5})")
+        return self.connection.send_command_long(
+            MAV_CMD_PREFLIGHT_CALIBRATION, p1, p2, p3, p4, p5, p6, p7
+        )
 
     # --- CHANNEL CONFIGURATION (Runtime update dari Base Station) ---
     def update_channel_config(self, channel_map: dict) -> bool:

@@ -45,13 +45,16 @@ class ASVWebSocketClient:
         self._fc_monitor_lock = threading.Lock()
         self._send_lock = threading.Lock()  # Thread-safe lock untuk pengiriman pesan WebSocket
 
-
         # Reference ke VideoStreamer, TrackingController & SpeedScheduler
         self.video_streamer = None
         self.tracking_controller = None
         self.speed_scheduler = None
         self._camera_was_ok = False
         self.mission_engine = None
+
+        # State kalibrasi IMU
+        self._imu_calibrating = False
+        self._imu_cal_step = 0
 
     def set_video_streamer(self, video_streamer):
         self.video_streamer = video_streamer
@@ -114,6 +117,9 @@ class ASVWebSocketClient:
         if self._is_running:
             return
         self._is_running = True
+        # Daftarkan callback STATUSTEXT untuk monitoring kalibrasi IMU
+        self.asv.state.set_statustext_callback(self._on_statustext)
+
         self._thread = threading.Thread(target=self._run_ws, daemon=True)
         self._thread.start()
 
@@ -448,6 +454,66 @@ class ASVWebSocketClient:
 
 
 
+        # --- CAMERA PARAMS ---
+        elif action == "set_camera_params":
+            if self.video_streamer:
+                camera_key = cmd.get("camera", "surface")
+                brightness = cmd.get("brightness", 50)
+                contrast = cmd.get("contrast", 50)
+                self.video_streamer.set_camera_params(camera_key, brightness, contrast)
+                print(f"[WS] set_camera_params: {camera_key} → brightness={brightness}, contrast={contrast}")
+            else:
+                print("[WS] set_camera_params: video_streamer tidak terhubung")
+
+        # --- GPS OFFSET ---
+        elif action == "set_gps_offset":
+            lat_offset = float(cmd.get("lat_offset", 0.0))
+            lng_offset = float(cmd.get("lng_offset", 0.0))
+            self.asv.set_gps_offset(lat_offset, lng_offset)
+            print(f"[WS] set_gps_offset: lat={lat_offset:+.7f}, lng={lng_offset:+.7f}")
+
+        # --- THRUSTER TRIM ---
+        elif action == "set_thruster_trim":
+            port_offset = float(cmd.get("port_offset", 0.0))
+            starboard_offset = float(cmd.get("starboard_offset", 0.0))
+            self.asv.set_thruster_trim(port_offset, starboard_offset)
+            print(f"[WS] set_thruster_trim: port={port_offset:+.3f}, starboard={starboard_offset:+.3f}")
+
+        # --- IMU CALIBRATION ---
+        elif action == "start_imu_calibration":
+            cal_type = cmd.get("cal_type", "gyro")
+            step = int(cmd.get("step", 1))
+            self._imu_calibrating = True
+            self._imu_cal_step = step
+            ok = self.asv.start_imu_calibration(cal_type)
+            if ok:
+                self._send_ws({
+                    "type": "IMU_CALIBRATION_STATUS",
+                    "payload": {
+                        "step": step,
+                        "progress": 5,
+                        "message": f"Kalibrasi '{cal_type}' dimulai, menunggu respons FC...",
+                        "success": False
+                    }
+                })
+            else:
+                self._imu_calibrating = False
+                self._send_ws({
+                    "type": "IMU_CALIBRATION_STATUS",
+                    "payload": {
+                        "step": step,
+                        "progress": 0,
+                        "message": "Gagal: Flight Controller tidak terhubung",
+                        "success": False,
+                        "error": True
+                    }
+                })
+            print(f"[WS] start_imu_calibration: type={cal_type}, step={step}, ok={ok}")
+
+        elif action == "stop_imu_calibration":
+            self._imu_calibrating = False
+            print("[WS] IMU calibration stopped by user")
+
         elif action:
             print(f"[WS] Unknown action: {action}")
 
@@ -560,6 +626,42 @@ class ASVWebSocketClient:
                 )
 
     # ------------------------------------------------------------------ #
+    #  STATUSTEXT CALLBACK (IMU Calibration Progress)                     #
+    # ------------------------------------------------------------------ #
+
+    def _on_statustext(self, text: str):
+        """
+        Dipanggil oleh ASVState setiap ada STATUSTEXT baru dari Pixhawk.
+        Saat kalibrasi IMU aktif, forward progress ke base station.
+        """
+        if not self._imu_calibrating:
+            return
+
+        text_lower = text.lower()
+        cal_keywords = ["cal", "calibrat", "accel", "gyro", "compass", "mag", "level"]
+        if not any(kw in text_lower for kw in cal_keywords):
+            return
+
+        is_complete = any(kw in text_lower for kw in ["complete", "compl", "done", "success", "passed"])
+        is_failed = any(kw in text_lower for kw in ["fail", "error", "abort", "timeout"])
+
+        progress = 100 if is_complete else (0 if is_failed else 60)
+
+        self._send_ws({
+            "type": "IMU_CALIBRATION_STATUS",
+            "payload": {
+                "step": self._imu_cal_step,
+                "progress": progress,
+                "message": text,
+                "success": is_complete,
+                "failed": is_failed
+            }
+        })
+
+        if is_complete or is_failed:
+            self._imu_calibrating = False
+
+    # ------------------------------------------------------------------ #
     #  SEND HELPERS                                                        #
     # ------------------------------------------------------------------ #
 
@@ -602,7 +704,7 @@ class ASVWebSocketClient:
         """Loop 100ms untuk mengirim telemetri ke base station."""
         while self._is_running:
             if self.ws and self.ws.sock and self.ws.sock.connected:
-                t = self.asv.get_telemetry_dict()
+                t = self.asv.get_telemetry_dict_with_offset()
                 try:
                     payload = {
                         "lat": t.get("lat"),

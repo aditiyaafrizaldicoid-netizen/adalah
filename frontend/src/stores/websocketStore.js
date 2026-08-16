@@ -12,6 +12,8 @@ export const useWebsocketStore = defineStore("websocket", () => {
   const latency = ref(0);
   const lastMessage = ref(null);
   const autoReconnect = ref(true);
+  // Status kalibrasi IMU: { step, progress, message, success, failed, error }
+  const imuCalibrationStatus = ref(null);
 
   let pingInterval = null;
   let _url = null;
@@ -68,6 +70,8 @@ export const useWebsocketStore = defineStore("websocket", () => {
           import("./channelConfigStore").then(({ useChannelConfigStore }) => {
             useChannelConfigStore().updateFromPayload(data.payload);
           });
+        } else if (data.type === "IMU_CALIBRATION_STATUS") {
+          imuCalibrationStatus.value = data.payload;
         } else if (data.type === "WARNING") {
           // Warning dari backend (ASV disconnect, FC disconnect, dll)
           const p = data.payload;
@@ -226,6 +230,7 @@ export const useWebsocketStore = defineStore("websocket", () => {
 
   return {
     socket, status, latency, lastMessage, autoReconnect,
+    imuCalibrationStatus,
     connect, disconnect, sendCommand,
     startRecording, stopRecording, toggleRecording,
     startStreaming, stopStreaming, toggleStreaming,

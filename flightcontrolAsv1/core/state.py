@@ -45,6 +45,11 @@ class ASVState:
         self._data = ASVStateData()
         self._lock = threading.RLock()
         self.max_status_messages = 10
+        self._statustext_callback = None
+
+    def set_statustext_callback(self, callback):
+        """Register callback yang dipanggil setiap ada STATUSTEXT baru dari FC."""
+        self._statustext_callback = callback
 
     def update_heartbeat(self, is_armed: bool, mode: str, system_status: int):
         with self._lock:
@@ -87,6 +92,12 @@ class ASVState:
             self._data.status_text.append(timestamped)
             if len(self._data.status_text) > self.max_status_messages:
                 self._data.status_text.pop(0)
+        # Panggil callback di luar lock untuk menghindari deadlock
+        if self._statustext_callback:
+            try:
+                self._statustext_callback(text)
+            except Exception:
+                pass
 
     def set_disconnected(self):
         with self._lock:

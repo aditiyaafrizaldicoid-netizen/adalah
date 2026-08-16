@@ -45,11 +45,28 @@ class VideoStreamer:
         self._status_callback = None
         self._camera_ok = None  # Status kamera saat ini (None = belum diinisialisasi)
 
+        # Camera params (per-key: 'surface' atau 'underwater' — saat ini hanya 1 camera fisik)
+        self._brightness = 50   # 0-100, 50 = netral (tidak ada adjustment)
+        self._contrast = 50     # 0-100, 50 = netral (alpha=1.0)
+        self._cam_params_lock = threading.Lock()
+
     def set_status_callback(self, callback):
         """Daftarkan callback yang dipanggil saat status kamera berubah.
         Callback signature: callback(is_ok: bool, reason: str)
         """
         self._status_callback = callback
+
+    def set_camera_params(self, camera_key: str, brightness: int, contrast: int):
+        """
+        Atur brightness & contrast untuk frame yang akan diupload.
+        camera_key: 'surface' | 'underwater' (saat ini single camera, key diabaikan)
+        brightness: 0-100, 50 = netral
+        contrast:   0-100, 50 = netral (1.0x)
+        """
+        with self._cam_params_lock:
+            self._brightness = max(0, min(100, int(brightness)))
+            self._contrast = max(0, min(100, int(contrast)))
+        print(f"[VideoStream] Camera params updated ({camera_key}): brightness={self._brightness}, contrast={self._contrast}")
 
     def is_camera_ok(self) -> bool:
         """Mengembalikan status koneksi kamera saat ini."""
@@ -278,6 +295,19 @@ class VideoStreamer:
                     processed_frame = self.frame_callback(frame)
                 else:
                     processed_frame = frame
+
+                # --------------------------------------------------------
+                # 1b. Terapkan brightness/contrast adjustment ke frame display
+                # --------------------------------------------------------
+                with self._cam_params_lock:
+                    brightness = self._brightness
+                    contrast = self._contrast
+                if brightness != 50 or contrast != 50:
+                    # brightness: 50=0 offset, 0=-127, 100=+127
+                    beta = int((brightness - 50) * 2.54)
+                    # contrast: 50=1.0x, 0=0.5x, 100=2.0x
+                    alpha = 0.5 + (contrast / 100.0) * 1.5
+                    processed_frame = cv2.convertScaleAbs(processed_frame, alpha=alpha, beta=beta)
 
                 # --------------------------------------------------------
                 # 2. Encode + upload ke backend HANYA jika streaming ON.

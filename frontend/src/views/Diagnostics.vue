@@ -1,17 +1,17 @@
 <script setup>
 import { computed } from 'vue';
-import { useDiagnosticsStore } from '@/stores/diagnosticsStore';
 import { useVesselStore } from '@/stores/vesselStore';
 import { useWebsocketStore } from '@/stores/websocketStore';
+import { useChannelConfigStore } from '@/stores/channelConfigStore';
 import SensorHealthCard from "../components/diagnostics/SensorHealthCard.vue";
 import ConnectionTest from "../components/diagnostics/ConnectionTest.vue";
 import ErrorLogTable from "../components/diagnostics/ErrorLogTable.vue";
 import SystemHealthOverview from "../components/diagnostics/SystemHealthOverview.vue";
 import { Stethoscope, RefreshCw } from "lucide-vue-next";
 
-const diag = useDiagnosticsStore();
 const vessel = useVesselStore();
 const ws = useWebsocketStore();
+const cfg = useChannelConfigStore();
 
 const sensors = computed(() => [
   {
@@ -51,8 +51,24 @@ const sensors = computed(() => [
     lastUpdate: vessel.cameraConnected ? "Active" : "Disconnected"
   },
 ]);
-</script>
 
+// Gunakan vessel.warnings sebagai log — sudah berisi data real dari ASV
+const errorLogs = computed(() =>
+  vessel.warnings.map(w => ({
+    timestamp: new Date(w.timestamp).toLocaleTimeString(),
+    severity: w.level === 'critical' ? 'danger' : w.level === 'info' ? 'info' : 'warning',
+    source: w.code,
+    message: w.message,
+  }))
+);
+
+function reScan() {
+  if (ws.status !== 'CONNECTED') return;
+  // Minta ASV kirim channel config dan mission status terbaru
+  cfg.requestSync();
+  ws.sendCommand({ action: 'get_mission_status' });
+}
+</script>
 
 <template>
   <div class="p-6 h-full overflow-y-auto space-y-6">
@@ -64,34 +80,34 @@ const sensors = computed(() => [
         </h1>
         <p class="text-(--text-secondary) text-xs mt-1 uppercase tracking-widest font-bold">Health Monitoring & Error Logging</p>
       </div>
-      <button class="bg-card hover:bg-(--bg-secondary) text-(--text-primary) px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-2 border border-(--border-subtle) transition-all">
+      <button @click="reScan"
+        :disabled="ws.status !== 'CONNECTED'"
+        class="bg-card hover:bg-(--bg-secondary) text-(--text-primary) px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-2 border border-(--border-subtle) transition-all disabled:opacity-40 disabled:cursor-not-allowed">
         <RefreshCw class="w-4 h-4" />
         RE-SCAN SYSTEM
       </button>
     </div>
 
-    <!-- Sensor Health Grid (Sub-components) -->
+    <!-- Sensor Health Grid -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-      <SensorHealthCard 
-        v-for="s in sensors" 
-        :key="s.name" 
-        :name="s.name" 
-        :status="s.status" 
-        :value="s.value" 
-        :lastUpdate="s.lastUpdate" 
+      <SensorHealthCard
+        v-for="s in sensors"
+        :key="s.name"
+        :name="s.name"
+        :status="s.status"
+        :value="s.value"
+        :lastUpdate="s.lastUpdate"
       />
     </div>
 
     <div class="grid grid-cols-12 gap-6">
-       <!-- Logs & Tests (Sub-components) -->
-       <div class="col-span-12 lg:col-span-8 flex flex-col gap-6">
-          <ErrorLogTable :logs="diag.errorLogs" />
-       </div>
-
-       <div class="col-span-12 lg:col-span-4 flex flex-col gap-6">
-          <ConnectionTest />
-          <SystemHealthOverview />
-       </div>
+      <div class="col-span-12 lg:col-span-8 flex flex-col gap-6">
+        <ErrorLogTable :logs="errorLogs" @clear="vessel.clearAllWarnings()" />
+      </div>
+      <div class="col-span-12 lg:col-span-4 flex flex-col gap-6">
+        <ConnectionTest />
+        <SystemHealthOverview />
+      </div>
     </div>
   </div>
 </template>

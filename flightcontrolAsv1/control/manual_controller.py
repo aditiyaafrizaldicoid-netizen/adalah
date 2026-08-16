@@ -34,6 +34,17 @@ class ManualRCController:
         self.pwm_thr_min = 1000   # 0% Throttle / Stop
         self.pwm_thr_max = 2000   # 100% Throttle / Full Speed
 
+        # Thruster trim: kompensasi ketidakseimbangan motor port vs starboard
+        # Range: -1.0 to +1.0, diterjemahkan ke offset PWM steering (±250us)
+        self.port_trim = 0.0
+        self.starboard_trim = 0.0
+
+    def set_trim(self, port: float, starboard: float):
+        """Set thruster trim offset untuk kompensasi motor imbalance."""
+        self.port_trim = max(-1.0, min(1.0, float(port)))
+        self.starboard_trim = max(-1.0, min(1.0, float(starboard)))
+        print(f"[ManualRCController] Trim set: port={self.port_trim:+.3f}, starboard={self.starboard_trim:+.3f}")
+
     def send_drive_command(self, steering_command: float, throttle_command: float) -> bool:
         """
         Konversi sinyal norma steering & throttle menjadi sinyal PWM RC Override.
@@ -50,7 +61,10 @@ class ManualRCController:
         # lebih kencang dari kiri → kapal belok KIRI. Ini kebalikan dari konvensi kita
         # (steer_norm > 0 = kanan). Maka kita negasi sebelum konversi ke PWM.
         steer_norm = max(-1.0, min(1.0, float(-steering_command)))  # negasi untuk kompensasi ArduRover
-        pwm_steer = int(self.pwm_steer_center + (steer_norm * 500.0))
+        # Trim: selisih port-starboard diterjemahkan ke offset PWM steering
+        # port_trim > starboard_trim → motor port lebih kuat → perlu kompensasi ke kanan (PWM steering turun)
+        trim_pwm = int((self.port_trim - self.starboard_trim) * 250.0)
+        pwm_steer = int(self.pwm_steer_center + (steer_norm * 500.0)) + trim_pwm
         pwm_steer = max(self.pwm_steer_min, min(self.pwm_steer_max, pwm_steer))
 
         # 2. Konversi Throttle (0.0 s/d 1.0) -> PWM Channel 3 (1000 s/d 2000 us, min 1000 us)
