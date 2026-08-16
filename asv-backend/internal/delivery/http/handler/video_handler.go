@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bufio"
+	"io"
 	"log"
 	"strconv"
 	"sync"
@@ -35,7 +36,23 @@ func NewVideoHandler() *VideoHandler {
 
 // UploadFrame receives raw JPEG bytes from the Python ASV client
 func (h *VideoHandler) UploadFrame(c *fiber.Ctx) error {
-	frame := c.Body()
+	var frame []byte
+	file, err := c.FormFile("frame")
+	if err == nil {
+		f, err := file.Open()
+		if err == nil {
+			defer f.Close()
+			frame, _ = io.ReadAll(f)
+		} else {
+			log.Printf("Error opening file: %v", err)
+			frame = c.Body()
+		}
+	} else {
+		// Log the error to understand why it fails
+		log.Printf("Error getting FormFile: %v, Content-Type: %s", err, c.Get("Content-Type"))
+		frame = c.Body()
+	}
+
 	if len(frame) == 0 {
 		return c.SendStatus(fiber.StatusBadRequest)
 	}
@@ -54,11 +71,13 @@ func (h *VideoHandler) UploadFrame(c *fiber.Ctx) error {
 // StreamHandler serves an MJPEG stream to the frontend
 func (h *VideoHandler) StreamHandler(c *fiber.Ctx) error {
 	c.Set("Content-Type", "multipart/x-mixed-replace; boundary=frame")
-	c.Set("Cache-Control", "no-cache")
+	c.Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	c.Set("Pragma", "no-cache")
+	c.Set("Expires", "0")
 	c.Set("Connection", "keep-alive")
+	c.Set("Access-Control-Allow-Origin", "*")
 
 	c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
-		boundary := "\r\n--frame\r\n"
 		for {
 			h.mu.Lock()
 			h.cond.Wait()
@@ -69,12 +88,16 @@ func (h *VideoHandler) StreamHandler(c *fiber.Ctx) error {
 				continue
 			}
 
-			header := boundary + "Content-Type: image/jpeg\r\nContent-Length: " + strconv.Itoa(len(frame)) + "\r\n\r\n"
+			header := "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + strconv.Itoa(len(frame)) + "\r\n\r\n"
 			if _, err := w.Write([]byte(header)); err != nil {
 				log.Println("Video stream client disconnected")
 				break
 			}
 			if _, err := w.Write(frame); err != nil {
+				log.Println("Video stream client disconnected")
+				break
+			}
+			if _, err := w.Write([]byte("\r\n")); err != nil {
 				log.Println("Video stream client disconnected")
 				break
 			}

@@ -47,6 +47,67 @@ export const STEP_TYPES = [
     bg: "bg-amber-500/10 border-amber-500/30",
     fields: [{ key: "duration_sec", label: "Hold Duration (s)", type: "number", default: 5 }],
   },
+  // ── Dynamic Movement Steps ──────────────────────────────────────────────
+  {
+    type: "CUSTOM_FORWARD",
+    label: "Custom Forward (Dynamic)",
+    icon: "🚀",
+    color: "text-cyan-400",
+    bg: "bg-cyan-500/10 border-cyan-500/30",
+    fields: [
+      {
+        key: "heading_offset_deg",
+        label: "Heading Offset (°)",
+        type: "number",
+        default: 0,
+        // Sudut kemiringan arah gerak dari haluan kapal.
+        // 0 = maju lurus, +N = condong kanan N°/s, -N = condong kiri N°/s.
+        // Digunakan sebagai yaw rate konstan (°/s) oleh mission_engine saat send_velocity.
+      },
+      {
+        key: "duration_sec",
+        label: "Duration (s)",
+        type: "number",
+        default: 5,
+        // Batas waktu kapal menjalankan misi maju ini (dalam detik).
+        // Engine akan advance_step() saat elapsed >= duration_sec.
+      },
+      {
+        key: "speed_mps",
+        label: "Speed (m/s)",
+        type: "number",
+        default: 0.5,
+        // Kecepatan maju kapal dalam meter per detik.
+        // Dikirim sebagai forward_speed ke NavigationControl.send_velocity().
+      },
+    ],
+  },
+  {
+    type: "PRECISION_TURN",
+    label: "Precision Turning",
+    icon: "🔄",
+    color: "text-orange-400",
+    bg: "bg-orange-500/10 border-orange-500/30",
+    fields: [
+      {
+        key: "turn_angle_deg",
+        label: "Turn Angle (°)",
+        type: "number",
+        default: 90,
+        // Sudut total belok yang harus ditempuh kapal.
+        // +90 = belok kanan 90°, -90 = belok kiri 90°.
+        // Engine menghitung target_heading = initial_heading + turn_angle_deg.
+      },
+      {
+        key: "turn_rate_dps",
+        label: "Turn Rate (°/s)",
+        type: "number",
+        default: 20,
+        // Kecepatan rotasi dalam derajat per detik.
+        // Dikirim sebagai turn_rate_deg ke NavigationControl.send_velocity() selama maneuver.
+      },
+    ],
+  },
   {
     type: "FINISH",
     label: "Mission Complete",

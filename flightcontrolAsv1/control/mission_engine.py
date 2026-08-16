@@ -178,6 +178,9 @@ class MissionEngine:
                 print("[MissionEngine] Mission sudah RUNNING!")
                 return False
 
+            # Hentikan elapsed timer lama agar tidak ada thread ganda saat restart
+            self._stop_elapsed_timer()
+
             self._status = self.STATUS_RUNNING
             self._current_step_idx = 0
             self._buoy_pass_count = 0
@@ -187,6 +190,9 @@ class MissionEngine:
             self._last_goto_time = 0.0
             self._mission_start_time = time.time()
             self._elapsed_sec = 0
+            # Reset PRECISION_TURN state agar bisa dipakai ulang dari awal
+            self._turn_initial_heading = None
+            self._turn_target_heading  = None
 
             if hasattr(self.tracking_controller, 'reset'):
                 self.tracking_controller.reset()
@@ -326,6 +332,12 @@ class MissionEngine:
                         print("[MissionEngine] 🔄 Switch Flight Controller mode -> MANUAL for TRACKING_BUOY...")
                         self.asv.set_mode("MANUAL")
                 elif step_type in (self.STEP_TYPE_HOLD, self.STEP_TYPE_TAKE_IMAGE):
+                    # Pastikan mode GUIDED agar stop_movement() (send_velocity 0) efektif
+                    if self.asv and self.asv.is_connected():
+                        telemetry = self.asv.get_telemetry()
+                        if telemetry.mode != "GUIDED":
+                            print(f"[MissionEngine] 🔄 Switch mode → GUIDED untuk {step_type}...")
+                            self.asv.set_mode("GUIDED")
                     self.asv.stop_movement()
 
             # ---- TRACKING_BUOY ----
@@ -595,7 +607,13 @@ class MissionEngine:
             self._advance_step()
             return self.update_frame(frame, gate_x)
 
-        return 0.0, 0.0, "HOLD"
+        # Kirim perintah stop berulang setiap frame agar motor betul-betul berhenti
+        # (MAVLink GUIDED velocity = 0, tidak membutuhkan RC override)
+        if self.asv and self.asv.is_connected():
+            self.asv.stop_movement(silent=True)
+
+        remaining = max(0.0, duration - elapsed)
+        return 0.0, 0.0, f"HOLD | rem={remaining:.1f}s"
 
     # ------------------------------------------------------------------ #
     #  Dynamic Movement Handlers                                         #

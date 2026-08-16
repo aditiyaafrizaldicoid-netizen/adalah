@@ -37,6 +37,11 @@ class ASVController:
         self._manual_rc = ManualRCController(self.connection, ch_steering=1, ch_throttle=3)
         self._mission = MissionControl(self.connection)
 
+    @property
+    def nav(self) -> 'NavigationControl':
+        """Alias publik ke NavigationControl — dipakai oleh MissionEngine untuk send_velocity."""
+        return self._navigation
+
     # --- SIKLUS HIDUP KONEKSI ---
     def start(self):
         """Memulai background thread untuk koneksi MAVLink dan pembacaan telemetri."""
