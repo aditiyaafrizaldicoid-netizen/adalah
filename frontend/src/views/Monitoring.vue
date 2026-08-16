@@ -7,7 +7,7 @@ import BatteryWidget from "../components/monitoring/BatteryWidget.vue";
 import GpsWidget from "../components/monitoring/GpsWidget.vue";
 import NavAnalysis from "../components/monitoring/NavAnalysis.vue";
 import EngineMonitor from "../components/monitoring/EngineMonitor.vue";
-import CameraFeed from "../components/monitoring/CameraFeed.vue";
+import VideoCard from "../components/monitoring/VideoCard.vue";
 import TelemetryChart from "../components/monitoring/TelemetryChart.vue";
 import { Activity } from "lucide-vue-next";
 
@@ -61,10 +61,12 @@ const vessel = useVesselStore();
 
       <!-- Camera Feed -->
       <div class="col-span-12">
-        <CameraFeed
+        <VideoCard
           src="http://localhost:3000/api/v1/video/stream"
-          label="Primary Video Stream (Camera 0)"
-          :status="vessel.cameraConnected ? 'CONNECTED' : 'DISCONNECTED'"
+          title="PRIMARY CAMERA"
+          labelColor="teal"
+          aspect="aspect-video"
+          objectFit="object-contain"
         />
       </div>
 

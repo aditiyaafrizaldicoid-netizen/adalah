@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted, watch } from "vue";
+import { onMounted, onUnmounted, watch } from "vue";
 import { useVesselStore } from "@/stores/vesselStore";
 import { useMissionStore } from "@/stores/missionStore";
 import { useScoringStore } from "@/stores/scoringStore";
@@ -27,35 +27,12 @@ import MetricCard from "../components/ui/MetricCard.vue";
 import StatusBadge from "../components/ui/StatusBadge.vue";
 import ProgressBar from "../components/ui/ProgressBar.vue";
 import ArmingControl from "../components/monitoring/ArmingControl.vue";
+import VideoCard from "../components/monitoring/VideoCard.vue";
 
 const vessel = useVesselStore();
 const mission = useMissionStore();
 const scoring = useScoringStore();
 const wsStore = useWebsocketStore();
-
-const selectedRes = ref('640x480');
-const handleToggleRecord = () => {
-  const [w, h] = selectedRes.value.split('x');
-  wsStore.toggleRecording(parseInt(w), parseInt(h));
-};
-
-// ── Camera Stream Status ────────────────────────────────────────────
-// Frontend hanya menerima status koneksi dari Flight Controller via WebSocket / Telemetri.
-// Frontend TIDAK mengirim perintah emergency_stop balik ke Flight Controller.
-const lastFrameTime = ref(Date.now());
-const imgRef = ref(null);
-
-function onCameraLoad() {
-  lastFrameTime.value = Date.now();
-  if (!vessel.cameraConnected) {
-    vessel.cameraConnected = true;
-    vessel.clearWarning('CAMERA_LOST');
-  }
-}
-
-function onCameraError() {
-  vessel.cameraConnected = false;
-}
 </script>
 
 
@@ -232,84 +209,13 @@ function onCameraError() {
         </div> -->
 
         <!-- Video Stream -->
-        <div
-          class="glass-card relative overflow-hidden border border-(--border-subtle) rounded-xl bg-slate-900 flex items-center justify-center w-full aspect-video"
-        >
-          <img
-            ref="imgRef"
-            src="http://localhost:3000/api/v1/video/stream"
-            class="w-full h-full object-cover"
-            @load="onCameraLoad"
-            @error="onCameraError"
-          />
-          <!-- Camera Lost Overlay -->
-          <div
-            v-if="!vessel.cameraConnected"
-            class="absolute inset-0 bg-slate-950/90 text-slate-500 font-mono text-sm flex flex-col items-center justify-center gap-3"
-          >
-            <VideoOff class="w-10 h-10 text-danger/70 animate-pulse" />
-            <span class="animate-pulse tracking-widest text-danger/70 font-bold text-xs uppercase">NO VIDEO SIGNAL</span>
-            <span class="text-[10px] text-slate-600">Emergency stop sent to vessel</span>
-          </div>
-          <!-- Stream placeholder saat koneksi pertama (belum load / belum error) -->
-          <div
-            id="camera-placeholder"
-            class="absolute inset-0 text-slate-500 font-mono text-sm flex flex-col items-center justify-center"
-            style="display: none"
-          >
-            <span class="animate-pulse tracking-widest">NO VIDEO SIGNAL</span>
-          </div>
-          <!-- Video Overlay UI -->
-          <div class="absolute top-4 right-4 flex items-center gap-2 z-10">
-            <!-- Recording Indicator Badge -->
-            <span v-if="vessel.isRecording"
-              class="flex items-center gap-1.5 bg-red-600/90 text-white text-[10px] px-2.5 py-1 rounded font-black tracking-widest animate-pulse border border-red-400 shadow-lg">
-              <CircleDot class="w-3.5 h-3.5 text-white" />
-              REC {{ vessel.recordingResolution }}
-            </span>
-
-            <!-- Resolution Picker -->
-            <select v-if="!vessel.isRecording" v-model="selectedRes"
-              class="text-[10px] font-mono bg-black/80 border border-white/20 text-white rounded px-2 py-1 focus:outline-none opacity-80 hover:opacity-100 transition-opacity">
-              <option value="640x480">640x480 (SD)</option>
-              <option value="1280x720">1280x720 (HD)</option>
-              <option value="1920x1080">1920x1080 (FHD)</option>
-            </select>
-
-            <!-- Record Button -->
-            <button @click="handleToggleRecord"
-              :class="[
-                'px-3 py-1 rounded flex items-center gap-1.5 text-[10px] font-bold tracking-wider transition-all shadow-lg cursor-pointer',
-                vessel.isRecording 
-                  ? 'bg-red-600 text-white hover:bg-red-700 animate-pulse border border-red-400' 
-                  : 'bg-black/80 text-white border border-white/20 hover:bg-red-600 hover:text-white'
-              ]"
-              :title="vessel.isRecording ? 'Stop Recording Raw Stream' : 'Record Raw Stream (No Object Detection)'">
-              <VideoOff v-if="vessel.isRecording" class="w-3.5 h-3.5" />
-              <Video v-else class="w-3.5 h-3.5 text-red-500" />
-              <span>{{ vessel.isRecording ? 'STOP REC' : 'REC MP4' }}</span>
-            </button>
-
-            <span
-              class="bg-danger/80 text-white text-[10px] px-2 py-1 rounded font-bold animate-pulse tracking-widest"
-              >LIVE</span
-            >
-            <span
-              class="bg-black/50 backdrop-blur border border-white/10 text-white text-[10px] px-2 py-1 rounded font-mono tracking-widest"
-              >FPV CAM</span
-            >
-          </div>
-          <!-- Crosshair -->
-          <div
-            class="absolute inset-0 flex items-center justify-center pointer-events-none opacity-30"
-          >
-            <div class="w-8 h-px bg-white"></div>
-            <div class="h-8 w-px bg-white absolute"></div>
-            <div
-              class="w-12 h-12 border border-white rounded-full absolute"
-            ></div>
-          </div>
-        </div>
+        <VideoCard
+          src="http://localhost:3000/api/v1/video/stream"
+          title="FPV CAM"
+          labelColor="blue"
+          aspect="aspect-video"
+          objectFit="object-cover"
+        />
       </div>
 
       <!-- Right Sidebar: Arming Control + Alerts -->
