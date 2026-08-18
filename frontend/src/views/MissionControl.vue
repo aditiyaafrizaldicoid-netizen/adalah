@@ -62,7 +62,7 @@ async function handleSavePreset() {
 
 // Map icon string to Lucide component
 const iconMap = {
-  '⚡': Zap, '🎯': Cpu, '🧭': Navigation, '📷': Camera, '⚓': Anchor, '🏁': Flag
+  '⚡': Zap, '🎯': Cpu, '🧭': Navigation, '📷': Camera, '⚓': Anchor, '🏁': Flag, '🛟': ListOrdered
 };
 
 function getStatusColor(status) {
@@ -362,6 +362,10 @@ function getStepStatus(idx) {
                   {{ mission.currentStep.type }}
                   <span v-if="mission.currentStep.type === 'TRACKING_BUOY'">
                     | Pass: {{ mission.buoyPassCount }}/{{ mission.currentStep.pass_count }}
+                  </span>
+                  <span v-if="mission.currentStep.type === 'SEQUENTIAL_BUOY'">
+                    | Pair: <span class="text-teal-400 font-black">{{ mission.seqCurrentPair }}/{{ mission.currentStep.total_pairs }}</span>
+                    &nbsp;&bull;&nbsp;{{ mission.seqPairsCleared }} cleared
                   </span>
                 </div>
               </div>

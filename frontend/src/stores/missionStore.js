@@ -135,6 +135,25 @@ export const STEP_TYPES = [
       },
     ],
   },
+  // ── Sequential Multi-Pair Buoy ─────────────────────────────────────────
+  {
+    type: "SEQUENTIAL_BUOY",
+    label: "Sequential Buoy (Multi-Pair)",
+    icon: "🛟",
+    color: "text-teal-400",
+    bg: "bg-teal-500/10 border-teal-500/30",
+    fields: [
+      {
+        key: "total_pairs",
+        label: "Total Pairs (pasang buoy)",
+        type: "number",
+        default: 3,
+        // Jumlah pasang buoy (merah + hijau) yang harus dilewati secara berurutan.
+        // Pasangan diurutkan otomatis: yang paling dekat kamera = Pasangan 1.
+        // Engine: SEARCHING → LOCKED → TRANSITIONING → CLEARED, lalu lanjut pasangan berikutnya.
+      },
+    ],
+  },
   {
     type: "FINISH",
     label: "Mission Complete",
@@ -159,6 +178,10 @@ export const useMissionStore = defineStore("mission", () => {
   const totalSteps = ref(0);
   const elapsedSec = ref(0);
   const buoyPassCount = ref(0);
+
+  // Sequential Buoy live state (sync dari MISSION_STATUS payload)
+  const seqPairsCleared = ref(0);  // berapa pasang buoy yang sudah berhasil dilewati
+  const seqCurrentPair  = ref(1);  // pasangan yang sedang diincar (1-indexed)
 
   // Legacy (for timeline component compatibility)
   const currentStep_legacy = ref(1);
@@ -230,6 +253,8 @@ export const useMissionStore = defineStore("mission", () => {
       if (step) {
         if (step.type === "TRACKING_BUOY" && step.pass_count > 0) {
           subRatio = Math.min(buoyPassCount.value / step.pass_count, 1.0);
+        } else if (step.type === "SEQUENTIAL_BUOY" && step.total_pairs > 0) {
+          subRatio = Math.min(seqPairsCleared.value / step.total_pairs, 1.0);
         } else if (step.duration_sec && step.duration_sec > 0) {
           subRatio = Math.min(stepElapsedSec.value / step.duration_sec, 1.0);
         }
@@ -265,6 +290,12 @@ export const useMissionStore = defineStore("mission", () => {
       const passTarget = step.pass_count || 1;
       const passed = buoyPassCount.value || 0;
       return `[${stepNum}/${totalNum}] Buoy Gate ${passed}/${passTarget}`;
+    }
+
+    if (step.type === "SEQUENTIAL_BUOY") {
+      const pairTarget = step.total_pairs || 3;
+      const pairDone   = seqPairsCleared.value || 0;
+      return `[${stepNum}/${totalNum}] Sequential Buoy — Pair ${seqCurrentPair.value}/${pairTarget} (${pairDone} cleared)`;
     }
 
     if (step.duration_sec) {
@@ -378,6 +409,9 @@ export const useMissionStore = defineStore("mission", () => {
     buoyPassCount.value = payload.buoy_pass_count ?? 0;
     currentStep_legacy.value = (payload.current_step_idx ?? 0) + 1;
 
+    // Sequential Buoy live state — dikirim oleh MissionEngine.get_status_dict()
+    seqPairsCleared.value = payload.seq_pairs_cleared ?? 0;
+    seqCurrentPair.value  = payload.seq_current_pair  ?? 1;
 
     if (missionStatus.value === "RUNNING" && !_timerInterval) {
       _startLocalTimer();
@@ -488,6 +522,8 @@ export const useMissionStore = defineStore("mission", () => {
     // State
     steps, missionStatus, currentStepIdx, currentStep, totalSteps,
     elapsedSec, buoyPassCount, formattedTime, progressPct, activeStepLabel, waypoints, presets, dbPresets,
+    // Sequential Buoy live state
+    seqPairsCleared, seqCurrentPair,
     // Legacy
     missionSteps, currentStep_legacy,
     // Step builder
