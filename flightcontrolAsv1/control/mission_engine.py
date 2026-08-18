@@ -96,6 +96,22 @@ class MissionEngine:
     # Handle kasus bola tersisa terus terlihat (kapal tidak maju / false detection).
     GATE_TRANSITIONING_TIMEOUT_SEC = 4.0
 
+    # ── Sequential Buoy specific thresholds ────────────────────────────────
+    # Timeout (detik) maksimum di state SEARCHING pada SEQUENTIAL_BUOY sebelum
+    # dipaksa advance step. Handle kasus:
+    #   - Pasangan terakhir hanya 1 bola terlihat (tidak ada pasangan valid)
+    #   - Semua pasangan sudah terlewati tapi ada bola jauh yang masih terdeteksi
+    # Catatan: timer baru mulai berjalan SETELAH pasangan pertama dikunci (cleared > 0),
+    # sehingga tidak memotong waktu approach ke pasangan pertama.
+    SEQ_SEARCHING_TIMEOUT_SEC = 12.0
+
+    # Area rata-rata minimum (piksel²) untuk bola agar dianggap valid sebagai target LOCK.
+    # Pasangan buoy dengan area rata-rata < nilai ini dianggap terlalu jauh dan dilewati.
+    # Kapal tidak mengunci pasangan tersebut dan tetap maju menunggu bola yang lebih dekat.
+    # Default: ~40×40 px = 1600 px². Turunkan jika bola sering terlewat, naikkan jika
+    # kapal terlalu mudah terkunci pada bola jauh.
+    SEQ_MIN_PAIR_AREA_PX2 = 1600
+
     def __init__(self, asv, tracker, tracking_controller, speed_scheduler: Optional[SpeedScheduler] = None):
         self.asv = asv
         self.tracker = tracker
@@ -248,7 +264,8 @@ class MissionEngine:
                     and self._gate_state_entered_at > 0):
                 self._gate_pause_start = time.time()
             # Kompensasi juga untuk Sequential Buoy gate FSM
-            if (self._seq_gate_lock_state in (self.GATE_LOCKED, self.GATE_TRANSITIONING)
+            # Termasuk GATE_SEARCHING agar timeout SEARCHING tidak salah tembak saat resume.
+            if (self._seq_gate_lock_state in (self.GATE_SEARCHING, self.GATE_LOCKED, self.GATE_TRANSITIONING)
                     and self._seq_gate_state_entered_at > 0):
                 self._seq_gate_pause_start = time.time()
             self._stop_elapsed_timer()
@@ -958,10 +975,43 @@ class MissionEngine:
 
         if self._seq_gate_lock_state == self.GATE_SEARCHING:
             # ── SEARCHING ──────────────────────────────────────────────
+
+            # ── Timeout guard SEARCHING ────────────────────────────────
+            # Jika terlalu lama di SEARCHING tanpa pasangan valid terdeteksi,
+            # paksa advance ke step berikutnya. Ini menangani dua kasus:
+            #   (A) Pasangan terakhir hanya 1 bola terlihat → tidak pernah LOCK
+            #   (B) Semua pasangan sudah terlewati tapi ada bola jauh di frame
+            # Timer hanya aktif setelah minimal 1 pasangan cleared (self._seq_pairs_cleared > 0)
+            # agar tidak memotong waktu approach ke pasangan pertama.
+            if (self._seq_pairs_cleared > 0
+                    and self._seq_gate_state_entered_at > 0):
+                searching_elapsed = time.time() - self._seq_gate_state_entered_at
+                if searching_elapsed > self.SEQ_SEARCHING_TIMEOUT_SEC:
+                    print(f"[SEQ_BUOY] ⚠️ SEARCHING TIMEOUT ({searching_elapsed:.1f}s) setelah "
+                          f"{cleared}/{total_pairs} pasangan cleared → paksa advance step.")
+                    self._seq_pairs_cleared = total_pairs  # anggap semua pasangan selesai
+                    self._reset_sequential_state()
+                    self._advance_step()
+                    return 0.0, 0.0, "SEQUENTIAL_BUOY"
+
             # Sort HANYA di state SEARCHING untuk menentukan pasangan target.
             # Pasangan[0] = pasangan terdekat (area rata-rata bounding box terbesar).
-            pairs      = self._sort_buoy_pairs(detected_balls)
+            pairs       = self._sort_buoy_pairs(detected_balls)
             target_pair = pairs[0] if pairs else None
+
+            # ── Area Filter: abaikan pasangan yang terlalu jauh/kecil ───
+            # Jika rata-rata area bounding box kedua bola < SEQ_MIN_PAIR_AREA_PX2,
+            # bola dianggap terlalu jauh (bukan target valid). Kapal terus maju
+            # tanpa mengunci, sehingga tidak salah jalan ke bola yang sudah lewat
+            # atau bola dari misi lain yang terdeteksi dari jarak jauh.
+            if target_pair is not None:
+                r, g = target_pair
+                avg_area = (
+                    float((r[4] - r[2]) * (r[5] - r[3])) +
+                    float((g[4] - g[2]) * (g[5] - g[3]))
+                ) / 2.0
+                if avg_area < self.SEQ_MIN_PAIR_AREA_PX2:
+                    target_pair = None  # bola terlalu jauh → abaikan, jangan kunci
 
             red_ball   = target_pair[0] if target_pair else None
             green_ball = target_pair[1] if target_pair else None
@@ -969,7 +1019,7 @@ class MissionEngine:
             green_visible = green_ball is not None
 
             if red_visible and green_visible:
-                # Kedua bola terlihat → LOCK pasangan terdekat
+                # Kedua bola terlihat & area cukup besar → LOCK pasangan terdekat
                 self._seq_locked_red_pos   = (red_ball[0],   red_ball[1])
                 self._seq_locked_green_pos = (green_ball[0], green_ball[1])
                 self._seq_gate_lock_state  = self.GATE_LOCKED
@@ -982,13 +1032,14 @@ class MissionEngine:
                 label = f"SEQ_GATE:LOCKED | SEQUENTIAL_BUOY (pair {pair_label})"
                 return steer, throttle, label
             else:
-                # Belum ada pasangan lengkap → gunakan gate_x fallback dari tracker
+                # Belum ada pasangan valid (tidak ada / terlalu jauh) →
+                # gunakan gate_x fallback dari tracker dan tetap maju
                 if gate_x is not None:
                     steer = self.tracking_controller.compute_normalized_steering(gate_x)
                     label = f"SEQ_GATE:SEARCHING | SEQUENTIAL_BUOY (pair {pair_label})"
                     return steer, throttle, label
                 else:
-                    # Tidak ada target sama sekali → tetap maju lurus agar buoy masuk frame
+                    # Tidak ada target sama sekali → maju lurus agar buoy masuk frame
                     label = f"SEQ_GATE:SEARCHING (no target) | SEQUENTIAL_BUOY (pair {pair_label})"
                     return 0.0, throttle, label
 
@@ -1211,13 +1262,16 @@ class MissionEngine:
         Reset HANYA gate FSM Sequential Buoy (Level 2) ke SEARCHING.
         TIDAK mereset pair counter (_seq_pairs_cleared).
         Gunakan saat satu pasangan selesai dan siap mengincar pasangan berikutnya.
+
+        _seq_gate_state_entered_at di-set ke time.time() agar SEARCHING timeout
+        dapat mulai dihitung segera setelah transisi ke SEARCHING.
         """
         self._seq_gate_lock_state       = self.GATE_SEARCHING
         self._seq_locked_red_pos        = None
         self._seq_locked_green_pos      = None
         self._seq_missing_side          = None
         self._seq_transition_steer      = 0.0
-        self._seq_gate_state_entered_at = 0.0
+        self._seq_gate_state_entered_at = time.time()  # mulai timer SEARCHING timeout
         self._seq_gate_pause_start      = 0.0
 
     def _reset_sequential_state(self):
