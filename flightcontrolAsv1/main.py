@@ -156,13 +156,14 @@ def main():
             _osd["last_label"] = step_label  # simpan untuk OSD frame berikutnya
 
             if telemetry.is_armed:
-                if mode != "MANUAL":
-                    # Mode belum terkonfirmasi MANUAL dari telemetry — kirim tetap
-                    # agar tidak ada frame koreksi yang terlewat
-                    _throttled_print("mode_not_manual",
-                        f"[MISSION] ⚠️ Mode saat ini: {mode} (bukan MANUAL). RC override tetap dikirim.",
-                        interval=2.0)
-                asv.send_manual_rc_drive(steer_norm, thr_norm)
+                # Kirim RC override hanya untuk step MANUAL mode (steer/thr non-zero)
+                # atau saat mode MANUAL (termasuk fase transisi GUIDED→MANUAL).
+                # Untuk step GUIDED (CUSTOM_FORWARD, PRECISION_TURN, HOLD, dll.),
+                # gerakan dikontrol oleh send_velocity() — RC override tidak dikirim agar
+                # tidak menginterferensi command velocity (terutama jika GUIDED_OPTIONS=1).
+                needs_rc = (mode == "MANUAL") or (steer_norm != 0.0 or thr_norm != 0.0)
+                if needs_rc:
+                    asv.send_manual_rc_drive(steer_norm, thr_norm)
             else:
                 _throttled_print("mission_disarmed",
                     f"[MISSION] ⚠️ DISARMED — step '{step_label}' berjalan, gerakan ditahan.")

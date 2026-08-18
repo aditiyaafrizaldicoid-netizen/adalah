@@ -65,6 +65,7 @@ class MissionEngine:
     STEP_TYPE_CUSTOM_FORWARD = "CUSTOM_FORWARD"  # Maju lurus/serong dengan heading offset konstan
     STEP_TYPE_PRECISION_TURN = "PRECISION_TURN"  # Belok presisi ke sudut target
     STEP_TYPE_TIMED_STEER    = "TIMED_STEER"     # Manuver timer RC override (MANUAL mode)
+    STEP_TYPE_SEQUENTIAL_BUOY = "SEQUENTIAL_BUOY"  # Lewati N pasang buoy (hijau+merah) secara berurutan
 
     # Radius acceptance untuk GOTO_GPS: dianggap tiba jika < X meter dari target
     ARRIVAL_RADIUS_M = 2.0
@@ -125,6 +126,18 @@ class MissionEngine:
         # Digunakan untuk mengkompensasi durasi pause agar timeout tidak salah tembak saat resume.
         self._gate_pause_start: float = 0.0
 
+        # ---- SEQUENTIAL_BUOY state ----
+        # Semua variabel diberi prefix _seq_ agar tidak bersinggungan sama sekali
+        # dengan state TRACKING_BUOY (_gate_*) yang sudah ada.
+        self._seq_pairs_cleared: int = 0            # Pasangan yang sudah berhasil dilewati
+        self._seq_gate_lock_state: str = self.GATE_SEARCHING
+        self._seq_locked_red_pos: Optional[Tuple[int, int]] = None
+        self._seq_locked_green_pos: Optional[Tuple[int, int]] = None
+        self._seq_missing_side: Optional[str] = None
+        self._seq_transition_steer: float = 0.0
+        self._seq_gate_state_entered_at: float = 0.0
+        self._seq_gate_pause_start: float = 0.0
+
         # Waktu mulai step aktif & offset saat pause
         self._step_start_time: Optional[float] = None
         self._paused_step_elapsed: float = 0.0
@@ -168,6 +181,7 @@ class MissionEngine:
             self._status = self.STATUS_IDLE
             self._buoy_pass_count = 0
             self._reset_gate_state_machine()
+            self._reset_sequential_state()
             self._step_start_time = None
             self._paused_step_elapsed = 0.0
             print(f"[MissionEngine] Mission loaded: {len(self._steps)} steps.")
@@ -182,6 +196,7 @@ class MissionEngine:
                 self._current_step_idx = 0
                 self._buoy_pass_count = 0
                 self._reset_gate_state_machine()
+                self._reset_sequential_state()
                 self._step_start_time = None
                 self._paused_step_elapsed = 0.0
                 print(f"[MissionEngine] Mission loaded: {len(self._steps)} steps.")
@@ -200,6 +215,7 @@ class MissionEngine:
             self._current_step_idx = 0
             self._buoy_pass_count = 0
             self._reset_gate_state_machine()
+            self._reset_sequential_state()
             self._step_start_time = None
             self._paused_step_elapsed = 0.0
             self._last_goto_time = 0.0
@@ -231,6 +247,10 @@ class MissionEngine:
             if (self._gate_lock_state in (self.GATE_LOCKED, self.GATE_TRANSITIONING)
                     and self._gate_state_entered_at > 0):
                 self._gate_pause_start = time.time()
+            # Kompensasi juga untuk Sequential Buoy gate FSM
+            if (self._seq_gate_lock_state in (self.GATE_LOCKED, self.GATE_TRANSITIONING)
+                    and self._seq_gate_state_entered_at > 0):
+                self._seq_gate_pause_start = time.time()
             self._stop_elapsed_timer()
             self.asv.stop_movement()
             print(f"[MissionEngine] ⏸ MISSION PAUSED (Step elapsed: {self._paused_step_elapsed:.1f}s).")
@@ -249,6 +269,11 @@ class MissionEngine:
                 paused_duration = time.time() - self._gate_pause_start
                 self._gate_state_entered_at += paused_duration
                 self._gate_pause_start = 0.0
+            # Kompensasi juga untuk Sequential Buoy gate FSM
+            if self._seq_gate_pause_start > 0 and self._seq_gate_state_entered_at > 0:
+                paused_duration = time.time() - self._seq_gate_pause_start
+                self._seq_gate_state_entered_at += paused_duration
+                self._seq_gate_pause_start = 0.0
             self._start_elapsed_timer()
             print("[MissionEngine]  MISSION RESUMED.")
             self._broadcast_status()
@@ -272,6 +297,7 @@ class MissionEngine:
             self._paused_step_elapsed = 0.0
             self._elapsed_sec = 0
             self._reset_gate_state_machine()
+            self._reset_sequential_state()
             # Reset PRECISION_TURN state
             self._turn_initial_heading = None
             self._turn_target_heading  = None
@@ -319,6 +345,9 @@ class MissionEngine:
                 "step_elapsed_sec": max(0.0, step_elapsed),
                 "buoy_pass_count": self._buoy_pass_count,
                 "gate_lock_state": self._gate_lock_state,
+                "seq_current_pair": self._seq_pairs_cleared + 1,
+                "seq_pairs_cleared": self._seq_pairs_cleared,
+                "seq_gate_lock_state": self._seq_gate_lock_state,
             }
 
     # ------------------------------------------------------------------ #
@@ -361,6 +390,13 @@ class MissionEngine:
                     if self.asv and self.asv.is_connected() and self.asv.get_telemetry().mode != "MANUAL":
                         print("[MissionEngine] 🔄 Switch mode → MANUAL untuk TIMED_STEER...")
                         self.asv.set_mode("MANUAL")
+                elif step_type == self.STEP_TYPE_SEQUENTIAL_BUOY:
+                    if hasattr(self.tracking_controller, 'reset'):
+                        self.tracking_controller.reset()
+                    self._reset_sequential_state()
+                    if self.asv and self.asv.is_connected() and self.asv.get_telemetry().mode != "MANUAL":
+                        print("[MissionEngine] 🔄 Switch mode → MANUAL untuk SEQUENTIAL_BUOY...")
+                        self.asv.set_mode("MANUAL")
                 elif step_type in (self.STEP_TYPE_HOLD, self.STEP_TYPE_TAKE_IMAGE):
                     # Pastikan mode GUIDED agar stop_movement() (send_velocity 0) efektif
                     if self.asv and self.asv.is_connected():
@@ -369,6 +405,13 @@ class MissionEngine:
                             print(f"[MissionEngine] 🔄 Switch mode → GUIDED untuk {step_type}...")
                             self.asv.set_mode("GUIDED")
                     self.asv.stop_movement()
+                elif step_type in (self.STEP_TYPE_CUSTOM_FORWARD, self.STEP_TYPE_PRECISION_TURN):
+                    # Switch ke GUIDED dan lepaskan RC override dari step MANUAL sebelumnya
+                    if self.asv and self.asv.is_connected():
+                        if self.asv.get_telemetry().mode != "GUIDED":
+                            print(f"[MissionEngine] 🔄 Switch mode → GUIDED untuk {step_type}...")
+                            self.asv.set_mode("GUIDED")
+                        self.asv.release_rc()
 
             # ---- TRACKING_BUOY ----
             if step_type == self.STEP_TYPE_TRACKING_BUOY:
@@ -405,6 +448,10 @@ class MissionEngine:
             # ---- TIMED_STEER ----
             elif step_type == self.STEP_TYPE_TIMED_STEER:
                 return self._handle_timed_steer(step)
+
+            # ---- SEQUENTIAL_BUOY ----
+            elif step_type == self.STEP_TYPE_SEQUENTIAL_BUOY:
+                return self._handle_sequential_buoy(step, gate_x, detected_balls or {"red": [], "green": []})
 
             # ---- FINISH ----
             elif step_type == self.STEP_TYPE_FINISH:
@@ -725,15 +772,9 @@ class MissionEngine:
             self._advance_step()
             return 0.0, 0.0, "CUSTOM_FORWARD"
 
-        # Pastikan mode GUIDED
-        if self.asv and self.asv.is_connected():
-            telemetry = self.asv.get_telemetry()
-            if telemetry.mode != "GUIDED":
-                print("[MissionEngine] 🔄 Switch mode → GUIDED untuk CUSTOM_FORWARD...")
-                self.asv.set_mode("GUIDED")
-
         # Kirim perintah gerak: maju dengan yaw rate = heading_offset_deg
-        # NavigationControl.send_velocity() akan mengkonversi ke MAVLink (rad/s)
+        # Gerakan dikontrol oleh send_velocity() di mode GUIDED — bukan RC override.
+        # Mode switch sudah dilakukan di init block (step_start_time is None).
         self.asv.nav.send_velocity(
             forward_speed=speed_mps,
             turn_rate_deg=heading_offset_deg
@@ -743,7 +784,9 @@ class MissionEngine:
         offset_label = f"+{heading_offset_deg:.1f}°" if heading_offset_deg >= 0 else f"{heading_offset_deg:.1f}°"
         label = (f"CUSTOM_FORWARD | spd={speed_mps:.1f}m/s offset={offset_label} "
                  f"rem={remaining:.1f}s")
-        return 0.0, speed_mps, label
+        # Return (0.0, 0.0) — movement via send_velocity(), NOT RC override.
+        # main.py hanya kirim send_manual_rc_drive saat thr_norm > 0 atau mode MANUAL.
+        return 0.0, 0.0, label
 
     def _handle_precision_turn(self, step: Dict) -> Tuple[float, float, str]:
         """
@@ -791,12 +834,6 @@ class MissionEngine:
                   f"initial={self._turn_initial_heading:.1f}° "
                   f"target={self._turn_target_heading:.1f}° "
                   f"({turn_dir_label}, {abs(turn_angle_deg):.1f}°)")
-
-        # Pastikan mode GUIDED
-        if self.asv and self.asv.is_connected():
-            if getattr(telemetry, 'mode', 'GUIDED') != "GUIDED":
-                print("[MissionEngine] 🔄 Switch mode → GUIDED untuk PRECISION_TURN...")
-                self.asv.set_mode("GUIDED")
 
         # --- Hitung heading error (range -180..+180) ---
         if current_heading is None:
@@ -859,6 +896,298 @@ class MissionEngine:
         label = (f"TIMED_STEER {dir_label} | steer={steer:+.2f} thr={throttle:.2f} "
                  f"rem={remaining:.1f}s")
         return steer, throttle, label
+
+    # ------------------------------------------------------------------ #
+    #  Sequential Buoy Tracking Handlers                                 #
+    # ------------------------------------------------------------------ #
+
+    def _handle_sequential_buoy(self, step, gate_x: Optional[float], detected_balls: Dict):
+        """
+        Handle SEQUENTIAL_BUOY step.
+
+        Menavigasi kapal melewati `total_pairs` pasang buoy (hijau + merah) secara berurutan.
+        Pasangan diurutkan berdasarkan jarak terdekat ke kamera (bounding box terbesar = terdekat).
+
+        State Machine Dua Level:
+          Level 1 — Pair Sequencer: menentukan pasangan mana yang sedang diproses.
+          Level 2 — Gate FSM: SEARCHING → LOCKED → TRANSITIONING → CLEARED → (pair selesai)
+
+        Aturan transisi (sama dengan TRACKING_BUOY):
+          - Bola kiri (merah) hilang duluan → kapal condong ke KIRI
+          - Bola kanan (hijau) hilang duluan → kapal condong ke KANAN
+          - Kedua bola hilang → pasangan CLEARED, lanjut ke pasangan berikutnya
+
+        Format step:
+          { "type": "SEQUENTIAL_BUOY", "total_pairs": 3 }
+        """
+        total_pairs = int(step.get("total_pairs", 3))
+        throttle    = self.speed_scheduler.max_base_throttle
+        cleared     = self._seq_pairs_cleared
+        pair_num    = cleared + 1   # Display: pasangan yang sedang diincar (1-indexed)
+
+        # ── Cek kondisi step selesai ─────────────────────────────────────
+        if cleared >= total_pairs:
+            print(f"[SEQ_BUOY] ✅ Semua {total_pairs} pasangan berhasil dilewati!")
+            self._reset_sequential_state()
+            self._advance_step()
+            return 0.0, 0.0, "SEQUENTIAL_BUOY"
+
+        # ── Pastikan mode MANUAL ─────────────────────────────────────────
+        if self.asv and self.asv.is_connected() and self.asv.get_telemetry().mode != "MANUAL":
+            print("[MissionEngine] 🔄 Automatic mode switch to MANUAL for SEQUENTIAL_BUOY...")
+            self.asv.set_mode("MANUAL")
+
+        pair_label = f"{pair_num}/{total_pairs}"
+
+        # ── Sort semua bola terdeteksi menjadi pasangan ──────────────────
+        # Pasangan index-0 = paling dekat (area terbesar = pasangan yang harus dilewati sekarang)
+        pairs = self._sort_buoy_pairs(detected_balls)
+        target_pair = pairs[0] if pairs else None
+
+        red_ball   = target_pair[0] if target_pair else None
+        green_ball = target_pair[1] if target_pair else None
+        red_visible   = red_ball is not None
+        green_visible = green_ball is not None
+
+        # ══════════════════════════════════════════════════════════════════
+        #  GATE STATE MACHINE (Level 2) — menggunakan _seq_* state vars
+        #  DILARANG menggunakan _gate_* vars milik TRACKING_BUOY.
+        # ══════════════════════════════════════════════════════════════════
+
+        if self._seq_gate_lock_state == self.GATE_SEARCHING:
+            # ── SEARCHING ──────────────────────────────────────────────
+            if red_visible and green_visible:
+                self._seq_locked_red_pos   = (red_ball[0],   red_ball[1])
+                self._seq_locked_green_pos = (green_ball[0], green_ball[1])
+                self._seq_gate_lock_state  = self.GATE_LOCKED
+                self._seq_gate_state_entered_at = time.time()
+                print(f"[SEQ_GATE] SEARCHING → LOCKED "
+                      f"(pair {pair_label}, red={self._seq_locked_red_pos}, "
+                      f"green={self._seq_locked_green_pos})")
+                locked_mid_x = (self._seq_locked_red_pos[0] + self._seq_locked_green_pos[0]) // 2
+                steer = self.tracking_controller.compute_normalized_steering(locked_mid_x)
+                label = f"SEQ_GATE:LOCKED | SEQUENTIAL_BUOY (pair {pair_label})"
+                return steer, throttle, label
+            else:
+                # Belum ada pasangan → gunakan gate_x fallback dari tracker
+                if gate_x is not None:
+                    steer = self.tracking_controller.compute_normalized_steering(gate_x)
+                    label = f"SEQ_GATE:SEARCHING | SEQUENTIAL_BUOY (pair {pair_label})"
+                    return steer, throttle, label
+                else:
+                    label = f"SEQ_GATE:SEARCHING (no target) | SEQUENTIAL_BUOY (pair {pair_label})"
+                    return 0.0, throttle, label
+
+        elif self._seq_gate_lock_state == self.GATE_LOCKED:
+            # ── LOCKED ─────────────────────────────────────────────────
+            nearest_red   = self._find_nearest_ball(
+                detected_balls.get("red",   []), self._seq_locked_red_pos)
+            nearest_green = self._find_nearest_ball(
+                detected_balls.get("green", []), self._seq_locked_green_pos)
+
+            red_visible_locked   = nearest_red   is not None
+            green_visible_locked = nearest_green is not None
+
+            # ── Timeout guard ──────────────────────────────────────────
+            now = time.time()
+            locked_duration = now - self._seq_gate_state_entered_at
+            if locked_duration > self.GATE_LOCKED_TIMEOUT_SEC and red_visible_locked and green_visible_locked:
+                print(f"[SEQ_GATE] LOCKED TIMEOUT ({locked_duration:.1f}s) → SEARCHING (pair {pair_label})")
+                self._reset_sequential_gate_fsm()
+                label = f"SEQ_GATE:SEARCHING (timeout) | SEQUENTIAL_BUOY (pair {pair_label})"
+                return 0.0, throttle, label
+
+            if red_visible_locked and green_visible_locked:
+                # Kedua bola masih terlihat → update posisi & PID ke midpoint
+                self._seq_locked_red_pos   = (nearest_red[0],   nearest_red[1])
+                self._seq_locked_green_pos = (nearest_green[0], nearest_green[1])
+                locked_mid_x = (self._seq_locked_red_pos[0] + self._seq_locked_green_pos[0]) // 2
+                steer = self.tracking_controller.compute_normalized_steering(locked_mid_x)
+                label = f"SEQ_GATE:LOCKED | SEQUENTIAL_BUOY (pair {pair_label})"
+                return steer, throttle, label
+
+            elif not red_visible_locked and green_visible_locked:
+                # ★ Bola MERAH (kiri) hilang duluan → condong ke KIRI
+                self._seq_missing_side      = "left"
+                self._seq_gate_lock_state   = self.GATE_TRANSITIONING
+                self._seq_gate_state_entered_at = time.time()
+                self._seq_locked_green_pos  = (nearest_green[0], nearest_green[1])
+                adaptive_steer = self.tracking_controller.compute_normalized_steering(
+                    self._seq_locked_green_pos[0])
+                lean = -abs(self.TRANSITION_LEAN_MAGNITUDE)
+                self._seq_transition_steer  = min(adaptive_steer, lean)
+                print(f"[SEQ_GATE] LOCKED → TRANSITIONING "
+                      f"(pair {pair_label}, missing=LEFT/red, lean={self._seq_transition_steer:+.2f})")
+                label = f"SEQ_GATE:TRANSITIONING(←) | SEQUENTIAL_BUOY (pair {pair_label})"
+                return self._seq_transition_steer, throttle, label
+
+            elif red_visible_locked and not green_visible_locked:
+                # ★ Bola HIJAU (kanan) hilang duluan → condong ke KANAN
+                self._seq_missing_side      = "right"
+                self._seq_gate_lock_state   = self.GATE_TRANSITIONING
+                self._seq_gate_state_entered_at = time.time()
+                self._seq_locked_red_pos    = (nearest_red[0], nearest_red[1])
+                adaptive_steer = self.tracking_controller.compute_normalized_steering(
+                    self._seq_locked_red_pos[0])
+                lean = +abs(self.TRANSITION_LEAN_MAGNITUDE)
+                self._seq_transition_steer  = max(adaptive_steer, lean)
+                print(f"[SEQ_GATE] LOCKED → TRANSITIONING "
+                      f"(pair {pair_label}, missing=RIGHT/green, lean={self._seq_transition_steer:+.2f})")
+                label = f"SEQ_GATE:TRANSITIONING(→) | SEQUENTIAL_BUOY (pair {pair_label})"
+                return self._seq_transition_steer, throttle, label
+
+            else:
+                # Kedua bola hilang sekaligus dari LOCKED → langsung CLEARED
+                self._seq_gate_lock_state = self.GATE_CLEARED
+                print(f"[SEQ_GATE] LOCKED → CLEARED (pair {pair_label}, kedua bola hilang bersamaan)")
+                return self._handle_seq_gate_cleared(pair_num, total_pairs)
+
+        elif self._seq_gate_lock_state == self.GATE_TRANSITIONING:
+            # ── TRANSITIONING ──────────────────────────────────────────
+            # Tunggu bola yang TERSISA juga hilang.
+            # DILARANG KERAS memperhitungkan bola dari gerbang berikutnya.
+            remaining_visible = False
+
+            if self._seq_missing_side == "left":
+                # Bola merah sudah hilang, tinggal tunggu bola hijau juga hilang
+                nearest_green = self._find_nearest_ball(
+                    detected_balls.get("green", []), self._seq_locked_green_pos)
+                if nearest_green:
+                    remaining_visible = True
+                    self._seq_locked_green_pos = (nearest_green[0], nearest_green[1])
+                    adaptive_steer = self.tracking_controller.compute_normalized_steering(
+                        self._seq_locked_green_pos[0])
+                    self._seq_transition_steer = min(adaptive_steer, -abs(self.TRANSITION_LEAN_MAGNITUDE))
+
+            elif self._seq_missing_side == "right":
+                # Bola hijau sudah hilang, tinggal tunggu bola merah juga hilang
+                nearest_red = self._find_nearest_ball(
+                    detected_balls.get("red", []), self._seq_locked_red_pos)
+                if nearest_red:
+                    remaining_visible = True
+                    self._seq_locked_red_pos = (nearest_red[0], nearest_red[1])
+                    adaptive_steer = self.tracking_controller.compute_normalized_steering(
+                        self._seq_locked_red_pos[0])
+                    self._seq_transition_steer = max(adaptive_steer, +abs(self.TRANSITION_LEAN_MAGNITUDE))
+
+            # ── Timeout guard TRANSITIONING ────────────────────────────
+            transitioning_duration = time.time() - self._seq_gate_state_entered_at
+            if transitioning_duration > self.GATE_TRANSITIONING_TIMEOUT_SEC:
+                print(f"[SEQ_GATE] TRANSITIONING TIMEOUT ({transitioning_duration:.1f}s) "
+                      f"→ CLEARED (pair {pair_label}, paksa)")
+                self._seq_gate_lock_state = self.GATE_CLEARED
+                return self._handle_seq_gate_cleared(pair_num, total_pairs)
+
+            if remaining_visible:
+                lean_dir = "←" if self._seq_missing_side == "left" else "→"
+                label = (f"SEQ_GATE:TRANSITIONING({lean_dir}) "
+                         f"steer={self._seq_transition_steer:+.2f} "
+                         f"| SEQUENTIAL_BUOY (pair {pair_label})")
+                return self._seq_transition_steer, throttle, label
+            else:
+                self._seq_gate_lock_state = self.GATE_CLEARED
+                print(f"[SEQ_GATE] TRANSITIONING → CLEARED (pair {pair_label}, bola terakhir hilang)")
+                return self._handle_seq_gate_cleared(pair_num, total_pairs)
+
+        # Fallback safety
+        return 0.0, 0.0, f"SEQ_GATE:UNKNOWN | SEQUENTIAL_BUOY (pair {pair_label})"
+
+    def _handle_seq_gate_cleared(self, pair_num: int, total_pairs: int) -> Tuple[float, float, str]:
+        """
+        Dipanggil saat satu pasangan gate dinyatakan CLEARED.
+        Increment cleared counter, reset gate FSM level-2, siap untuk pasangan berikutnya.
+        """
+        self._seq_pairs_cleared += 1
+        new_cleared = self._seq_pairs_cleared
+
+        print(f"[SEQ_GATE] 🏁 Pair {pair_num} CLEARED! ({new_cleared}/{total_pairs} selesai)")
+        self._broadcast_status()
+        self._reset_sequential_gate_fsm()  # Reset gate FSM, tapi PERTAHANKAN pair counter
+
+        if new_cleared < total_pairs:
+            next_pair = new_cleared + 1
+            print(f"[SEQ_GATE] CLEARED → SEARCHING (siap mengincar pasangan {next_pair}/{total_pairs})")
+
+        label = f"SEQ_GATE:CLEARED ✅ | SEQUENTIAL_BUOY (pair {pair_num}/{total_pairs})"
+        # Berhenti sejenak agar tidak langsung menabrak pasangan berikutnya
+        return 0.0, 0.0, label
+
+    def _sort_buoy_pairs(self, detected_balls: Dict) -> List[Tuple]:
+        """
+        Mengurutkan buoy yang terdeteksi menjadi pasangan (merah, hijau) berdasarkan
+        estimasi jarak terdekat dari kamera (area bounding box terbesar = paling dekat).
+
+        BallTracker sudah mensort setiap class berdasarkan area terbesar (foreground-first).
+        Method ini melakukan greedy matching: red[i] ↔ green terdekat yang belum dipakai.
+
+        Returns:
+            List of (red_ball, green_ball) — max 3 pasangan, urut dari terdekat ke terjauh.
+            Setiap elemen adalah tuple (cx, cy, x1, y1, x2, y2).
+        """
+        red_list   = list(detected_balls.get("red",   []))  # sudah sorted foreground-first
+        green_list = list(detected_balls.get("green", []))  # sudah sorted foreground-first
+
+        if not red_list or not green_list:
+            return []
+
+        pairs: List[Tuple] = []
+        used_green: set = set()
+
+        # Greedy: untuk setiap bola merah (urut terdekat), cari bola hijau terdekat yang belum dipakai
+        for red in red_list[:3]:   # maksimal 3 bola merah
+            rx, ry = red[0], red[1]
+            best_green      = None
+            best_dist       = float("inf")
+            best_green_idx  = -1
+
+            for gi, grn in enumerate(green_list[:3]):  # maksimal 3 bola hijau
+                if gi in used_green:
+                    continue
+                gx, gy = grn[0], grn[1]
+                dist = math.hypot(rx - gx, ry - gy)
+                if dist < best_dist:
+                    best_dist      = dist
+                    best_green     = grn
+                    best_green_idx = gi
+
+            if best_green is not None:
+                used_green.add(best_green_idx)
+                pairs.append((red, best_green))
+
+            if len(pairs) >= 3:
+                break
+
+        # Sort pasangan berdasarkan rata-rata area bola (terbesar = terdekat = pasang 1)
+        def _pair_avg_area(pair: Tuple) -> float:
+            r, g = pair
+            area_r = (r[4] - r[2]) * (r[5] - r[3])  # (x2-x1)*(y2-y1)
+            area_g = (g[4] - g[2]) * (g[5] - g[3])
+            return (area_r + area_g) / 2.0
+
+        pairs.sort(key=_pair_avg_area, reverse=True)  # terbesar (terdekat) duluan
+        return pairs
+
+    def _reset_sequential_gate_fsm(self):
+        """
+        Reset HANYA gate FSM Sequential Buoy (Level 2) ke SEARCHING.
+        TIDAK mereset pair counter (_seq_pairs_cleared).
+        Gunakan saat satu pasangan selesai dan siap mengincar pasangan berikutnya.
+        """
+        self._seq_gate_lock_state       = self.GATE_SEARCHING
+        self._seq_locked_red_pos        = None
+        self._seq_locked_green_pos      = None
+        self._seq_missing_side          = None
+        self._seq_transition_steer      = 0.0
+        self._seq_gate_state_entered_at = 0.0
+        self._seq_gate_pause_start      = 0.0
+
+    def _reset_sequential_state(self):
+        """
+        Reset SEMUA state Sequential Buoy termasuk pair counter.
+        Gunakan saat mission dimulai, di-load, atau di-reset dari awal.
+        """
+        self._seq_pairs_cleared = 0
+        self._reset_sequential_gate_fsm()
 
     @staticmethod
     def _angular_diff(current_deg: float, target_deg: float) -> float:
