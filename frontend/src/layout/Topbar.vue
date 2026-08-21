@@ -109,9 +109,8 @@ onUnmounted(() => {
           'px-5 py-2 rounded-lg font-black text-xs flex items-center gap-2 transition-all active:scale-95 uppercase tracking-wider shadow-lg',
           isKillActive
             ? 'bg-orange-600 text-white cursor-not-allowed shadow-orange-600/30 animate-pulse'
-            : (mission.missionStatus === \'RUNNING\' || vessel.isArmed)
-              ? \'bg-danger hover:bg-red-600 text-white shadow-danger/30 animate-pulse\'
-              : \'bg-danger/80 hover:bg-danger text-white shadow-danger/20\'
+            : (mission.missionStatus === 'RUNNING' || vessel.isArmed) ? 'bg-danger hover:bg-red-600 text-white shadow-danger/30 animate-pulse'
+              : 'bg-danger/80 hover:bg-danger text-white shadow-danger/20'
         ]">
         <ShieldOff class="w-4 h-4" />
         {{ killLabel }}

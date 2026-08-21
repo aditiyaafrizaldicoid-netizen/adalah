@@ -112,6 +112,33 @@ class MissionEngine:
     # kapal terlalu mudah terkunci pada bola jauh.
     SEQ_MIN_PAIR_AREA_PX2 = 1600
 
+    # ── Pair Locking / False-Pairing Prevention (Sequential Buoy) ─────────
+    # Rasio area minimum (0..1) antara bola merah & hijau agar dianggap SATU pasangan
+    # yang valid saat SEARCHING. Dua bola dari gate yang sama berada kurang lebih pada
+    # jarak yang sama dari kamera → area bbox-nya mirip. Bola sisa Gate 1 (besar/dekat)
+    # yang kebetulan dekat secara piksel dengan bola Gate 2 (kecil/jauh) akan ditolak
+    # oleh filter ini karena rasio area-nya jauh di bawah threshold.
+    SEQ_PAIR_AREA_RATIO_MIN = 0.35
+
+    # Rasio area minimum (0..1) antara kandidat bola saat ini vs area bola yang terakhir
+    # dikunci (LOCKED/TRANSITIONING), untuk validasi identitas bola per-frame.
+    # Kapal terus mendekat ke Pasangan aktif → area bola yang benar TIDAK menyusut drastis
+    # antar-frame. Kandidat dengan area jauh lebih kecil (mis. bola Gate 2 yang jauh)
+    # ditolak meski jaraknya secara piksel masuk GATE_IDENTITY_MAX_DIST_PX.
+    SEQ_AREA_CONTINUITY_MIN_RATIO = 0.4
+
+    # Durasi (detik) bola tersisa harus TERUS-MENERUS tidak terdeteksi sebelum dianggap
+    # "confirmed hilang". Mencegah satu frame miss deteksi YOLO (flicker) langsung
+    # men-trigger CLEARED prematur → reset ke SEARCHING → salah pasang dengan gate lain.
+    SEQ_LOST_CONFIRM_SEC = 0.35
+
+    # Safety-net timeout (detik) TRANSITIONING: HANYA dipakai sebagai jaring pengaman
+    # terakhir jika bola tersisa TERUS terdeteksi tanpa henti (mis. false-positive statis)
+    # sehingga gate tidak pernah CLEARED secara normal. Nilainya sengaja jauh lebih besar
+    # dari waktu lintas gate normal agar TIDAK memaksa CLEARED saat kapal masih benar-benar
+    # melintasi pasangan aktif (sesuai aturan: unlock hanya jika kedua bola confirmed hilang).
+    SEQ_TRANSITIONING_SAFETY_TIMEOUT_SEC = 20.0
+
     def __init__(self, asv, tracker, tracking_controller, speed_scheduler: Optional[SpeedScheduler] = None):
         self.asv = asv
         self.tracker = tracker
@@ -149,10 +176,19 @@ class MissionEngine:
         self._seq_gate_lock_state: str = self.GATE_SEARCHING
         self._seq_locked_red_pos: Optional[Tuple[int, int]] = None
         self._seq_locked_green_pos: Optional[Tuple[int, int]] = None
+        # Area bbox (piksel²) terakhir dari bola yang dikunci — dipakai untuk validasi
+        # identitas per-frame (SEQ_AREA_CONTINUITY_MIN_RATIO) agar bola Gate berikutnya
+        # yang kebetulan dekat secara piksel tidak diambil-alih sebagai "bola yang sama".
+        self._seq_locked_red_area: Optional[float] = None
+        self._seq_locked_green_area: Optional[float] = None
         self._seq_missing_side: Optional[str] = None
         self._seq_transition_steer: float = 0.0
         self._seq_gate_state_entered_at: float = 0.0
         self._seq_gate_pause_start: float = 0.0
+        # Timestamp saat bola tersisa PERTAMA KALI tidak terdeteksi selama TRANSITIONING.
+        # None berarti bola tersisa masih terdeteksi kontinu. Dipakai untuk debounce
+        # SEQ_LOST_CONFIRM_SEC sebelum gate dinyatakan CLEARED ("confirmed hilang").
+        self._seq_missing_lost_since: Optional[float] = None
 
         # Waktu mulai step aktif & offset saat pause
         self._step_start_time: Optional[float] = None
@@ -291,6 +327,10 @@ class MissionEngine:
                 paused_duration = time.time() - self._seq_gate_pause_start
                 self._seq_gate_state_entered_at += paused_duration
                 self._seq_gate_pause_start = 0.0
+                # Geser juga timer debounce "confirmed hilang" agar durasi pause tidak
+                # ikut terhitung sebagai waktu bola tersisa tidak terdeteksi.
+                if self._seq_missing_lost_since is not None:
+                    self._seq_missing_lost_since += paused_duration
             self._start_elapsed_timer()
             print("[MissionEngine]  MISSION RESUMED.")
             self._broadcast_status()
@@ -937,9 +977,23 @@ class MissionEngine:
 
         Aturan Gate FSM (saat LOCKED / TRANSITIONING):
           Setelah pasangan dikunci, _sort_buoy_pairs() TIDAK dipanggil lagi.
-          Bola yang tersisa dilacak via _find_nearest_ball() terhadap posisi kunci terakhir,
-          identik dengan logika TRACKING_BUOY. Ini mencegah bola pasangan berikutnya
-          yang masuk frame mengganggu gate FSM yang sedang berjalan.
+          Bola yang tersisa dilacak via _find_nearest_ball() terhadap POSISI + AREA
+          kunci terakhir (SEQ_AREA_CONTINUITY_MIN_RATIO). Area di-cek karena bola gate
+          berikutnya lebih jauh dari kamera → bbox jelas lebih kecil, sehingga tidak bisa
+          diambil-alih sebagai identitas bola Pasangan 1 hanya karena kebetulan dekat
+          secara piksel. _sort_buoy_pairs() sendiri juga menolak pasangan merah-hijau
+          dengan rasio area timpang (SEQ_PAIR_AREA_RATIO_MIN) — mencegah bola sisa
+          Pasangan 1 (besar) dipasangkan dengan bola Pasangan 2 (kecil) saat SEARCHING.
+
+        Aturan "Confirmed Hilang" (syarat transisi ke pasangan berikutnya):
+          Gate baru dinyatakan CLEARED (unlock Pasangan 1 → siap lock Pasangan 2) jika
+          bola tersisa TIDAK terdeteksi selama SEQ_LOST_CONFIRM_SEC secara kontinu
+          (debounce, bukan cuma 1 frame miss YOLO). Selama menunggu, steer terakhir yang
+          diketahui (last known trajectory + lean paksa) tetap dipertahankan — TIDAK
+          pernah dihitung ulang dari bola pasangan lain. SEQ_TRANSITIONING_SAFETY_TIMEOUT_SEC
+          hanya jaring pengaman terakhir untuk kasus bola tersisa terus terdeteksi tanpa
+          henti (false-positive statis); nilainya sengaja besar agar TIDAK pernah memaksa
+          CLEARED saat kapal masih benar-benar melintasi pasangan aktif.
 
         Aturan transisi lean:
           - Bola kiri (merah) hilang duluan → kapal condong ke KIRI  (steer negatif)
@@ -1022,8 +1076,11 @@ class MissionEngine:
                 # Kedua bola terlihat & area cukup besar → LOCK pasangan terdekat
                 self._seq_locked_red_pos   = (red_ball[0],   red_ball[1])
                 self._seq_locked_green_pos = (green_ball[0], green_ball[1])
+                self._seq_locked_red_area   = self._bbox_area(red_ball)
+                self._seq_locked_green_area = self._bbox_area(green_ball)
                 self._seq_gate_lock_state  = self.GATE_LOCKED
                 self._seq_gate_state_entered_at = time.time()
+                self._seq_missing_lost_since = None
                 print(f"[SEQ_GATE] SEARCHING → LOCKED "
                       f"(pair {pair_label}, red={self._seq_locked_red_pos}, "
                       f"green={self._seq_locked_green_pos})")
@@ -1046,12 +1103,15 @@ class MissionEngine:
         elif self._seq_gate_lock_state == self.GATE_LOCKED:
             # ── LOCKED ─────────────────────────────────────────────────
             # Jangan panggil _sort_buoy_pairs() di sini.
-            # Gunakan _find_nearest_ball() terhadap posisi kunci agar bola dari
-            # pasangan berikutnya yang masuk frame tidak mengganggu gate FSM.
+            # Gunakan _find_nearest_ball() terhadap posisi & AREA kunci terakhir agar
+            # bola dari pasangan berikutnya (lebih jauh → bbox lebih kecil) yang masuk
+            # frame TIDAK diambil-alih sebagai identitas bola Pasangan 1 yang sedang dikunci.
             nearest_red   = self._find_nearest_ball(
-                detected_balls.get("red",   []), self._seq_locked_red_pos)
+                detected_balls.get("red",   []), self._seq_locked_red_pos,
+                self._seq_locked_red_area, self.SEQ_AREA_CONTINUITY_MIN_RATIO)
             nearest_green = self._find_nearest_ball(
-                detected_balls.get("green", []), self._seq_locked_green_pos)
+                detected_balls.get("green", []), self._seq_locked_green_pos,
+                self._seq_locked_green_area, self.SEQ_AREA_CONTINUITY_MIN_RATIO)
 
             red_visible_locked   = nearest_red   is not None
             green_visible_locked = nearest_green is not None
@@ -1066,9 +1126,11 @@ class MissionEngine:
                 return 0.0, throttle, label
 
             if red_visible_locked and green_visible_locked:
-                # Kedua bola masih terlihat → update posisi locked pair & PID ke midpoint
+                # Kedua bola masih terlihat → update posisi + area locked pair & PID ke midpoint
                 self._seq_locked_red_pos   = (nearest_red[0],   nearest_red[1])
                 self._seq_locked_green_pos = (nearest_green[0], nearest_green[1])
+                self._seq_locked_red_area   = self._bbox_area(nearest_red)
+                self._seq_locked_green_area = self._bbox_area(nearest_green)
                 locked_mid_x = (self._seq_locked_red_pos[0] + self._seq_locked_green_pos[0]) // 2
                 steer = self.tracking_controller.compute_normalized_steering(locked_mid_x)
                 label = f"SEQ_GATE:LOCKED | SEQUENTIAL_BUOY (pair {pair_label})"
@@ -1079,7 +1141,9 @@ class MissionEngine:
                 self._seq_missing_side      = "left"
                 self._seq_gate_lock_state   = self.GATE_TRANSITIONING
                 self._seq_gate_state_entered_at = time.time()
+                self._seq_missing_lost_since = None  # bola hijau tersisa baru saja, belum "hilang"
                 self._seq_locked_green_pos  = (nearest_green[0], nearest_green[1])
+                self._seq_locked_green_area = self._bbox_area(nearest_green)
                 # Steer adaptif ke bola hijau tersisa, dipaksa condong minimum ke kiri
                 adaptive_steer = self.tracking_controller.compute_normalized_steering(
                     self._seq_locked_green_pos[0])
@@ -1095,7 +1159,9 @@ class MissionEngine:
                 self._seq_missing_side      = "right"
                 self._seq_gate_lock_state   = self.GATE_TRANSITIONING
                 self._seq_gate_state_entered_at = time.time()
+                self._seq_missing_lost_since = None  # bola merah tersisa baru saja, belum "hilang"
                 self._seq_locked_red_pos    = (nearest_red[0], nearest_red[1])
+                self._seq_locked_red_area   = self._bbox_area(nearest_red)
                 # Steer adaptif ke bola merah tersisa, dipaksa condong minimum ke kanan
                 adaptive_steer = self.tracking_controller.compute_normalized_steering(
                     self._seq_locked_red_pos[0])
@@ -1114,18 +1180,24 @@ class MissionEngine:
 
         elif self._seq_gate_lock_state == self.GATE_TRANSITIONING:
             # ── TRANSITIONING ──────────────────────────────────────────
-            # Tunggu bola TERSISA (bukan yang hilang) juga hilang dari frame.
-            # DILARANG KERAS memperhitungkan bola dari pasangan berikutnya.
-            # Gunakan _find_nearest_ball() agar identitas bola tetap terjaga.
-            remaining_visible = False
+            # Tunggu bola TERSISA (bukan yang hilang) juga confirmed hilang dari frame,
+            # dengan debounce SEQ_LOST_CONFIRM_SEC (satu frame miss deteksi YOLO tidak
+            # langsung dianggap "hilang" — mencegah CLEARED prematur yang bisa membuka
+            # celah salah pasang dengan gate berikutnya di SEARCHING).
+            # DILARANG KERAS memperhitungkan bola dari pasangan berikutnya — pakai
+            # _find_nearest_ball() dengan area-gating agar identitas bola tetap terjaga.
+            now = time.time()
+            remaining_found_this_frame = False
 
             if self._seq_missing_side == "left":
                 # Bola merah sudah hilang → tunggu bola hijau juga hilang
                 nearest_green = self._find_nearest_ball(
-                    detected_balls.get("green", []), self._seq_locked_green_pos)
+                    detected_balls.get("green", []), self._seq_locked_green_pos,
+                    self._seq_locked_green_area, self.SEQ_AREA_CONTINUITY_MIN_RATIO)
                 if nearest_green:
-                    remaining_visible = True
+                    remaining_found_this_frame = True
                     self._seq_locked_green_pos = (nearest_green[0], nearest_green[1])
+                    self._seq_locked_green_area = self._bbox_area(nearest_green)
                     # Update steer adaptif: terus arahkan ke bola hijau tersisa + pertahankan lean kiri
                     adaptive_steer = self.tracking_controller.compute_normalized_steering(
                         self._seq_locked_green_pos[0])
@@ -1134,35 +1206,58 @@ class MissionEngine:
             elif self._seq_missing_side == "right":
                 # Bola hijau sudah hilang → tunggu bola merah juga hilang
                 nearest_red = self._find_nearest_ball(
-                    detected_balls.get("red", []), self._seq_locked_red_pos)
+                    detected_balls.get("red", []), self._seq_locked_red_pos,
+                    self._seq_locked_red_area, self.SEQ_AREA_CONTINUITY_MIN_RATIO)
                 if nearest_red:
-                    remaining_visible = True
+                    remaining_found_this_frame = True
                     self._seq_locked_red_pos = (nearest_red[0], nearest_red[1])
+                    self._seq_locked_red_area = self._bbox_area(nearest_red)
                     # Update steer adaptif: terus arahkan ke bola merah tersisa + pertahankan lean kanan
                     adaptive_steer = self.tracking_controller.compute_normalized_steering(
                         self._seq_locked_red_pos[0])
                     self._seq_transition_steer = max(adaptive_steer, +abs(self.TRANSITION_LEAN_MAGNITUDE))
 
-            # ── Timeout guard TRANSITIONING: paksa CLEARED jika terlalu lama ─
-            transitioning_duration = time.time() - self._seq_gate_state_entered_at
-            if transitioning_duration > self.GATE_TRANSITIONING_TIMEOUT_SEC:
-                print(f"[SEQ_GATE] TRANSITIONING TIMEOUT ({transitioning_duration:.1f}s) "
-                      f"→ CLEARED (pair {pair_label}, paksa)")
+            # ── Debounce "confirmed hilang" ────────────────────────────
+            if remaining_found_this_frame:
+                self._seq_missing_lost_since = None
+            elif self._seq_missing_lost_since is None:
+                self._seq_missing_lost_since = now
+
+            confirmed_lost = (
+                not remaining_found_this_frame
+                and self._seq_missing_lost_since is not None
+                and (now - self._seq_missing_lost_since) >= self.SEQ_LOST_CONFIRM_SEC
+            )
+
+            if confirmed_lost:
+                # Bola terakhir sudah TERKONFIRMASI hilang (bukan sekadar 1 frame miss)
+                # → pasangan CLEARED. Baru sekarang boleh unlock Pasangan 1 dan
+                # menjadikan Pasangan 2 target baru (syarat transisi terpenuhi).
+                self._seq_gate_lock_state = self.GATE_CLEARED
+                print(f"[SEQ_GATE] TRANSITIONING → CLEARED "
+                      f"(pair {pair_label}, bola terakhir confirmed hilang)")
+                return self._handle_seq_gate_cleared(pair_num, total_pairs)
+
+            # ── Safety-net timeout ──────────────────────────────────────
+            # HANYA jaring pengaman terakhir untuk kasus bola tersisa TERUS terdeteksi
+            # tanpa henti (mis. false-positive statis) sehingga gate tidak pernah CLEARED
+            # secara normal. Durasinya sengaja jauh lebih besar dari waktu lintas gate
+            # normal — TIDAK memaksa CLEARED saat kapal masih benar-benar melintasi
+            # pasangan aktif (sesuai aturan: unlock hanya jika kedua bola confirmed hilang).
+            transitioning_duration = now - self._seq_gate_state_entered_at
+            if transitioning_duration > self.SEQ_TRANSITIONING_SAFETY_TIMEOUT_SEC:
+                print(f"[SEQ_GATE] ⚠️ TRANSITIONING SAFETY TIMEOUT ({transitioning_duration:.1f}s) "
+                      f"→ CLEARED (pair {pair_label}, paksa — bola tersisa tak kunjung hilang)")
                 self._seq_gate_lock_state = self.GATE_CLEARED
                 return self._handle_seq_gate_cleared(pair_num, total_pairs)
 
-            if remaining_visible:
-                # Bola tersisa masih di frame → pertahankan manuver condong adaptif
-                lean_dir = "←" if self._seq_missing_side == "left" else "→"
-                label = (f"SEQ_GATE:TRANSITIONING({lean_dir}) "
-                         f"steer={self._seq_transition_steer:+.2f} "
-                         f"| SEQUENTIAL_BUOY (pair {pair_label})")
-                return self._seq_transition_steer, throttle, label
-            else:
-                # Bola terakhir juga hilang → pasangan CLEARED!
-                self._seq_gate_lock_state = self.GATE_CLEARED
-                print(f"[SEQ_GATE] TRANSITIONING → CLEARED (pair {pair_label}, bola terakhir hilang)")
-                return self._handle_seq_gate_cleared(pair_num, total_pairs)
+            # Bola tersisa masih ada di frame (atau baru hilang tapi belum confirmed) →
+            # pertahankan manuver condong adaptif / last-known trajectory.
+            lean_dir = "←" if self._seq_missing_side == "left" else "→"
+            label = (f"SEQ_GATE:TRANSITIONING({lean_dir}) "
+                     f"steer={self._seq_transition_steer:+.2f} "
+                     f"| SEQUENTIAL_BUOY (pair {pair_label})")
+            return self._seq_transition_steer, throttle, label
 
         # Fallback safety
         return 0.0, 0.0, f"SEQ_GATE:UNKNOWN | SEQUENTIAL_BUOY (pair {pair_label})"
@@ -1215,19 +1310,21 @@ class MissionEngine:
             return []
 
         # 1. Sort setiap class berdasarkan area bounding box (terbesar = paling dekat kamera)
-        def _ball_area(ball: Tuple) -> float:
-            return float((ball[4] - ball[2]) * (ball[5] - ball[3]))  # (x2-x1)*(y2-y1)
-
-        red_list   = sorted(raw_red[:3],   key=_ball_area, reverse=True)  # max 3 merah
-        green_list = sorted(raw_green[:3], key=_ball_area, reverse=True)  # max 3 hijau
+        red_list   = sorted(raw_red[:3],   key=self._bbox_area, reverse=True)  # max 3 merah
+        green_list = sorted(raw_green[:3], key=self._bbox_area, reverse=True)  # max 3 hijau
 
         pairs: List[Tuple] = []
         used_green: set = set()
 
         # 2. Greedy matching: untuk setiap bola merah (urut terdekat → terjauh),
-        #    cari bola hijau terdekat secara piksel yang belum dipakai.
+        #    cari bola hijau terdekat secara piksel yang belum dipakai — TAPI hanya
+        #    kandidat yang area-nya "sepadan" (SEQ_PAIR_AREA_RATIO_MIN) dengan bola
+        #    merah tsb. Dua bola dari gate yang sama berjarak kurang-lebih sama dari
+        #    kamera, jadi area bbox-nya mirip. Ini mencegah bola sisa Gate 1 (besar)
+        #    dipasangkan dengan bola Gate 2 (kecil/jauh) yang kebetulan dekat secara piksel.
         for red in red_list:
             rx, ry = red[0], red[1]
+            r_area = self._bbox_area(red)
             best_green     = None
             best_dist      = float("inf")
             best_green_idx = -1
@@ -1235,6 +1332,12 @@ class MissionEngine:
             for gi, grn in enumerate(green_list):
                 if gi in used_green:
                     continue
+                g_area = self._bbox_area(grn)
+                if r_area > 0 and g_area > 0:
+                    ratio = min(r_area, g_area) / max(r_area, g_area)
+                    if ratio < self.SEQ_PAIR_AREA_RATIO_MIN:
+                        # Area terlalu timpang → kemungkinan besar dari gate berbeda, abaikan.
+                        continue
                 gx, gy = grn[0], grn[1]
                 dist = math.hypot(rx - gx, ry - gy)
                 if dist < best_dist:
@@ -1252,7 +1355,7 @@ class MissionEngine:
         # 3. Sort akhir pasangan berdasarkan rata-rata area (terbesar = terdekat = Pasangan 1)
         def _pair_avg_area(pair: Tuple) -> float:
             r, g = pair
-            return (_ball_area(r) + _ball_area(g)) / 2.0
+            return (self._bbox_area(r) + self._bbox_area(g)) / 2.0
 
         pairs.sort(key=_pair_avg_area, reverse=True)
         return pairs
@@ -1269,10 +1372,13 @@ class MissionEngine:
         self._seq_gate_lock_state       = self.GATE_SEARCHING
         self._seq_locked_red_pos        = None
         self._seq_locked_green_pos      = None
+        self._seq_locked_red_area       = None
+        self._seq_locked_green_area     = None
         self._seq_missing_side          = None
         self._seq_transition_steer      = 0.0
         self._seq_gate_state_entered_at = time.time()  # mulai timer SEARCHING timeout
         self._seq_gate_pause_start      = 0.0
+        self._seq_missing_lost_since    = None
 
     def _reset_sequential_state(self):
         """
@@ -1311,10 +1417,28 @@ class MissionEngine:
         self._gate_state_entered_at = 0.0
         self._gate_pause_start     = 0.0
 
-    def _find_nearest_ball(self, balls: List[Tuple], locked_pos: Optional[Tuple[int, int]]) -> Optional[Tuple]:
+    @staticmethod
+    def _bbox_area(ball: Tuple) -> float:
+        """Area bounding box (piksel²) dari tuple (cx, cy, x1, y1, x2, y2)."""
+        return float((ball[4] - ball[2]) * (ball[5] - ball[3]))
+
+    def _find_nearest_ball(
+        self,
+        balls: List[Tuple],
+        locked_pos: Optional[Tuple[int, int]],
+        locked_area: Optional[float] = None,
+        min_area_ratio: Optional[float] = None,
+    ) -> Optional[Tuple]:
         """
         Temukan bola dari list yang paling dekat dengan locked_pos
         dan masih dalam threshold GATE_IDENTITY_MAX_DIST_PX.
+
+        Jika `locked_area` & `min_area_ratio` diberikan, kandidat yang area bbox-nya
+        jauh lebih kecil dari `locked_area` (rasio < min_area_ratio) DITOLAK meskipun
+        jaraknya secara piksel masuk threshold — ini mencegah bola dari gate lain
+        (lebih jauh dari kamera → bbox lebih kecil) diambil-alih sebagai identitas
+        bola yang sedang dikunci. Parameter opsional agar caller lama (TRACKING_BUOY)
+        tetap berperilaku sama persis tanpa perubahan.
 
         Returns: tuple (cx, cy, x1, y1, x2, y2) atau None jika tidak ada yang memenuhi threshold.
         """
@@ -1326,6 +1450,12 @@ class MissionEngine:
         lx, ly = locked_pos
 
         for ball in balls:
+            if locked_area is not None and min_area_ratio is not None and locked_area > 0:
+                ball_area = self._bbox_area(ball)
+                if (ball_area / locked_area) < min_area_ratio:
+                    # Bola jauh lebih kecil dari yang terakhir dikunci → kemungkinan besar
+                    # bukan bola yang sama (mis. bola gate berikutnya), abaikan sepenuhnya.
+                    continue
             cx, cy = ball[0], ball[1]
             dist = math.hypot(cx - lx, cy - ly)
             if dist < best_dist:

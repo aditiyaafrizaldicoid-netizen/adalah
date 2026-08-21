@@ -11,7 +11,7 @@ const props = defineProps({
     label: String,
     labelColor: { type: String, default: 'blue' },
     aspect: { type: String, default: 'aspect-video' },
-    objectFit: { type: String, default: 'object-contain' }
+    objectFit: { type: String, default: 'object-cover' }
 });
 
 const vessel = useVesselStore();
