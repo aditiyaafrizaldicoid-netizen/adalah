@@ -136,23 +136,17 @@ export const STEP_TYPES = [
     ],
   },
   // ── Sequential Multi-Pair Buoy ─────────────────────────────────────────
+  // Tidak ada field konfigurasi jumlah pasangan — engine berjalan otomatis
+  // sampai tidak ada lagi pasangan buoy (merah+hijau) yang terdeteksi di frame.
+  // Pasangan diurutkan otomatis: yang paling dekat kamera = Pasangan 1.
+  // Engine: SEARCHING → LOCKED → TRANSITIONING → CLEARED, lalu lanjut pasangan berikutnya.
   {
     type: "SEQUENTIAL_BUOY",
     label: "Sequential Buoy (Multi-Pair)",
     icon: "🛟",
     color: "text-teal-400",
     bg: "bg-teal-500/10 border-teal-500/30",
-    fields: [
-      {
-        key: "total_pairs",
-        label: "Total Pairs (pasang buoy)",
-        type: "number",
-        default: 3,
-        // Jumlah pasang buoy (merah + hijau) yang harus dilewati secara berurutan.
-        // Pasangan diurutkan otomatis: yang paling dekat kamera = Pasangan 1.
-        // Engine: SEARCHING → LOCKED → TRANSITIONING → CLEARED, lalu lanjut pasangan berikutnya.
-      },
-    ],
+    fields: [],
   },
   {
     type: "FINISH",
@@ -253,8 +247,6 @@ export const useMissionStore = defineStore("mission", () => {
       if (step) {
         if (step.type === "TRACKING_BUOY" && step.pass_count > 0) {
           subRatio = Math.min(buoyPassCount.value / step.pass_count, 1.0);
-        } else if (step.type === "SEQUENTIAL_BUOY" && step.total_pairs > 0) {
-          subRatio = Math.min(seqPairsCleared.value / step.total_pairs, 1.0);
         } else if (step.duration_sec && step.duration_sec > 0) {
           subRatio = Math.min(stepElapsedSec.value / step.duration_sec, 1.0);
         }
@@ -293,9 +285,8 @@ export const useMissionStore = defineStore("mission", () => {
     }
 
     if (step.type === "SEQUENTIAL_BUOY") {
-      const pairTarget = step.total_pairs || 3;
-      const pairDone   = seqPairsCleared.value || 0;
-      return `[${stepNum}/${totalNum}] Sequential Buoy — Pair ${seqCurrentPair.value}/${pairTarget} (${pairDone} cleared)`;
+      const pairDone = seqPairsCleared.value || 0;
+      return `[${stepNum}/${totalNum}] Sequential Buoy — Pair ${seqCurrentPair.value} (${pairDone} cleared)`;
     }
 
     if (step.duration_sec) {

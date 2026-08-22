@@ -364,7 +364,7 @@ function getStepStatus(idx) {
                     | Pass: {{ mission.buoyPassCount }}/{{ mission.currentStep.pass_count }}
                   </span>
                   <span v-if="mission.currentStep.type === 'SEQUENTIAL_BUOY'">
-                    | Pair: <span class="text-teal-400 font-black">{{ mission.seqCurrentPair }}/{{ mission.currentStep.total_pairs }}</span>
+                    | Pair: <span class="text-teal-400 font-black">{{ mission.seqCurrentPair }}</span>
                     &nbsp;&bull;&nbsp;{{ mission.seqPairsCleared }} cleared
                   </span>
                 </div>

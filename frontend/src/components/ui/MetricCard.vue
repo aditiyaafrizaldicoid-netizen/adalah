@@ -3,7 +3,7 @@ defineProps({
   label: String,
   value: [String, Number],
   unit: String,
-  icon: Object,
+  icon: [Object, Function],
   color: {
     type: String,
     default: 'primary'

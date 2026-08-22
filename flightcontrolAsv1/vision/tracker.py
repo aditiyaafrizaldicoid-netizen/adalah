@@ -1,8 +1,6 @@
 import cv2
 from ultralytics import YOLO
 
-from vision.ball_pairing import sort_ball_pairs
-
 
 class BallTracker:
     """
@@ -17,13 +15,6 @@ class BallTracker:
     COLOR_MIDPOINT    = (255, 0, 255)    # Titik tengah gate (magenta)
     COLOR_CENTER_LINE = (80, 80, 80)     # Garis tengah frame (abu-abu)
     COLOR_ERROR_LINE  = (255, 128, 0)    # Garis error (oranye)
-    COLOR_BALL_NUMBER_TEXT = (255, 255, 255)  # Teks nomor bola (putih)
-
-    # Rasio area minimum antara bola merah & hijau agar dianggap SATU pasangan valid
-    # untuk penomoran (1,2,3,4,...). Harus SAMA dengan MissionEngine.SEQ_PAIR_AREA_RATIO_MIN
-    # agar nomor yang ditampilkan di video 1:1 dengan pasangan yang benar-benar dipakai
-    # untuk navigasi — lihat vision/ball_pairing.py.
-    BALL_PAIR_MIN_AREA_RATIO = 0.35
 
     # Warna OSD untuk setiap gate state
     _GATE_STATE_COLORS = {
@@ -118,23 +109,6 @@ class BallTracker:
                 cv2.putText(frame, label, (x1, max(y1 - 10, 0)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-        # ---- Penomoran pasangan bola (1, 2, 3, 4, ...) di atas bounding box ----
-        # Dipakai operator untuk verifikasi VISUAL bahwa sistem memasangkan bola yang
-        # BENAR untuk hitung titik tengah (center point) navigasi — supaya kapal tidak
-        # salah arah akibat pasangan yang keliru (mis. bola sisa gate 1 kepasang dengan
-        # bola gate 2). Bola 1 & 2 = pasangan (gate) terdekat, bola 3 & 4 = pasangan
-        # berikutnya, dst. Urutan & aturan pairing-nya SAMA PERSIS dengan yang dipakai
-        # MissionEngine untuk SEQUENTIAL_BUOY (vision/ball_pairing.sort_ball_pairs) —
-        # hanya bola yang benar-benar membentuk pasangan valid yang diberi nomor; bola
-        # tanpa pasangan (mis. hanya 1 warna terdeteksi) tidak dinomori.
-        numbered_pairs = sort_ball_pairs(
-            red_balls, green_balls,
-            min_area_ratio=self.BALL_PAIR_MIN_AREA_RATIO, max_pairs=3
-        )
-        for pair_idx, (red_ball, green_ball) in enumerate(numbered_pairs):
-            self._draw_ball_number(frame, red_ball,   pair_idx * 2 + 1, self.COLOR_RED_BALL)
-            self._draw_ball_number(frame, green_ball, pair_idx * 2 + 2, self.COLOR_GREEN_BALL)
-
         # ---- Hitung midpoint gate murni (hanya untuk fallback visual) ----
         gate_center_x = None
         gate_center_y = None
@@ -210,35 +184,3 @@ class BallTracker:
             "green": sorted_green,  # list (cx, cy, x1, y1, x2, y2), sorted foreground-first
         }
         return frame, gate_center_x, gate_center_y, detected_balls
-
-    @classmethod
-    def _draw_ball_number(cls, frame, ball, number: int, color):
-        """
-        Gambar badge nomor (angka besar dengan latar warna solid) TEPAT DI ATAS
-        bounding box sebuah bola — dipakai untuk penomoran pasangan (1,2,3,4,...).
-
-        :param ball:  Tuple (cx, cy, x1, y1, x2, y2) dari bola yang akan diberi nomor.
-        :param number: Nomor urut bola (1-indexed).
-        :param color:  Warna latar badge (BGR) — dipakai warna kelas bola (merah/hijau)
-                        agar mudah dibedakan dari label "class conf" yang sudah ada.
-        """
-        _cx, _cy, x1, y1, x2, y2 = ball
-        text = str(number)
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.9
-        thickness = 2
-
-        (text_w, text_h), _ = cv2.getTextSize(text, font, font_scale, thickness)
-        badge_h = text_h + 12
-        badge_w = text_w + 16
-
-        # Posisikan badge tepat di atas box, dengan sedikit gap. Jika box terlalu
-        # dekat ke tepi atas frame, badge digeser turun agar tidak terpotong.
-        badge_bottom = max(y1 - 4, badge_h)
-        badge_top = badge_bottom - badge_h
-        badge_left = x1
-        badge_right = x1 + badge_w
-
-        cv2.rectangle(frame, (badge_left, badge_top), (badge_right, badge_bottom), color, -1)
-        cv2.putText(frame, text, (badge_left + 8, badge_bottom - 6),
-                    font, font_scale, cls.COLOR_BALL_NUMBER_TEXT, thickness, cv2.LINE_AA)

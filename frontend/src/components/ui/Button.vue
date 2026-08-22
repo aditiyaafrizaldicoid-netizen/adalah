@@ -4,7 +4,7 @@ defineProps({
   size: { type: String, default: 'md' }, // sm, md, lg
   loading: Boolean,
   disabled: Boolean,
-  icon: Object
+  icon: [Object, Function]
 });
 </script>
 
