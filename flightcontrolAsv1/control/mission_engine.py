@@ -113,19 +113,43 @@ class MissionEngine:
     SEQ_MIN_PAIR_AREA_PX2 = 1600
 
     # ── Pair Locking / False-Pairing Prevention (Sequential Buoy) ─────────
+    # Arena Sequential Buoy berbentuk LENGKUNG/ARC (gate-gate tersusun sepanjang
+    # kurva, bukan garis lurus) dengan gate yang bisa berdekatan secara fisik —
+    # sehingga "area bbox besar = pasti gate saat ini" TIDAK selalu berlaku semulus
+    # arena garis lurus. Threshold di bawah ini sengaja dibuat KETAT (rawan
+    # false-REJECT, bukan false-ACCEPT) karena konsekuensi keduanya asimetris:
+    # false-reject cuma bikin re-lock lebih cepat (aman), false-accept bikin
+    # kapal menabrak bola gate lain (bahaya).
+
     # Rasio area minimum (0..1) antara bola merah & hijau agar dianggap SATU pasangan
     # yang valid saat SEARCHING. Dua bola dari gate yang sama berada kurang lebih pada
     # jarak yang sama dari kamera → area bbox-nya mirip. Bola sisa Gate 1 (besar/dekat)
     # yang kebetulan dekat secara piksel dengan bola Gate 2 (kecil/jauh) akan ditolak
     # oleh filter ini karena rasio area-nya jauh di bawah threshold.
-    SEQ_PAIR_AREA_RATIO_MIN = 0.35
+    SEQ_PAIR_AREA_RATIO_MIN = 0.5
 
     # Rasio area minimum (0..1) antara kandidat bola saat ini vs area bola yang terakhir
     # dikunci (LOCKED/TRANSITIONING), untuk validasi identitas bola per-frame.
     # Kapal terus mendekat ke Pasangan aktif → area bola yang benar TIDAK menyusut drastis
     # antar-frame. Kandidat dengan area jauh lebih kecil (mis. bola Gate 2 yang jauh)
-    # ditolak meski jaraknya secara piksel masuk GATE_IDENTITY_MAX_DIST_PX.
-    SEQ_AREA_CONTINUITY_MIN_RATIO = 0.4
+    # ditolak meski jaraknya secara piksel masuk SEQ_IDENTITY_MAX_DIST_PX.
+    SEQ_AREA_CONTINUITY_MIN_RATIO = 0.55
+
+    # Jarak maksimum (piksel) untuk pelacakan identitas bola per-frame KHUSUS
+    # SEQUENTIAL_BUOY — LEBIH KETAT dari GATE_IDENTITY_MAX_DIST_PX (300px) milik
+    # TRACKING_BUOY, karena SEQUENTIAL_BUOY punya BANYAK gate yang bisa berdekatan
+    # di arena melengkung, sehingga radius pelacakan yang longgar berisiko
+    # "melompat" ke bola gate lain yang kebetulan masuk radius.
+    SEQ_IDENTITY_MAX_DIST_PX = 150
+
+    # Radius (piksel) & durasi (detik) "zona larangan" di sekitar posisi terakhir
+    # sepasang bola yang BARU SAJA dinyatakan CLEARED. Selama cooldown ini, bola
+    # apa pun yang terdeteksi dekat posisi tsb DIABAIKAN sepenuhnya dari kandidat
+    # pairing SEARCHING — mencegah residual/ghost detection dari gate yang baru
+    # dilewati (atau bola gate berikutnya yang kebetulan sangat dekat secara
+    # piksel) langsung ke-pairing salah begitu FSM kembali ke SEARCHING.
+    SEQ_CLEARED_EXCLUSION_RADIUS_PX = 150
+    SEQ_CLEARED_EXCLUSION_SEC = 2.0
 
     # Durasi (detik) bola tersisa harus TERUS-MENERUS tidak terdeteksi sebelum dianggap
     # "confirmed hilang". Mencegah satu frame miss deteksi YOLO (flicker) langsung
@@ -189,6 +213,18 @@ class MissionEngine:
         # None berarti bola tersisa masih terdeteksi kontinu. Dipakai untuk debounce
         # SEQ_LOST_CONFIRM_SEC sebelum gate dinyatakan CLEARED ("confirmed hilang").
         self._seq_missing_lost_since: Optional[float] = None
+
+        # Posisi terakhir sepasang bola yang BARU SAJA di-CLEARED (sebelum unlock) &
+        # kapan itu terjadi — dipakai _filter_recently_cleared() untuk membuat "zona
+        # larangan" sementara (SEQ_CLEARED_EXCLUSION_SEC) di SEARCHING, agar residual
+        # detection dari gate yang baru dilewati tidak langsung ke-pairing salah
+        # dengan bola gate berikutnya. SENGAJA TIDAK direset oleh
+        # _reset_sequential_gate_fsm() — harus tetap hidup melewati transisi
+        # CLEARED → SEARCHING agar zona larangan benar-benar berlaku di SEARCHING
+        # berikutnya. Hanya direset penuh oleh _reset_sequential_state().
+        self._seq_recently_cleared_red_pos: Optional[Tuple[int, int]] = None
+        self._seq_recently_cleared_green_pos: Optional[Tuple[int, int]] = None
+        self._seq_recently_cleared_at: float = 0.0
 
         # Waktu mulai step aktif & offset saat pause
         self._step_start_time: Optional[float] = None
@@ -1056,9 +1092,13 @@ class MissionEngine:
                     self._advance_step()
                     return 0.0, 0.0, "SEQUENTIAL_BUOY"
 
+            # Buang dulu bola yang dekat posisi pasangan yang BARU SAJA CLEARED
+            # (zona larangan sementara, lihat _filter_recently_cleared) sebelum pairing.
+            searchable_balls = self._filter_recently_cleared(detected_balls)
+
             # Sort HANYA di state SEARCHING untuk menentukan pasangan target.
             # Pasangan[0] = pasangan terdekat (area rata-rata bounding box terbesar).
-            pairs       = self._sort_buoy_pairs(detected_balls)
+            pairs       = self._sort_buoy_pairs(searchable_balls)
             target_pair = pairs[0] if pairs else None
 
             # ── Area Filter: abaikan pasangan yang terlalu jauh/kecil ───
@@ -1116,10 +1156,12 @@ class MissionEngine:
             # frame TIDAK diambil-alih sebagai identitas bola Pasangan 1 yang sedang dikunci.
             nearest_red   = self._find_nearest_ball(
                 detected_balls.get("red",   []), self._seq_locked_red_pos,
-                self._seq_locked_red_area, self.SEQ_AREA_CONTINUITY_MIN_RATIO)
+                self._seq_locked_red_area, self.SEQ_AREA_CONTINUITY_MIN_RATIO,
+                max_dist_px=self.SEQ_IDENTITY_MAX_DIST_PX)
             nearest_green = self._find_nearest_ball(
                 detected_balls.get("green", []), self._seq_locked_green_pos,
-                self._seq_locked_green_area, self.SEQ_AREA_CONTINUITY_MIN_RATIO)
+                self._seq_locked_green_area, self.SEQ_AREA_CONTINUITY_MIN_RATIO,
+                max_dist_px=self.SEQ_IDENTITY_MAX_DIST_PX)
 
             red_visible_locked   = nearest_red   is not None
             green_visible_locked = nearest_green is not None
@@ -1201,7 +1243,8 @@ class MissionEngine:
                 # Bola merah sudah hilang → tunggu bola hijau juga hilang
                 nearest_green = self._find_nearest_ball(
                     detected_balls.get("green", []), self._seq_locked_green_pos,
-                    self._seq_locked_green_area, self.SEQ_AREA_CONTINUITY_MIN_RATIO)
+                    self._seq_locked_green_area, self.SEQ_AREA_CONTINUITY_MIN_RATIO,
+                    max_dist_px=self.SEQ_IDENTITY_MAX_DIST_PX)
                 if nearest_green:
                     remaining_found_this_frame = True
                     self._seq_locked_green_pos = (nearest_green[0], nearest_green[1])
@@ -1216,7 +1259,8 @@ class MissionEngine:
                 # Bola hijau sudah hilang → tunggu bola merah juga hilang
                 nearest_red = self._find_nearest_ball(
                     detected_balls.get("red", []), self._seq_locked_red_pos,
-                    self._seq_locked_red_area, self.SEQ_AREA_CONTINUITY_MIN_RATIO)
+                    self._seq_locked_red_area, self.SEQ_AREA_CONTINUITY_MIN_RATIO,
+                    max_dist_px=self.SEQ_IDENTITY_MAX_DIST_PX)
                 if nearest_red:
                     remaining_found_this_frame = True
                     self._seq_locked_red_pos = (nearest_red[0], nearest_red[1])
@@ -1290,6 +1334,13 @@ class MissionEngine:
         else:
             print(f"[SEQ_GATE] 🏁 Pair {pair_num} CLEARED! ({new_cleared}/{total_pairs} selesai)")
         self._broadcast_status()
+
+        # Simpan posisi terakhir pasangan yang baru CLEARED SEBELUM di-reset, sebagai
+        # "zona larangan" sementara untuk SEARCHING berikutnya (lihat _filter_recently_cleared).
+        self._seq_recently_cleared_red_pos   = self._seq_locked_red_pos
+        self._seq_recently_cleared_green_pos = self._seq_locked_green_pos
+        self._seq_recently_cleared_at        = time.time()
+
         self._reset_sequential_gate_fsm()  # Reset gate FSM, tapi PERTAHANKAN pair counter
 
         if auto_mode or new_cleared < total_pairs:
@@ -1321,6 +1372,43 @@ class MissionEngine:
         raw_green = list(detected_balls.get("green", []))
         return sort_ball_pairs(raw_red, raw_green, min_area_ratio=self.SEQ_PAIR_AREA_RATIO_MIN, max_pairs=3)
 
+    def _filter_recently_cleared(self, detected_balls: Dict) -> Dict:
+        """
+        Buang bola yang terdeteksi dekat posisi terakhir pasangan yang BARU SAJA
+        CLEARED (dalam SEQ_CLEARED_EXCLUSION_SEC terakhir), sebelum diberikan ke
+        _sort_buoy_pairs() saat SEARCHING.
+
+        Kenapa perlu: begitu FSM kembali ke SEARCHING, _sort_buoy_pairs() mem-pairing
+        ULANG dari nol tanpa memori — jika ada residual/ghost detection dari gate yang
+        BARU dilewati (atau bola gate berikutnya kebetulan sangat dekat secara piksel
+        di arena yang melengkung), ia bisa langsung ke-pairing salah dengan bola gate
+        berikutnya pada frame PERTAMA setelah CLEARED. Zona larangan sementara ini
+        memberi jeda singkat agar kapal benar-benar bergerak menjauh dari posisi lama
+        sebelum area itu diikutsertakan lagi sebagai kandidat pairing.
+
+        Setelah SEQ_CLEARED_EXCLUSION_SEC berlalu, filter ini tidak berpengaruh
+        (mengembalikan detected_balls apa adanya).
+        """
+        if (self._seq_recently_cleared_at <= 0
+                or (time.time() - self._seq_recently_cleared_at) > self.SEQ_CLEARED_EXCLUSION_SEC):
+            return detected_balls
+
+        def _far_enough(ball: Tuple, excluded_pos: Optional[Tuple[int, int]]) -> bool:
+            if excluded_pos is None:
+                return True
+            dist = math.hypot(ball[0] - excluded_pos[0], ball[1] - excluded_pos[1])
+            return dist > self.SEQ_CLEARED_EXCLUSION_RADIUS_PX
+
+        filtered_red = [
+            b for b in detected_balls.get("red", [])
+            if _far_enough(b, self._seq_recently_cleared_red_pos)
+        ]
+        filtered_green = [
+            b for b in detected_balls.get("green", [])
+            if _far_enough(b, self._seq_recently_cleared_green_pos)
+        ]
+        return {"red": filtered_red, "green": filtered_green}
+
     def _reset_sequential_gate_fsm(self):
         """
         Reset HANYA gate FSM Sequential Buoy (Level 2) ke SEARCHING.
@@ -1348,6 +1436,12 @@ class MissionEngine:
         """
         self._seq_pairs_cleared = 0
         self._reset_sequential_gate_fsm()
+        # Reset zona larangan "recently cleared" — TIDAK direset oleh
+        # _reset_sequential_gate_fsm() (lihat komentar di __init__), harus
+        # dibersihkan eksplisit di sini agar tidak ada residu antar-mission.
+        self._seq_recently_cleared_red_pos   = None
+        self._seq_recently_cleared_green_pos = None
+        self._seq_recently_cleared_at        = 0.0
 
     @staticmethod
     def _angular_diff(current_deg: float, target_deg: float) -> float:
@@ -1407,16 +1501,22 @@ class MissionEngine:
         locked_pos: Optional[Tuple[int, int]],
         locked_area: Optional[float] = None,
         min_area_ratio: Optional[float] = None,
+        max_dist_px: Optional[float] = None,
     ) -> Optional[Tuple]:
         """
         Temukan bola dari list yang paling dekat dengan locked_pos
-        dan masih dalam threshold GATE_IDENTITY_MAX_DIST_PX.
+        dan masih dalam threshold jarak (default GATE_IDENTITY_MAX_DIST_PX).
 
         Jika `locked_area` & `min_area_ratio` diberikan, kandidat yang area bbox-nya
         jauh lebih kecil dari `locked_area` (rasio < min_area_ratio) DITOLAK meskipun
         jaraknya secara piksel masuk threshold — ini mencegah bola dari gate lain
         (lebih jauh dari kamera → bbox lebih kecil) diambil-alih sebagai identitas
-        bola yang sedang dikunci. Parameter opsional agar caller lama (TRACKING_BUOY)
+        bola yang sedang dikunci.
+
+        `max_dist_px` opsional meng-override threshold jarak default
+        (GATE_IDENTITY_MAX_DIST_PX) — dipakai SEQUENTIAL_BUOY dengan radius LEBIH
+        KETAT (SEQ_IDENTITY_MAX_DIST_PX) karena arena-nya bisa punya banyak gate
+        berdekatan. Semua parameter opsional agar caller lama (TRACKING_BUOY)
         tetap berperilaku sama persis tanpa perubahan.
 
         Returns: tuple (cx, cy, x1, y1, x2, y2) atau None jika tidak ada yang memenuhi threshold.
@@ -1427,6 +1527,7 @@ class MissionEngine:
         best = None
         best_dist = float("inf")
         lx, ly = locked_pos
+        dist_threshold = max_dist_px if max_dist_px is not None else self.GATE_IDENTITY_MAX_DIST_PX
 
         for ball in balls:
             if locked_area is not None and min_area_ratio is not None and locked_area > 0:
@@ -1441,7 +1542,7 @@ class MissionEngine:
                 best_dist = dist
                 best = ball
 
-        if best_dist <= self.GATE_IDENTITY_MAX_DIST_PX:
+        if best_dist <= dist_threshold:
             return best
         return None  # Bola terlalu jauh → bola gerbang lain, abaikan
 
