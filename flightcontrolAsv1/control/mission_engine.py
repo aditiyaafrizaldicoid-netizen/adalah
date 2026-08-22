@@ -1014,10 +1014,15 @@ class MissionEngine:
         Step SELALU berjalan sampai TIDAK ADA lagi pasangan buoy yang terdeteksi di frame:
         begitu SEARCHING tidak menemukan pasangan valid sama sekali selama
         SEQ_SEARCHING_TIMEOUT_SEC berturut-turut (setelah minimal 1 pasangan berhasil
-        dilewati), step dianggap selesai — course dianggap sudah habis. Bola yang
-        terdeteksi tapi terlalu JAUH/kecil (area bbox < SEQ_MIN_PAIR_AREA_PX2) TIDAK
-        dianggap target misi — diabaikan sepenuhnya, kapal tetap maju menunggu bola yang
-        cukup dekat.
+        dilewati), step dianggap selesai — course dianggap sudah habis. Pasangan yang
+        terdeteksi tapi masih terlalu JAUH/kecil untuk DIKUNCI (area bbox <
+        SEQ_MIN_PAIR_AREA_PX2) TIDAK langsung di-LOCK, tapi tetap dipakai sebagai target
+        approach sementara (steer menuju midpoint-nya) SELAMA sudah lolos safeguard
+        rasio-area & lebar-maksimum di _sort_buoy_pairs(). Fallback `gate_x` mentah dari
+        tracker (tanpa safeguard apa pun) HANYA dipakai kalau benar-benar tidak ada
+        kandidat pasangan yang lolos safeguard sama sekali — sebelumnya kapal langsung
+        lompat ke fallback ini begitu pasangan belum cukup besar, yang terbukti di
+        lapangan bisa menyeret kapal ke arah salah karena fallback itu tidak dijaga.
 
         State Machine Dua Level:
           Level 1 — Pair Sequencer : menentukan pasangan mana yang sedang diproses.
@@ -1137,9 +1142,25 @@ class MissionEngine:
                 label = f"SEQ_GATE:LOCKED | SEQUENTIAL_BUOY (pair {pair_label})"
                 return steer, throttle, label
             else:
-                # Belum ada pasangan valid (tidak ada / terlalu jauh) →
-                # gunakan gate_x fallback dari tracker dan tetap maju
-                if gate_x is not None:
+                # Belum cukup besar/dekat untuk DIKUNCI, TAPI `pairs` (sebelum filter
+                # area) mungkin masih berisi kandidat yang SUDAH lolos safeguard
+                # rasio-area & lebar-maksimum (_sort_buoy_pairs) — cuma belum lolos
+                # SEQ_MIN_PAIR_AREA_PX2 (masih agak jauh). PRIORITASKAN kandidat aman
+                # ini sebagai target approach, JANGAN langsung lompat ke `gate_x`
+                # mentah dari tracker (itu TIDAK punya pengaman rasio-area/lebar-
+                # maksimum sama sekali, sehingga bisa menyambungkan bola dari gate
+                # yang salah dan menyeret kapal ke arah yang keliru saat SEARCHING
+                # berlangsung lama — ini yang terjadi & diamati langsung di lapangan).
+                if pairs:
+                    approach_r, approach_g = pairs[0]
+                    approach_mid_x = (approach_r[0] + approach_g[0]) // 2
+                    steer = self.tracking_controller.compute_normalized_steering(approach_mid_x)
+                    label = f"SEQ_GATE:SEARCHING (approaching) | SEQUENTIAL_BUOY (pair {pair_label})"
+                    return steer, throttle, label
+                elif gate_x is not None:
+                    # Tidak ada kandidat pasangan yang aman sama sekali → fallback
+                    # visual dari tracker (kasar, tanpa safeguard, tapi lebih baik
+                    # daripada diam total saat benar-benar tidak ada bola berpasangan).
                     steer = self.tracking_controller.compute_normalized_steering(gate_x)
                     label = f"SEQ_GATE:SEARCHING | SEQUENTIAL_BUOY (pair {pair_label})"
                     return steer, throttle, label
