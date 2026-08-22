@@ -119,9 +119,19 @@ class MissionEngine:
     # Area rata-rata minimum (piksel²) untuk bola agar dianggap valid sebagai target LOCK.
     # Pasangan buoy dengan area rata-rata < nilai ini dianggap terlalu jauh dan dilewati.
     # Kapal tidak mengunci pasangan tersebut dan tetap maju menunggu bola yang lebih dekat.
-    # Default: ~40×40 px = 1600 px². Turunkan jika bola sering terlewat, naikkan jika
-    # kapal terlalu mudah terkunci pada bola jauh.
-    SEQ_MIN_PAIR_AREA_PX2 = 1600
+    # DINAIKKAN dari 1600 (~40×40px) ke 4000 (~63×63px) — dikonfirmasi langsung di
+    # lapangan (arena danau terbuka) bahwa 1600 masih terlalu longgar: kapal masih
+    # menganggap cluster buoy yang JAUH (di seberang danau) sebagai target valid.
+    # Turunkan lagi jika bola dekat jadi sering terlewat, naikkan jika kapal masih
+    # tertarik ke bola jauh.
+    SEQ_MIN_PAIR_AREA_PX2 = 4000
+
+    # Durasi (detik) maksimum kapal boleh maju lurus TANPA melihat kandidat pasangan
+    # ATAU fallback gate_x sama sekali ("buta total"). Setelah durasi ini terlampaui,
+    # kapal STOP (throttle=0) alih-alih terus maju buta — mencegah menabrak
+    # tembok/keluar arena saat benar-benar tidak ada bola di frame. Dikonfirmasi
+    # langsung di lapangan: tanpa batas ini, kapal bisa maju lurus TANPA HENTI.
+    SEQ_BLIND_SEARCH_TIMEOUT_SEC = 5.0
 
     # Jarak PIKSEL maksimum antara bola merah & hijau agar dianggap SATU gate yang
     # sama. Ditemukan lewat pengecekan frame kamera live: kalau di frame cuma ada
@@ -239,6 +249,13 @@ class MissionEngine:
         # None berarti bola tersisa masih terdeteksi kontinu. Dipakai untuk debounce
         # SEQ_LOST_CONFIRM_SEC sebelum gate dinyatakan CLEARED ("confirmed hilang").
         self._seq_missing_lost_since: Optional[float] = None
+
+        # Timestamp saat SEARCHING PERTAMA KALI tidak melihat kandidat apa pun sama
+        # sekali (tidak ada pasangan aman, tidak ada gate_x fallback). None berarti
+        # masih ada sinyal (kandidat atau fallback). Dipakai SEQ_BLIND_SEARCH_TIMEOUT_SEC
+        # agar kapal TIDAK maju lurus tanpa batas waktu saat benar-benar tidak melihat
+        # bola apa pun — mencegah menabrak tembok/keluar arena.
+        self._seq_blind_search_since: Optional[float] = None
 
         # Posisi terakhir sepasang bola yang BARU SAJA di-CLEARED (sebelum unlock) &
         # kapan itu terjadi — dipakai _filter_recently_cleared() untuk membuat "zona
@@ -1134,6 +1151,7 @@ class MissionEngine:
                 self._seq_gate_lock_state  = self.GATE_LOCKED
                 self._seq_gate_state_entered_at = time.time()
                 self._seq_missing_lost_since = None
+                self._seq_blind_search_since = None
                 print(f"[SEQ_GATE] SEARCHING → LOCKED "
                       f"(pair {pair_label}, red={self._seq_locked_red_pos}, "
                       f"green={self._seq_locked_green_pos})")
@@ -1152,6 +1170,8 @@ class MissionEngine:
                 # yang salah dan menyeret kapal ke arah yang keliru saat SEARCHING
                 # berlangsung lama — ini yang terjadi & diamati langsung di lapangan).
                 if pairs:
+                    # Ada sinyal (kandidat aman atau fallback kasar) → reset timer "buta".
+                    self._seq_blind_search_since = None
                     approach_r, approach_g = pairs[0]
                     approach_mid_x = (approach_r[0] + approach_g[0]) // 2
                     steer = self.tracking_controller.compute_normalized_steering(approach_mid_x)
@@ -1161,11 +1181,27 @@ class MissionEngine:
                     # Tidak ada kandidat pasangan yang aman sama sekali → fallback
                     # visual dari tracker (kasar, tanpa safeguard, tapi lebih baik
                     # daripada diam total saat benar-benar tidak ada bola berpasangan).
+                    self._seq_blind_search_since = None
                     steer = self.tracking_controller.compute_normalized_steering(gate_x)
                     label = f"SEQ_GATE:SEARCHING | SEQUENTIAL_BUOY (pair {pair_label})"
                     return steer, throttle, label
                 else:
-                    # Tidak ada target sama sekali → maju lurus agar buoy masuk frame
+                    # Tidak ada target SAMA SEKALI (tidak ada kandidat, tidak ada gate_x).
+                    # Beri jeda singkat maju lurus (SEQ_BLIND_SEARCH_TIMEOUT_SEC) agar
+                    # buoy sempat masuk kembali ke frame kalau memang cuma sesaat hilang.
+                    # SETELAH itu, STOP majunya (throttle=0) — JANGAN terus maju buta
+                    # tanpa batas waktu. Sebelumnya kapal bisa maju lurus TERUS-MENERUS
+                    # tanpa henti saat tidak ada bola sama sekali di frame, sampai
+                    # menabrak tembok atau keluar arena (ditemukan & dikonfirmasi
+                    # langsung di lapangan).
+                    now = time.time()
+                    if self._seq_blind_search_since is None:
+                        self._seq_blind_search_since = now
+                    blind_duration = now - self._seq_blind_search_since
+                    if blind_duration > self.SEQ_BLIND_SEARCH_TIMEOUT_SEC:
+                        label = (f"SEQ_GATE:SEARCHING (blind {blind_duration:.1f}s, HOLD) "
+                                 f"| SEQUENTIAL_BUOY (pair {pair_label})")
+                        return 0.0, 0.0, label
                     label = f"SEQ_GATE:SEARCHING (no target) | SEQUENTIAL_BUOY (pair {pair_label})"
                     return 0.0, throttle, label
 
@@ -1430,6 +1466,7 @@ class MissionEngine:
         self._seq_gate_state_entered_at = time.time()  # mulai timer SEARCHING timeout
         self._seq_gate_pause_start      = 0.0
         self._seq_missing_lost_since    = None
+        self._seq_blind_search_since    = None
 
     def _reset_sequential_state(self):
         """
