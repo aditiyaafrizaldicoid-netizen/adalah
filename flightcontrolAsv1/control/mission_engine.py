@@ -123,6 +123,21 @@ class MissionEngine:
     # kapal terlalu mudah terkunci pada bola jauh.
     SEQ_MIN_PAIR_AREA_PX2 = 1600
 
+    # Jarak PIKSEL maksimum antara bola merah & hijau agar dianggap SATU gate yang
+    # sama. Ditemukan lewat pengecekan frame kamera live: kalau di frame cuma ada
+    # SATU bola merah (atau hijau), filter rasio area saja TIDAK cukup — bola itu
+    # akan selalu "terpilih" sebagai pasangan terdekat meski jaraknya sudah hampir
+    # selebar frame kamera (mis. cluster bola hijau di kiri, satu bola merah jauh
+    # di kanan). Gate asli selalu berdekatan secara piksel; pasangan yang melebar
+    # seperti ini BUKAN gate valid dan menghasilkan titik tengah yang salah arah.
+    # Nilai 200px dikalibrasi dari frame kamera live sungguhan (bukan tebakan): kasus
+    # false-pair nyata yang ditemukan berjarak ~280px (frame width 640px). 200px
+    # memberi margin aman di bawah itu. KEMUNGKINAN BESAR PERLU DIKALIBRASI ULANG
+    # setelah lebih banyak data uji lapangan (jarak kamera-ke-buoy mempengaruhi
+    # lebar gate asli dalam piksel — makin dekat kamera, makin lebar gate asli
+    # tampak, sehingga threshold ini bisa jadi perlu dinaikkan atau dibuat dinamis).
+    SEQ_MAX_PAIR_WIDTH_PX = 200
+
     # ── Pair Locking / False-Pairing Prevention (Sequential Buoy) ─────────
     # Arena Sequential Buoy berbentuk LENGKUNG/ARC (gate-gate tersusun sepanjang
     # kurva, bukan garis lurus) dengan gate yang bisa berdekatan secara fisik —
@@ -1322,11 +1337,8 @@ class MissionEngine:
         Mengurutkan buoy yang terdeteksi menjadi pasangan (merah, hijau) berdasarkan
         estimasi jarak terdekat dari kamera (area bounding box terbesar = paling dekat).
 
-        Delegasi ke vision.ball_pairing.sort_ball_pairs() — algoritma pairing yang SAMA
-        PERSIS juga dipakai BallTracker untuk menomori bola di OSD video (1, 2, 3, 4, ...)
-        sehingga penomoran yang dilihat operator selalu konsisten dengan pasangan yang
-        benar-benar dipakai MissionEngine untuk menghitung titik tengah (center point)
-        navigasi — lihat vision/ball_pairing.py untuk detail algoritma.
+        Delegasi ke vision.ball_pairing.sort_ball_pairs() — lihat vision/ball_pairing.py
+        untuk detail algoritma pairing (rasio area + jarak piksel maksimum).
 
         Returns:
             List of (red_ball, green_ball) — max 3 pasangan, urut dari terdekat ke terjauh.
@@ -1334,7 +1346,12 @@ class MissionEngine:
         """
         raw_red   = list(detected_balls.get("red",   []))
         raw_green = list(detected_balls.get("green", []))
-        return sort_ball_pairs(raw_red, raw_green, min_area_ratio=self.SEQ_PAIR_AREA_RATIO_MIN, max_pairs=3)
+        return sort_ball_pairs(
+            raw_red, raw_green,
+            min_area_ratio=self.SEQ_PAIR_AREA_RATIO_MIN,
+            max_pairs=3,
+            max_pair_width_px=self.SEQ_MAX_PAIR_WIDTH_PX,
+        )
 
     def _filter_recently_cleared(self, detected_balls: Dict) -> Dict:
         """

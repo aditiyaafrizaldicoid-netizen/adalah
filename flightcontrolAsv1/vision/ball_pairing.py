@@ -31,6 +31,7 @@ def sort_ball_pairs(
     green_balls: List[Ball],
     min_area_ratio: float = 0.35,
     max_pairs: int = 3,
+    max_pair_width_px: float = None,
 ) -> List[Tuple[Ball, Ball]]:
     """
     Urutkan & pasangkan bola merah-hijau menjadi pasangan gate, terdekat ke kamera
@@ -45,12 +46,21 @@ def sort_ball_pairs(
          area bbox-nya mirip; rasio yang timpang menandakan kedua bola kemungkinan
          besar berasal dari gate/jarak yang BERBEDA (mis. bola sisa gate sebelumnya
          yang kebetulan dekat secara piksel dengan bola gate berikutnya).
-      4. Sort akhir pasangan berdasarkan rata-rata area (terbesar = terdekat = Pasangan 1).
+      4. Tolak kandidat pasangan yang jarak pikselnya > max_pair_width_px (jika diisi).
+         PENTING: filter rasio area di langkah 3 TIDAK cukup untuk kasus hanya ADA
+         SATU bola merah (atau hijau) di frame — "terdekat" di antara satu kandidat
+         selalu "dipilih" walau jaraknya secara fisik tidak masuk akal untuk satu
+         gate (mis. satu bola merah di ujung kanan frame, cluster bola hijau di
+         ujung kiri — bukan pasangan gate yang sama, hanya kebetulan warna berbeda
+         yang sama-sama terlihat). Gate asli (dua bola penanda satu passage) selalu
+         relatif berdekatan secara piksel; pasangan yang melebar hampir selebar
+         frame BUKAN gate valid, walau lolos filter rasio area.
+      5. Sort akhir pasangan berdasarkan rata-rata area (terbesar = terdekat = Pasangan 1).
 
     Returns:
         List (red_ball, green_ball), urut dari pasangan terdekat ke terjauh.
         Maksimum `max_pairs` pasangan. List kosong jika salah satu warna tidak ada
-        bola sama sekali, atau tidak ada kandidat pasangan yang lolos filter area.
+        bola sama sekali, atau tidak ada kandidat pasangan yang lolos filter.
     """
     if not red_balls or not green_balls:
         return []
@@ -79,6 +89,10 @@ def sort_ball_pairs(
                     continue
             gx, gy = grn[0], grn[1]
             dist = math.hypot(rx - gx, ry - gy)
+            if max_pair_width_px is not None and dist > max_pair_width_px:
+                # Terlalu jauh secara piksel untuk jadi satu gate yang sama -> abaikan,
+                # meski ini satu-satunya kandidat hijau yang tersedia.
+                continue
             if dist < best_dist:
                 best_dist = dist
                 best_green = grn
