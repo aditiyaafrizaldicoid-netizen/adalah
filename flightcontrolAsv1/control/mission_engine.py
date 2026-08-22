@@ -43,6 +43,7 @@ from typing import Optional, List, Dict, Any, Tuple
 
 
 from control.speed_scheduler import SpeedScheduler
+from vision.ball_pairing import sort_ball_pairs
 
 
 class MissionEngine:
@@ -1306,17 +1307,11 @@ class MissionEngine:
         Mengurutkan buoy yang terdeteksi menjadi pasangan (merah, hijau) berdasarkan
         estimasi jarak terdekat dari kamera (area bounding box terbesar = paling dekat).
 
-        Algoritma:
-          1. Sort bola merah berdasarkan area bounding box (terbesar = terdekat duluan).
-          2. Sort bola hijau berdasarkan area bounding box (terbesar = terdekat duluan).
-          3. Greedy matching: untuk setiap bola merah (urut dari terdekat),
-             temukan bola hijau yang belum dipakai dengan jarak piksel terdekat.
-          4. Sort akhir pasangan berdasarkan rata-rata area (double-check),
-             sehingga Pasangan 1 = terdekat ke kamera, Pasangan 2 = berikutnya, dst.
-
-        BallTracker.process_frame() sudah mensort setiap class berdasarkan area
-        (foreground-first), namun sort eksplisit di sini memastikan konsistensi
-        meski tracker berubah di masa depan.
+        Delegasi ke vision.ball_pairing.sort_ball_pairs() — algoritma pairing yang SAMA
+        PERSIS juga dipakai BallTracker untuk menomori bola di OSD video (1, 2, 3, 4, ...)
+        sehingga penomoran yang dilihat operator selalu konsisten dengan pasangan yang
+        benar-benar dipakai MissionEngine untuk menghitung titik tengah (center point)
+        navigasi — lihat vision/ball_pairing.py untuk detail algoritma.
 
         Returns:
             List of (red_ball, green_ball) — max 3 pasangan, urut dari terdekat ke terjauh.
@@ -1324,60 +1319,7 @@ class MissionEngine:
         """
         raw_red   = list(detected_balls.get("red",   []))
         raw_green = list(detected_balls.get("green", []))
-
-        if not raw_red or not raw_green:
-            return []
-
-        # 1. Sort setiap class berdasarkan area bounding box (terbesar = paling dekat kamera)
-        red_list   = sorted(raw_red[:3],   key=self._bbox_area, reverse=True)  # max 3 merah
-        green_list = sorted(raw_green[:3], key=self._bbox_area, reverse=True)  # max 3 hijau
-
-        pairs: List[Tuple] = []
-        used_green: set = set()
-
-        # 2. Greedy matching: untuk setiap bola merah (urut terdekat → terjauh),
-        #    cari bola hijau terdekat secara piksel yang belum dipakai — TAPI hanya
-        #    kandidat yang area-nya "sepadan" (SEQ_PAIR_AREA_RATIO_MIN) dengan bola
-        #    merah tsb. Dua bola dari gate yang sama berjarak kurang-lebih sama dari
-        #    kamera, jadi area bbox-nya mirip. Ini mencegah bola sisa Gate 1 (besar)
-        #    dipasangkan dengan bola Gate 2 (kecil/jauh) yang kebetulan dekat secara piksel.
-        for red in red_list:
-            rx, ry = red[0], red[1]
-            r_area = self._bbox_area(red)
-            best_green     = None
-            best_dist      = float("inf")
-            best_green_idx = -1
-
-            for gi, grn in enumerate(green_list):
-                if gi in used_green:
-                    continue
-                g_area = self._bbox_area(grn)
-                if r_area > 0 and g_area > 0:
-                    ratio = min(r_area, g_area) / max(r_area, g_area)
-                    if ratio < self.SEQ_PAIR_AREA_RATIO_MIN:
-                        # Area terlalu timpang → kemungkinan besar dari gate berbeda, abaikan.
-                        continue
-                gx, gy = grn[0], grn[1]
-                dist = math.hypot(rx - gx, ry - gy)
-                if dist < best_dist:
-                    best_dist      = dist
-                    best_green     = grn
-                    best_green_idx = gi
-
-            if best_green is not None:
-                used_green.add(best_green_idx)
-                pairs.append((red, best_green))
-
-            if len(pairs) >= 3:
-                break
-
-        # 3. Sort akhir pasangan berdasarkan rata-rata area (terbesar = terdekat = Pasangan 1)
-        def _pair_avg_area(pair: Tuple) -> float:
-            r, g = pair
-            return (self._bbox_area(r) + self._bbox_area(g)) / 2.0
-
-        pairs.sort(key=_pair_avg_area, reverse=True)
-        return pairs
+        return sort_ball_pairs(raw_red, raw_green, min_area_ratio=self.SEQ_PAIR_AREA_RATIO_MIN, max_pairs=3)
 
     def _reset_sequential_gate_fsm(self):
         """
