@@ -30,6 +30,9 @@ SEARCHING → LOCKED → TRANSITIONING → CLEARED → buoy_pass_count += 1 → 
 Aturan lean saat TRANSITIONING:
   - Bola kiri (merah) hilang duluan → kapal condong ke KIRI  (steer negatif)
   - Bola kanan (hijau) hilang duluan → kapal condong ke KANAN (steer positif)
+  - Besarnya belok PROPORSIONAL terhadap jarak bola tersisa dari tengah frame:
+    makin jauh dari tengah → servo makin banyak berputar, makin dekat ke tengah
+    → servo makin sedikit berputar (lihat _proportional_lean_steer()).
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
@@ -78,10 +81,6 @@ class MissionEngine:
     GATE_LOCKED       = "LOCKED"
     GATE_TRANSITIONING = "TRANSITIONING"
     GATE_CLEARED      = "CLEARED"
-
-    # Normalized steering saat manuver TRANSITIONING (-1..+1).
-    # Positif = condong kanan, negatif = condong kiri.
-    TRANSITION_LEAN_MAGNITUDE = 0.4
 
     # Jarak maksimum (piksel) untuk mengenali bola yang sama saat LOCKED/TRANSITIONING.
     # Bola yang lebih jauh dari ini dianggap bola dari gerbang lain dan diabaikan.
@@ -633,14 +632,11 @@ class MissionEngine:
                 self._gate_state_entered_at = time.time()
                 # Update posisi terakhir bola hijau yang terlihat
                 self._locked_green_pos = (nearest_green[0], nearest_green[1])
-                # Hitung steer adaptif: arahkan kapal ke bola hijau yang tersisa
-                self._transition_steer = self.tracking_controller.compute_normalized_steering(
-                    self._locked_green_pos[0]
+                # Steer proporsional ke KIRI: makin jauh bola hijau tersisa dari tengah
+                # frame, makin besar servo berbelok; makin dekat ke tengah, makin kecil.
+                self._transition_steer = self._proportional_lean_steer(
+                    self._locked_green_pos[0], lean_negative=True
                 )
-                # Override lean: paksa condong ke KIRI terlepas dari output PID
-                # agar kapal mengarah ke sisi gate yang terbuka (merah hilang = arah kiri)
-                lean = -abs(self.TRANSITION_LEAN_MAGNITUDE)
-                self._transition_steer = min(self._transition_steer, lean)
                 print(f"[GATE] LOCKED → TRANSITIONING (missing=LEFT/red, lean={self._transition_steer:+.2f})")
                 label = f"GATE:TRANSITIONING(←) | TRACKING_BUOY ({pass_label} pass)"
                 return self._transition_steer, throttle, label
@@ -652,13 +648,11 @@ class MissionEngine:
                 self._gate_state_entered_at = time.time()
                 # Update posisi terakhir bola merah yang terlihat
                 self._locked_red_pos   = (nearest_red[0], nearest_red[1])
-                # Hitung steer adaptif: arahkan kapal ke bola merah yang tersisa
-                self._transition_steer = self.tracking_controller.compute_normalized_steering(
-                    self._locked_red_pos[0]
+                # Steer proporsional ke KANAN: makin jauh bola merah tersisa dari tengah
+                # frame, makin besar servo berbelok; makin dekat ke tengah, makin kecil.
+                self._transition_steer = self._proportional_lean_steer(
+                    self._locked_red_pos[0], lean_negative=False
                 )
-                # Override lean: paksa condong ke KANAN
-                lean = +abs(self.TRANSITION_LEAN_MAGNITUDE)
-                self._transition_steer = max(self._transition_steer, lean)
                 print(f"[GATE] LOCKED → TRANSITIONING (missing=RIGHT/green, lean={self._transition_steer:+.2f})")
                 label = f"GATE:TRANSITIONING(→) | TRACKING_BUOY ({pass_label} pass)"
                 return self._transition_steer, throttle, label
@@ -681,24 +675,22 @@ class MissionEngine:
                 if nearest_green:
                     remaining_visible = True
                     self._locked_green_pos = (nearest_green[0], nearest_green[1])
-                    # Update steer adaptif: terus arahkan ke bola hijau yang tersisa
-                    # Kombinasi: min(steer_adaptif, -lean_min) agar selalu condong ke kiri
-                    adaptive_steer = self.tracking_controller.compute_normalized_steering(
-                        self._locked_green_pos[0]
+                    # Steer proporsional: makin jauh dari tengah frame, makin besar belok kiri;
+                    # makin dekat ke tengah, makin kecil (hingga ~0 saat nyaris center).
+                    self._transition_steer = self._proportional_lean_steer(
+                        self._locked_green_pos[0], lean_negative=True
                     )
-                    self._transition_steer = min(adaptive_steer, -abs(self.TRANSITION_LEAN_MAGNITUDE))
             elif self._missing_side == "right":
                 # Bola hijau sudah hilang, tinggal tunggu bola merah juga hilang.
                 nearest_red = self._find_nearest_ball(detected_balls.get("red", []), self._locked_red_pos)
                 if nearest_red:
                     remaining_visible = True
                     self._locked_red_pos = (nearest_red[0], nearest_red[1])
-                    # Update steer adaptif: terus arahkan ke bola merah yang tersisa
-                    # Kombinasi: max(steer_adaptif, +lean_min) agar selalu condong ke kanan
-                    adaptive_steer = self.tracking_controller.compute_normalized_steering(
-                        self._locked_red_pos[0]
+                    # Steer proporsional: makin jauh dari tengah frame, makin besar belok kanan;
+                    # makin dekat ke tengah, makin kecil (hingga ~0 saat nyaris center).
+                    self._transition_steer = self._proportional_lean_steer(
+                        self._locked_red_pos[0], lean_negative=False
                     )
-                    self._transition_steer = max(adaptive_steer, +abs(self.TRANSITION_LEAN_MAGNITUDE))
 
             # ── Timeout guard TRANSITIONING ───────────────────
             # Jika terlalu lama di TRANSITIONING (bola tersisa terus terlihat), paksa CLEARED.
@@ -962,9 +954,18 @@ class MissionEngine:
         """
         Handle SEQUENTIAL_BUOY step.
 
-        Menavigasi kapal melewati `total_pairs` pasang buoy (hijau + merah) secara berurutan.
+        Menavigasi kapal melewati pasangan buoy (hijau + merah) secara berurutan.
         Pasangan diurutkan berdasarkan jarak terdekat ke kamera (bounding box terbesar = terdekat),
         sehingga Pasangan 1 = pasang buoy paling dekat, Pasangan 2 = berikutnya, dst.
+
+        `total_pairs` OPSIONAL. Jika tidak diisi (atau 0) → mode AUTO: engine TIDAK perlu
+        tahu berapa banyak pasangan buoy yang harus dilewati, cukup terus mengunci &
+        melewati pasangan yang terdeteksi satu per satu. Step dianggap selesai secara
+        otomatis ketika SEARCHING tidak menemukan pasangan valid sama sekali selama
+        SEQ_SEARCHING_TIMEOUT_SEC berturut-turut setelah minimal 1 pasangan berhasil
+        dilewati (indikasi buoy sudah habis / kapal sudah keluar dari area gate).
+        Jika `total_pairs` > 0 diisi eksplisit, step tetap selesai lebih awal begitu
+        jumlah tersebut tercapai (perilaku lama, tidak berubah).
 
         State Machine Dua Level:
           Level 1 — Pair Sequencer : menentukan pasangan mana yang sedang diproses.
@@ -1001,15 +1002,17 @@ class MissionEngine:
           - Kedua bola hilang                → pasangan CLEARED, lanjut ke pasangan berikutnya
 
         Format step:
-          { "type": "SEQUENTIAL_BUOY", "total_pairs": 3 }
+          { "type": "SEQUENTIAL_BUOY" }                    → mode AUTO (rekomendasi)
+          { "type": "SEQUENTIAL_BUOY", "total_pairs": 3 }   → mode manual, berhenti di 3 pasangan
         """
-        total_pairs = int(step.get("total_pairs", 3))
+        total_pairs = int(step.get("total_pairs", 0) or 0)
+        auto_mode   = total_pairs <= 0   # total_pairs tidak diisi/0 → auto-detect jumlah buoy
         throttle    = self.speed_scheduler.max_base_throttle
         cleared     = self._seq_pairs_cleared
         pair_num    = cleared + 1   # Display: pasangan yang sedang diincar (1-indexed)
 
-        # ── Cek kondisi step selesai ─────────────────────────────────────
-        if cleared >= total_pairs:
+        # ── Cek kondisi step selesai (hanya relevan jika total_pairs diisi eksplisit) ──
+        if not auto_mode and cleared >= total_pairs:
             print(f"[SEQ_BUOY] ✅ Semua {total_pairs} pasangan berhasil dilewati!")
             self._reset_sequential_state()
             self._advance_step()
@@ -1020,7 +1023,7 @@ class MissionEngine:
             print("[MissionEngine] 🔄 Automatic mode switch to MANUAL for SEQUENTIAL_BUOY...")
             self.asv.set_mode("MANUAL")
 
-        pair_label = f"{pair_num}/{total_pairs}"
+        pair_label = f"{pair_num}" if auto_mode else f"{pair_num}/{total_pairs}"
 
         # ══════════════════════════════════════════════════════════════════
         #  GATE STATE MACHINE (Level 2) — menggunakan _seq_* state vars
@@ -1030,20 +1033,24 @@ class MissionEngine:
         if self._seq_gate_lock_state == self.GATE_SEARCHING:
             # ── SEARCHING ──────────────────────────────────────────────
 
-            # ── Timeout guard SEARCHING ────────────────────────────────
-            # Jika terlalu lama di SEARCHING tanpa pasangan valid terdeteksi,
-            # paksa advance ke step berikutnya. Ini menangani dua kasus:
-            #   (A) Pasangan terakhir hanya 1 bola terlihat → tidak pernah LOCK
-            #   (B) Semua pasangan sudah terlewati tapi ada bola jauh di frame
+            # ── Timeout guard SEARCHING → deteksi "tidak ada bola lagi" ─
+            # Jika terlalu lama di SEARCHING tanpa pasangan valid terdeteksi, anggap
+            # buoy sudah habis dan step SELESAI otomatis. Ini menangani:
+            #   (A) Mode AUTO: memang begini caranya step tahu kapan harus berhenti
+            #       tanpa perlu dikonfigurasi jumlah pasangannya (tidak ada bola lagi
+            #       terdeteksi = course sudah dilewati semua).
+            #   (B) Mode manual (total_pairs diisi): jaring pengaman jika pasangan
+            #       terakhir hanya 1 bola terlihat (tidak pernah sempat LOCK) sehingga
+            #       target total_pairs tidak akan pernah tercapai secara normal.
             # Timer hanya aktif setelah minimal 1 pasangan cleared (self._seq_pairs_cleared > 0)
             # agar tidak memotong waktu approach ke pasangan pertama.
             if (self._seq_pairs_cleared > 0
                     and self._seq_gate_state_entered_at > 0):
                 searching_elapsed = time.time() - self._seq_gate_state_entered_at
                 if searching_elapsed > self.SEQ_SEARCHING_TIMEOUT_SEC:
-                    print(f"[SEQ_BUOY] ⚠️ SEARCHING TIMEOUT ({searching_elapsed:.1f}s) setelah "
-                          f"{cleared}/{total_pairs} pasangan cleared → paksa advance step.")
-                    self._seq_pairs_cleared = total_pairs  # anggap semua pasangan selesai
+                    print(f"[SEQ_BUOY] ✅ Tidak ada pasangan buoy baru terdeteksi selama "
+                          f"{searching_elapsed:.1f}s setelah {cleared} pasangan dilewati → "
+                          f"anggap SEQUENTIAL_BUOY selesai (buoy habis).")
                     self._reset_sequential_state()
                     self._advance_step()
                     return 0.0, 0.0, "SEQUENTIAL_BUOY"
@@ -1144,11 +1151,11 @@ class MissionEngine:
                 self._seq_missing_lost_since = None  # bola hijau tersisa baru saja, belum "hilang"
                 self._seq_locked_green_pos  = (nearest_green[0], nearest_green[1])
                 self._seq_locked_green_area = self._bbox_area(nearest_green)
-                # Steer adaptif ke bola hijau tersisa, dipaksa condong minimum ke kiri
-                adaptive_steer = self.tracking_controller.compute_normalized_steering(
-                    self._seq_locked_green_pos[0])
-                lean = -abs(self.TRANSITION_LEAN_MAGNITUDE)
-                self._seq_transition_steer  = min(adaptive_steer, lean)
+                # Steer proporsional ke KIRI: makin jauh bola hijau tersisa dari tengah
+                # frame, makin besar servo berbelok; makin dekat ke tengah, makin kecil.
+                self._seq_transition_steer = self._proportional_lean_steer(
+                    self._seq_locked_green_pos[0], lean_negative=True
+                )
                 print(f"[SEQ_GATE] LOCKED → TRANSITIONING "
                       f"(pair {pair_label}, missing=LEFT/red, lean={self._seq_transition_steer:+.2f})")
                 label = f"SEQ_GATE:TRANSITIONING(←) | SEQUENTIAL_BUOY (pair {pair_label})"
@@ -1162,11 +1169,11 @@ class MissionEngine:
                 self._seq_missing_lost_since = None  # bola merah tersisa baru saja, belum "hilang"
                 self._seq_locked_red_pos    = (nearest_red[0], nearest_red[1])
                 self._seq_locked_red_area   = self._bbox_area(nearest_red)
-                # Steer adaptif ke bola merah tersisa, dipaksa condong minimum ke kanan
-                adaptive_steer = self.tracking_controller.compute_normalized_steering(
-                    self._seq_locked_red_pos[0])
-                lean = +abs(self.TRANSITION_LEAN_MAGNITUDE)
-                self._seq_transition_steer  = max(adaptive_steer, lean)
+                # Steer proporsional ke KANAN: makin jauh bola merah tersisa dari tengah
+                # frame, makin besar servo berbelok; makin dekat ke tengah, makin kecil.
+                self._seq_transition_steer = self._proportional_lean_steer(
+                    self._seq_locked_red_pos[0], lean_negative=False
+                )
                 print(f"[SEQ_GATE] LOCKED → TRANSITIONING "
                       f"(pair {pair_label}, missing=RIGHT/green, lean={self._seq_transition_steer:+.2f})")
                 label = f"SEQ_GATE:TRANSITIONING(→) | SEQUENTIAL_BUOY (pair {pair_label})"
@@ -1198,10 +1205,11 @@ class MissionEngine:
                     remaining_found_this_frame = True
                     self._seq_locked_green_pos = (nearest_green[0], nearest_green[1])
                     self._seq_locked_green_area = self._bbox_area(nearest_green)
-                    # Update steer adaptif: terus arahkan ke bola hijau tersisa + pertahankan lean kiri
-                    adaptive_steer = self.tracking_controller.compute_normalized_steering(
-                        self._seq_locked_green_pos[0])
-                    self._seq_transition_steer = min(adaptive_steer, -abs(self.TRANSITION_LEAN_MAGNITUDE))
+                    # Steer proporsional: makin jauh dari tengah frame, makin besar belok kiri;
+                    # makin dekat ke tengah, makin kecil (hingga ~0 saat nyaris center).
+                    self._seq_transition_steer = self._proportional_lean_steer(
+                        self._seq_locked_green_pos[0], lean_negative=True
+                    )
 
             elif self._seq_missing_side == "right":
                 # Bola hijau sudah hilang → tunggu bola merah juga hilang
@@ -1212,10 +1220,11 @@ class MissionEngine:
                     remaining_found_this_frame = True
                     self._seq_locked_red_pos = (nearest_red[0], nearest_red[1])
                     self._seq_locked_red_area = self._bbox_area(nearest_red)
-                    # Update steer adaptif: terus arahkan ke bola merah tersisa + pertahankan lean kanan
-                    adaptive_steer = self.tracking_controller.compute_normalized_steering(
-                        self._seq_locked_red_pos[0])
-                    self._seq_transition_steer = max(adaptive_steer, +abs(self.TRANSITION_LEAN_MAGNITUDE))
+                    # Steer proporsional: makin jauh dari tengah frame, makin besar belok kanan;
+                    # makin dekat ke tengah, makin kecil (hingga ~0 saat nyaris center).
+                    self._seq_transition_steer = self._proportional_lean_steer(
+                        self._seq_locked_red_pos[0], lean_negative=False
+                    )
 
             # ── Debounce "confirmed hilang" ────────────────────────────
             if remaining_found_this_frame:
@@ -1266,19 +1275,29 @@ class MissionEngine:
         """
         Dipanggil saat satu pasangan gate dinyatakan CLEARED.
         Increment cleared counter, reset gate FSM level-2, siap untuk pasangan berikutnya.
+
+        `total_pairs <= 0` berarti mode AUTO (jumlah pasangan tidak dikonfigurasi) — engine
+        terus mengincar pasangan berikutnya sampai SEARCHING timeout mendeteksi buoy sudah
+        habis (lihat blok SEARCHING di _handle_sequential_buoy).
         """
         self._seq_pairs_cleared += 1
         new_cleared = self._seq_pairs_cleared
+        auto_mode = total_pairs <= 0
 
-        print(f"[SEQ_GATE] 🏁 Pair {pair_num} CLEARED! ({new_cleared}/{total_pairs} selesai)")
+        if auto_mode:
+            print(f"[SEQ_GATE] 🏁 Pair {pair_num} CLEARED! ({new_cleared} pasangan dilewati, mode AUTO)")
+        else:
+            print(f"[SEQ_GATE] 🏁 Pair {pair_num} CLEARED! ({new_cleared}/{total_pairs} selesai)")
         self._broadcast_status()
         self._reset_sequential_gate_fsm()  # Reset gate FSM, tapi PERTAHANKAN pair counter
 
-        if new_cleared < total_pairs:
+        if auto_mode or new_cleared < total_pairs:
             next_pair = new_cleared + 1
-            print(f"[SEQ_GATE] CLEARED → SEARCHING (siap mengincar pasangan {next_pair}/{total_pairs})")
+            next_label = f"{next_pair}" if auto_mode else f"{next_pair}/{total_pairs}"
+            print(f"[SEQ_GATE] CLEARED → SEARCHING (siap mengincar pasangan {next_label})")
 
-        label = f"SEQ_GATE:CLEARED ✅ | SEQUENTIAL_BUOY (pair {pair_num}/{total_pairs})"
+        pair_label = f"{pair_num}" if auto_mode else f"{pair_num}/{total_pairs}"
+        label = f"SEQ_GATE:CLEARED ✅ | SEQUENTIAL_BUOY (pair {pair_label})"
         # Berhenti sejenak agar tidak langsung menabrak pasangan berikutnya
         return 0.0, 0.0, label
 
@@ -1421,6 +1440,24 @@ class MissionEngine:
     def _bbox_area(ball: Tuple) -> float:
         """Area bounding box (piksel²) dari tuple (cx, cy, x1, y1, x2, y2)."""
         return float((ball[4] - ball[2]) * (ball[5] - ball[3]))
+
+    def _proportional_lean_steer(self, ball_x: float, lean_negative: bool) -> float:
+        """
+        Hitung steer TRANSITIONING yang PROPORSIONAL terhadap jarak bola tersisa dari
+        titik tengah frame: makin jauh dari tengah → makin besar sudut belok servo,
+        makin dekat ke tengah → makin kecil sudut belok (termasuk mendekati 0 saat
+        bola nyaris tepat di tengah, mengikuti dead-zone PID di TrackingController).
+
+        Arah belok TETAP dipaksa ke sisi gerbang yang terbuka (bukan mengejar posisi
+        bola tersisa secara mentah, yang bisa membuat kapal menabraknya) — hanya
+        MAGNITUDE yang proporsional terhadap `compute_normalized_steering()`, SIGN
+        mengikuti sisi yang sudah diketahui hilang.
+
+        :param ball_x:        Koordinat X (piksel) bola tersisa yang masih dilacak.
+        :param lean_negative: True = paksa arah KIRI (merah hilang), False = KANAN (hijau hilang).
+        """
+        magnitude = abs(self.tracking_controller.compute_normalized_steering(ball_x))
+        return -magnitude if lean_negative else magnitude
 
     def _find_nearest_ball(
         self,
