@@ -1310,13 +1310,15 @@ class MissionEngine:
           - Bola kanan (hijau) hilang duluan → kapal condong ke KANAN (steer positif)
           - Kedua bola hilang                → pasangan CLEARED, lanjut ke pasangan berikutnya
 
-        Aturan bola tunggal saat SEARCHING (pairing gagal total, cuma 1 warna
-        terdeteksi): kapal TIDAK mengejar/menyejajarkan diri ke bola itu, melainkan
+        Aturan bola tunggal saat SEARCHING (TIDAK ADA pasangan valid terbentuk —
+        entah cuma 1 warna terdeteksi, ATAU dua warna ada tapi gagal lolos safeguard
+        rasio-area/lebar-maksimum di sort_ball_pairs, lihat _pick_single_ball_candidate):
+        kapal TIDAK mengejar/menyejajarkan diri ke bola terbesar yang ada, melainkan
         MENJAGA JARAK-nya terhadap titik tengah kamera (lihat
         _compute_single_ball_avoid_steer()) — koreksi MENJAUH dari sisi bola,
         sebanding dengan seberapa dekat bola ke tengah frame:
-          - Hanya bola hijau (kanan) terlihat → kapal condong ke KIRI
-          - Hanya bola merah (kiri)  terlihat → kapal condong ke KANAN
+          - Bola hijau (kanan) jadi target hindar → kapal condong ke KIRI
+          - Bola merah (kiri)  jadi target hindar → kapal condong ke KANAN
 
         Format step:
           { "type": "SEQUENTIAL_BUOY", "throttle": 0.4, "ignore_area_px2": 4000,
@@ -1463,14 +1465,17 @@ class MissionEngine:
                     label = f"SEQ_GATE:SEARCHING (approaching) | SEQUENTIAL_BUOY (pair {pair_label})"
                     return steer, throttle, label
 
-                # ── HANYA SATU warna bola terdeteksi (pairing gagal total, bukan cuma
-                # "terlalu jauh untuk dikunci") → JAGA JARAK, jangan mengejar bola itu.
-                # Prioritaskan ini di atas gate_x mentah — gate_x adalah offset TETAP
-                # dari posisi bola yang diumpankan ke PID steering yang sama dengan
-                # target pasangan, sehingga kapal tetap "mengikuti" bola itu setiap
-                # kali ia bergerak (persis masalah yang dilaporkan). Reuse ignore_area_px2
-                # yang sama dengan filter pasangan di atas — bola tunggal yang lebih
-                # kecil dari itu diabaikan sepenuhnya (jatuh ke gate_x/blind di bawah).
+                # ── TIDAK ADA pasangan valid terbentuk (pairing gagal total, bukan cuma
+                # "terlalu jauh untuk dikunci") → JAGA JARAK dari bola individu terbesar
+                # yang ada, jangan mengejarnya. Berlaku baik saat cuma 1 warna yang
+                # terdeteksi MAUPUN saat kedua warna ada tapi tidak lolos safeguard
+                # rasio-area/lebar-maksimum (lihat _pick_single_ball_candidate). Prioritaskan
+                # ini di atas gate_x mentah — gate_x adalah offset TETAP dari posisi bola
+                # yang diumpankan ke PID steering yang sama dengan target pasangan, sehingga
+                # kapal tetap "mengikuti" bola itu setiap kali ia bergerak (persis masalah
+                # yang dilaporkan). Reuse ignore_area_px2 yang sama dengan filter pasangan
+                # di atas — bola yang lebih kecil dari itu diabaikan sepenuhnya (jatuh ke
+                # gate_x/blind di bawah).
                 single = self._pick_single_ball_candidate(searchable_balls, ignore_area_px2)
                 if single is not None:
                     ball, side = single
@@ -1842,22 +1847,38 @@ class MissionEngine:
         self, balls: Dict, min_area_px2: float
     ) -> Optional[Tuple[Tuple, str]]:
         """
-        Kalau HANYA SATU warna bola yang terdeteksi (bukan dua-duanya, bukan juga
-        tidak ada sama sekali) DAN area-nya >= min_area_px2, kembalikan (ball, side)
-        — side "red" atau "green". Selain itu (dua warna terdeteksi tapi gagal
-        pairing, tidak ada bola sama sekali, atau bola tunggal terlalu kecil/jauh)
-        kembalikan None — biarkan caller jatuh ke fallback lain (gate_x / blind).
+        Dipanggil HANYA saat _sort_buoy_pairs() gagal membentuk pasangan valid sama
+        sekali (pairs kosong) — entah karena cuma 1 warna yang terdeteksi, ATAU
+        kedua warna ADA tapi gagal lolos safeguard rasio-area/lebar-maksimum di
+        sort_ball_pairs() (mis. bola merah dari gate ini + bola hijau dari gate
+        lain/refleksi yang kebetulan sama-sama masuk frame tapi bukan pasangan yang
+        sama). Di KEDUA kasus itu, tidak ada pasangan yang bisa dipercaya — pilih
+        SATU bola individu terbesar/terdekat (warna apa saja, dari kedua list,
+        BUKAN mensyaratkan warna lain kosong) sebagai target HINDAR, asalkan
+        area-nya >= min_area_px2.
+
+        PENTING: sebelumnya fungsi ini mensyaratkan warna lain harus KOSONG total
+        (elif red and not green / green and not red) — kalau kedua warna sama-sama
+        ADA tapi tidak berhasil dipasangkan, kapal tetap jatuh ke fallback gate_x
+        lama yang mengejar (chase) posisi bola, bukan menghindarinya. Itu bug yang
+        sama persis dengan yang seharusnya sudah diperbaiki oleh manuver hindar ini.
+
+        Return (ball, side) — side "red" atau "green" — atau None kalau tidak ada
+        bola sama sekali atau semuanya di bawah min_area_px2 (caller jatuh ke
+        fallback gate_x / blind).
         """
         red = balls.get("red", [])
         green = balls.get("green", [])
-        if red and not green:
-            candidate = red[0]  # sudah sorted foreground-first (area terbesar)
-            if self._bbox_area(candidate) >= min_area_px2:
-                return candidate, "red"
-        elif green and not red:
-            candidate = green[0]
-            if self._bbox_area(candidate) >= min_area_px2:
-                return candidate, "green"
+        candidates = []
+        if red:
+            candidates.append((red[0], "red"))      # sudah sorted foreground-first
+        if green:
+            candidates.append((green[0], "green"))
+        if not candidates:
+            return None
+        best_ball, best_side = max(candidates, key=lambda c: self._bbox_area(c[0]))
+        if self._bbox_area(best_ball) >= min_area_px2:
+            return best_ball, best_side
         return None
 
     def _compute_single_ball_avoid_steer(self, ball: Tuple, side: str, step: Dict) -> float:
