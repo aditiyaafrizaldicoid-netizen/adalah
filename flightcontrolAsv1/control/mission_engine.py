@@ -170,6 +170,24 @@ class MissionEngine:
     # langsung di lapangan: tanpa batas ini, kapal bisa maju lurus TANPA HENTI.
     SEQ_BLIND_SEARCH_TIMEOUT_SEC = 5.0
 
+    # Durasi (detik) TOTAL "buta total" (sama seperti SEQ_BLIND_SEARCH_TIMEOUT_SEC di
+    # atas — tidak ada kandidat pasangan ATAU fallback gate_x sama sekali) sebelum
+    # step SEQUENTIAL_BUOY dianggap SELESAI (advance ke step berikutnya / mission
+    # selesai kalau ini step terakhir) — BUKAN cuma berhenti bergerak seperti
+    # SEQ_BLIND_SEARCH_TIMEOUT_SEC. SENGAJA jauh lebih besar dari
+    # SEQ_BLIND_SEARCH_TIMEOUT_SEC: kapal STOP dulu di 5 detik (jaring pengaman
+    # tabrakan), lalu diberi jeda tambahan menunggu siapa tahu buoy sempat masuk lagi
+    # ke frame (mis. kapal cuma sedikit miring), BARU dianggap benar-benar selesai
+    # kalau tetap tidak ada apa pun sampai durasi ini.
+    #
+    # Berlaku TIDAK PEDULI apakah sudah ada pasangan yang di-cleared atau belum —
+    # beda dari SEQ_SEARCHING_TIMEOUT_SEC yang HANYA aktif setelah pasangan pertama
+    # berhasil dikunci. Ini mengisi celah: kalau dari AWAL step tidak ada bola
+    # terdeteksi sama sekali (mis. kamera belum menghadap arah buoy, atau memang
+    # buoy course sudah tidak ada), sebelumnya TIDAK ADA mekanisme apa pun yang bisa
+    # menyelesaikan step ini — kapal cuma diam di HOLD selamanya menunggu input manual.
+    SEQ_NO_DETECTION_FINISH_SEC = 15.0
+
     # Jarak PIKSEL maksimum antara bola merah & hijau agar dianggap SATU gate yang
     # sama. Ditemukan lewat pengecekan frame kamera live: kalau di frame cuma ada
     # SATU bola merah (atau hijau), filter rasio area saja TIDAK cukup — bola itu
@@ -1262,7 +1280,8 @@ class MissionEngine:
           - Kedua bola hilang                → pasangan CLEARED, lanjut ke pasangan berikutnya
 
         Format step:
-          { "type": "SEQUENTIAL_BUOY", "throttle": 0.4, "ignore_area_px2": 4000 }
+          { "type": "SEQUENTIAL_BUOY", "throttle": 0.4, "ignore_area_px2": 4000,
+            "no_detection_finish_sec": 15.0 }
 
         `throttle` (0.0-1.0) opsional — fallback ke speed_scheduler.max_base_throttle
         jika tidak diisi (lihat _resolve_step_throttle()).
@@ -1273,6 +1292,15 @@ class MissionEngine:
         Ini yang memungkinkan step SELESAI walau ada deteksi bola yang sangat jauh (mis.
         buoy course lain, noise) — tanpa floor ini, kandidat sejauh apa pun tetap dikejar
         tanpa henti. Fallback ke SEQ_IGNORE_AREA_PX2 jika tidak diisi.
+
+        `no_detection_finish_sec` (detik) opsional — kalau BENAR-BENAR tidak ada apa pun
+        terdeteksi (tidak ada kandidat pasangan SAMA SEKALI, termasuk yang di bawah
+        ignore_area_px2, dan tidak ada fallback gate_x) selama durasi ini, step dianggap
+        SELESAI (advance ke step berikutnya) — bukan cuma berhenti bergerak seperti
+        SEQ_BLIND_SEARCH_TIMEOUT_SEC (5s, tetap berlaku duluan sebagai jaring pengaman
+        tabrakan). Berlaku TIDAK PEDULI sudah ada pasangan yang cleared atau belum —
+        beda dari SEQ_SEARCHING_TIMEOUT_SEC yang hanya aktif setelah pasangan pertama
+        dikunci. Fallback ke SEQ_NO_DETECTION_FINISH_SEC (15.0) jika tidak diisi.
         """
         throttle    = self._resolve_step_throttle(step)
         cleared     = self._seq_pairs_cleared
@@ -1405,6 +1433,22 @@ class MissionEngine:
                     if self._seq_blind_search_since is None:
                         self._seq_blind_search_since = now
                     blind_duration = now - self._seq_blind_search_since
+
+                    # ── Selesaikan step kalau "buta total" berlarut-larut ───
+                    # Beda dari SEQ_SEARCHING_TIMEOUT_SEC (HANYA aktif setelah pasangan
+                    # pertama di-cleared), guard ini berlaku dari awal step — mengisi
+                    # celah kasus tidak ada bola terdeteksi SAMA SEKALI sejak awal
+                    # (kamera belum menghadap buoy, atau course memang sudah kosong).
+                    no_detection_finish_sec = float(
+                        step.get("no_detection_finish_sec", self.SEQ_NO_DETECTION_FINISH_SEC))
+                    if blind_duration > no_detection_finish_sec:
+                        print(f"[SEQ_BUOY] ✅ Buta total selama {blind_duration:.1f}s (tidak ada "
+                              f"kandidat/gate_x sama sekali) → anggap SEQUENTIAL_BUOY selesai "
+                              f"(tidak ada buoy terdeteksi).")
+                        self._reset_sequential_state()
+                        self._advance_step()
+                        return 0.0, 0.0, "SEQUENTIAL_BUOY"
+
                     if blind_duration > self.SEQ_BLIND_SEARCH_TIMEOUT_SEC:
                         label = (f"SEQ_GATE:SEARCHING (blind {blind_duration:.1f}s, HOLD) "
                                  f"| SEQUENTIAL_BUOY (pair {pair_label})")

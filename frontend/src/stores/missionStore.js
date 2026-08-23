@@ -211,6 +211,17 @@ export const STEP_TYPES = [
         // tidak dikejar maupun dikunci. Ini yang membuat step bisa SELESAI walau
         // ada deteksi bola yang sangat jauh (course lain, noise, dst).
       },
+      {
+        key: "no_detection_finish_sec",
+        label: "Finish After No Detection (s)",
+        type: "number",
+        default: 15,
+        // Kalau BENAR-BENAR tidak ada apa pun terdeteksi (tidak ada kandidat
+        // pasangan maupun fallback gate_x) selama durasi ini, step dianggap
+        // SELESAI dan lanjut ke step berikutnya — bukan cuma berhenti bergerak.
+        // Berlaku sejak awal step, tidak peduli sudah ada pasangan yang cleared
+        // atau belum.
+      },
     ],
   },
   {
