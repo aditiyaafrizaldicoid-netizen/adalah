@@ -86,6 +86,45 @@ export const STEP_TYPES = [
     ],
   },
   {
+    type: "GYRO_FORWARD",
+    label: "Gyro Forward (Heading Hold)",
+    icon: "🌀",
+    color: "text-indigo-400",
+    bg: "bg-indigo-500/10 border-indigo-500/30",
+    fields: [
+      {
+        key: "speed_mps",
+        label: "Speed (m/s)",
+        type: "number",
+        default: 0.5,
+        // Kecepatan maju kapal dalam meter per detik.
+      },
+      {
+        key: "duration_sec",
+        label: "Max Duration (s)",
+        type: "number",
+        default: 15,
+        // Batas waktu MAKSIMUM cruise (safety cap). Step berhenti lebih awal begitu
+        // buoy (merah/hijau) terdeteksi kontinu di kamera, mana pun yang lebih dulu.
+      },
+      {
+        key: "heading_kp",
+        label: "Heading Correction Kp",
+        type: "number",
+        default: 1.5,
+        // Gain proporsional koreksi yaw: yaw_rate = Kp × heading_error (derajat).
+        // Heading target = heading kapal saat step ini dimulai (heading-hold).
+      },
+      {
+        key: "max_yaw_rate_dps",
+        label: "Max Yaw Correction (°/s)",
+        type: "number",
+        default: 15,
+        // Batas maksimum kecepatan koreksi yaw agar tidak overcorrect/oscillate.
+      },
+    ],
+  },
+  {
     type: "PRECISION_TURN",
     label: "Precision Turning",
     icon: "🔄",

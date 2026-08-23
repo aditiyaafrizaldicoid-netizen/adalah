@@ -3,6 +3,8 @@ MissionEngine - Autonomous Mission Sequence Executor untuk ASV.
 
 Engine ini mengeksekusi mission steps secara berurutan:
 - TRACKING_BUOY  : AI Vision PID untuk melewati gerbang bola hijau+merah
+- SEQUENTIAL_BUOY: Lewati N pasang buoy (hijau+merah) berurutan tanpa perlu di-configure jumlahnya
+- GYRO_FORWARD   : Maju lurus dgn koreksi yaw kompas/gyro (heading-hold), berhenti di waktu ATAU saat buoy terdeteksi
 - GOTO_GPS       : Navigasi ke koordinat GPS tertentu
 - TAKE_IMAGE     : Berhenti dan ambil foto/rekam video
 - HOLD           : Berhenti di posisi saat ini
@@ -76,6 +78,7 @@ class MissionEngine:
     STEP_TYPE_PRECISION_TURN = "PRECISION_TURN"  # Belok presisi ke sudut target
     STEP_TYPE_TIMED_STEER    = "TIMED_STEER"     # Manuver timer RC override (MANUAL mode)
     STEP_TYPE_SEQUENTIAL_BUOY = "SEQUENTIAL_BUOY"  # Lewati N pasang buoy (hijau+merah) secara berurutan
+    STEP_TYPE_GYRO_FORWARD   = "GYRO_FORWARD"    # Maju lurus dgn koreksi yaw kompas/gyro, berhenti di waktu ATAU saat buoy terdeteksi
 
     # Radius acceptance untuk GOTO_GPS: dianggap tiba jika < X meter dari target
     ARRIVAL_RADIUS_M = 2.0
@@ -211,6 +214,13 @@ class MissionEngine:
     # melintasi pasangan aktif (sesuai aturan: unlock hanya jika kedua bola confirmed hilang).
     SEQ_TRANSITIONING_SAFETY_TIMEOUT_SEC = 20.0
 
+    # ── GYRO_FORWARD specific ───────────────────────────────────────────────
+    # Durasi (detik) bola (merah/hijau apa saja) harus TERUS-MENERUS terdeteksi
+    # sebelum GYRO_FORWARD dianggap "buoy ditemukan" dan step selesai lebih awal.
+    # Mencegah satu frame false-positive YOLO memotong cruise sebelum benar-benar
+    # sampai di depan gerbang buoy.
+    GYRO_FORWARD_BALL_CONFIRM_SEC = 0.3
+
     def __init__(self, asv, tracker, tracking_controller, speed_scheduler: Optional[SpeedScheduler] = None):
         self.asv = asv
         self.tracker = tracker
@@ -295,6 +305,19 @@ class MissionEngine:
         # Engine terus mengirim yaw rate hingga selisih heading <= TURN_ARRIVAL_THRESHOLD_DEG.
         self._turn_target_heading: Optional[float] = None
 
+        # ---- GYRO_FORWARD state ----
+        # Heading yang DIPERTAHANKAN (heading-hold) selama cruise — direkam dari
+        # telemetry.heading pada frame pertama step ini, BUKAN yaw rate konstan tanpa
+        # feedback seperti CUSTOM_FORWARD. Setiap frame, error terhadap heading ini
+        # dikoreksi proporsional (lihat _handle_gyro_forward).
+        self._cruise_initial_heading: Optional[float] = None
+
+        # Timestamp saat bola (merah/hijau apa saja) PERTAMA KALI terdeteksi kontinu
+        # selama GYRO_FORWARD. None berarti tidak ada bola terlihat saat ini. Dipakai
+        # debounce GYRO_FORWARD_BALL_CONFIRM_SEC sebelum step dianggap selesai karena
+        # gerbang buoy sudah terlihat.
+        self._cruise_ball_seen_since: Optional[float] = None
+
         # Callback → kirim status live ke Base Station via WebSocket
         self._status_callback = None
 
@@ -367,6 +390,9 @@ class MissionEngine:
             # Reset PRECISION_TURN state agar bisa dipakai ulang dari awal
             self._turn_initial_heading = None
             self._turn_target_heading  = None
+            # Reset GYRO_FORWARD state agar bisa dipakai ulang dari awal
+            self._cruise_initial_heading = None
+            self._cruise_ball_seen_since = None
 
             if hasattr(self.tracking_controller, 'reset'):
                 self.tracking_controller.reset()
@@ -449,6 +475,9 @@ class MissionEngine:
             # Reset PRECISION_TURN state
             self._turn_initial_heading = None
             self._turn_target_heading  = None
+            # Reset GYRO_FORWARD state
+            self._cruise_initial_heading = None
+            self._cruise_ball_seen_since = None
             self._stop_elapsed_timer()
             self.asv.stop_movement()
             if hasattr(self.tracking_controller, 'reset'):
@@ -553,7 +582,7 @@ class MissionEngine:
                             print(f"[MissionEngine] 🔄 Switch mode → GUIDED untuk {step_type}...")
                             self.asv.set_mode("GUIDED")
                     self.asv.stop_movement()
-                elif step_type in (self.STEP_TYPE_CUSTOM_FORWARD, self.STEP_TYPE_PRECISION_TURN):
+                elif step_type in (self.STEP_TYPE_CUSTOM_FORWARD, self.STEP_TYPE_PRECISION_TURN, self.STEP_TYPE_GYRO_FORWARD):
                     # Switch ke GUIDED dan lepaskan RC override dari step MANUAL sebelumnya
                     if self.asv and self.asv.is_connected():
                         if self.asv.get_telemetry().mode != "GUIDED":
@@ -600,6 +629,10 @@ class MissionEngine:
             # ---- SEQUENTIAL_BUOY ----
             elif step_type == self.STEP_TYPE_SEQUENTIAL_BUOY:
                 return self._handle_sequential_buoy(step, gate_x, detected_balls or {"red": [], "green": []})
+
+            # ---- GYRO_FORWARD ----
+            elif step_type == self.STEP_TYPE_GYRO_FORWARD:
+                return self._handle_gyro_forward(step, detected_balls or {"red": [], "green": []})
 
             # ---- FINISH ----
             elif step_type == self.STEP_TYPE_FINISH:
@@ -916,6 +949,89 @@ class MissionEngine:
                  f"rem={remaining:.1f}s")
         # Return (0.0, 0.0) — movement via send_velocity(), NOT RC override.
         # main.py hanya kirim send_manual_rc_drive saat thr_norm > 0 atau mode MANUAL.
+        return 0.0, 0.0, label
+
+    def _handle_gyro_forward(self, step: Dict, detected_balls: Dict) -> Tuple[float, float, str]:
+        """
+        Handle GYRO_FORWARD step.
+
+        Kapal maju lurus dengan koreksi yaw berbasis kompas/gyro (telemetry.heading),
+        BERBEDA dari CUSTOM_FORWARD yang mengirim yaw rate KONSTAN tanpa feedback
+        (dead-reckoning, akan tetap drift kalau ada arus/angin/imbalance motor).
+        Di sini heading awal saat step dimulai direkam sebagai target "heading-hold",
+        lalu setiap frame error terhadap heading itu dikoreksi proporsional (P controller
+        sederhana: yaw_rate = Kp × heading_error, di-clamp ke max_yaw_rate_dps).
+
+        Step SELESAI jika salah satu terjadi lebih dulu:
+          - duration_sec terlampaui (safety cap / cruise dianggap gagal menemukan buoy), ATAU
+          - bola (merah ATAU hijau, apa saja) terdeteksi TERUS-MENERUS selama
+            GYRO_FORWARD_BALL_CONFIRM_SEC (debounce — mencegah 1 frame false-positive YOLO
+            memotong cruise sebelum benar-benar sampai di depan gerbang buoy). Begitu
+            confirmed, step berikutnya (biasanya TRACKING_BUOY/SEQUENTIAL_BUOY) mengambil alih.
+
+        Variabel step yang digunakan:
+          step['speed_mps']         (float) — Kecepatan maju (m/s). Default: 0.5
+          step['duration_sec']      (float) — Batas waktu maksimum (detik). Default: 15.0
+          step['heading_kp']        (float) — Gain proporsional koreksi yaw (°/s per ° error). Default: 1.5
+          step['max_yaw_rate_dps']  (float) — Batas maksimum yaw rate koreksi (°/s). Default: 15.0
+        """
+        speed_mps        = float(step.get("speed_mps", 0.5))
+        duration_sec     = float(step.get("duration_sec", 15.0))
+        heading_kp       = float(step.get("heading_kp", 1.5))
+        max_yaw_rate_dps = float(step.get("max_yaw_rate_dps", 15.0))
+
+        elapsed = time.time() - self._step_start_time
+
+        # --- Selesai karena waktu habis (safety cap) ---
+        if duration_sec > 0 and elapsed >= duration_sec:
+            print(f"[MissionEngine] ✅ GYRO_FORWARD selesai! Durasi {duration_sec:.1f}s terpenuhi (timeout).")
+            self.asv.stop_movement()
+            self._advance_step()
+            return 0.0, 0.0, "GYRO_FORWARD"
+
+        # --- Selesai karena buoy terdeteksi (confirmed, bukan 1 frame flicker) ---
+        now = time.time()
+        ball_visible_now = bool(detected_balls.get("red")) or bool(detected_balls.get("green"))
+        if ball_visible_now:
+            if self._cruise_ball_seen_since is None:
+                self._cruise_ball_seen_since = now
+            elif (now - self._cruise_ball_seen_since) >= self.GYRO_FORWARD_BALL_CONFIRM_SEC:
+                print(f"[MissionEngine] ✅ GYRO_FORWARD selesai! Buoy terdeteksi di depan kamera.")
+                self.asv.stop_movement()
+                self._advance_step()
+                return 0.0, 0.0, "GYRO_FORWARD"
+        else:
+            self._cruise_ball_seen_since = None
+
+        # --- Ambil heading saat ini & rekam heading-hold target di frame pertama ---
+        telemetry = self.asv.get_telemetry() if self.asv else None
+        current_heading = getattr(telemetry, "heading", None) if telemetry else None
+
+        if self._cruise_initial_heading is None:
+            if current_heading is None:
+                print("[MissionEngine] ⏳ GYRO_FORWARD: Menunggu data heading dari telemetri...")
+                return 0.0, 0.0, "GYRO_FORWARD: WAITING_HEADING"
+            self._cruise_initial_heading = float(current_heading)
+            print(f"[MissionEngine] 🧭 GYRO_FORWARD dimulai: heading_hold={self._cruise_initial_heading:.1f}° "
+                  f"spd={speed_mps:.1f}m/s")
+
+        if current_heading is None:
+            # Kehilangan sinyal heading sementara → maju lurus tanpa koreksi (lebih aman
+            # daripada berhenti total di tengah cruise).
+            self.asv.nav.send_velocity(forward_speed=speed_mps, turn_rate_deg=0.0)
+            remaining = max(0.0, duration_sec - elapsed)
+            return 0.0, 0.0, f"GYRO_FORWARD: HEADING_LOST rem={remaining:.1f}s"
+
+        heading_error = self._angular_diff(float(current_heading), self._cruise_initial_heading)
+        yaw_correction = max(-max_yaw_rate_dps, min(max_yaw_rate_dps, heading_kp * heading_error))
+
+        self.asv.nav.send_velocity(forward_speed=speed_mps, turn_rate_deg=yaw_correction)
+
+        remaining = max(0.0, duration_sec - elapsed)
+        label = (f"GYRO_FORWARD | spd={speed_mps:.1f}m/s hdg={current_heading:.1f}° "
+                 f"err={heading_error:+.1f}° yaw_corr={yaw_correction:+.1f}°/s rem={remaining:.1f}s")
+        # Return (0.0, 0.0) — movement via send_velocity(), NOT RC override, sama seperti
+        # CUSTOM_FORWARD/PRECISION_TURN.
         return 0.0, 0.0, label
 
     def _handle_precision_turn(self, step: Dict) -> Tuple[float, float, str]:
@@ -1608,6 +1724,9 @@ class MissionEngine:
         # Reset PRECISION_TURN state
         self._turn_initial_heading = None
         self._turn_target_heading  = None
+        # Reset GYRO_FORWARD state
+        self._cruise_initial_heading = None
+        self._cruise_ball_seen_since = None
 
         if self._current_step_idx < len(self._steps):
             next_step = self._steps[self._current_step_idx]
