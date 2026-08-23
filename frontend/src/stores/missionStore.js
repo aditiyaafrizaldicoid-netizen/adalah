@@ -199,7 +199,19 @@ export const STEP_TYPES = [
     icon: "🛟",
     color: "text-teal-400",
     bg: "bg-teal-500/10 border-teal-500/30",
-    fields: [{ key: "throttle", label: "Throttle (0-1)", type: "number", default: 0.4 }],
+    fields: [
+      { key: "throttle", label: "Throttle (0-1)", type: "number", default: 0.4 },
+      {
+        key: "ignore_area_px2",
+        label: "Ignore Below Area (px²)",
+        type: "number",
+        default: 4000,
+        // Pasangan bola dengan area rata-rata bounding box di bawah nilai ini
+        // dianggap TIDAK ADA sama sekali (bukan sekadar "belum boleh dikunci") —
+        // tidak dikejar maupun dikunci. Ini yang membuat step bisa SELESAI walau
+        // ada deteksi bola yang sangat jauh (course lain, noise, dst).
+      },
+    ],
   },
   {
     type: "FINISH",

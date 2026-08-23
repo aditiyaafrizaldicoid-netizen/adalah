@@ -137,6 +137,32 @@ class MissionEngine:
     # terlewat, naikkan jika kapal masih tertarik ke bola jauh.
     SEQ_MIN_PAIR_AREA_PX2 = 27000
 
+    # Area rata-rata minimum (piksel²) untuk pasangan bola agar DIANGGAP SEBAGAI
+    # KANDIDAT SAMA SEKALI — beda dari SEQ_MIN_PAIR_AREA_PX2 di atas yang cuma
+    # menentukan boleh-tidaknya sebuah pasangan di-LOCK. Pasangan yang area
+    # rata-ratanya di bawah nilai ini dibuang SEBELUM sempat dipakai sebagai target
+    # LOCK maupun target APPROACH (steer menuju midpoint-nya) — diperlakukan
+    # sama seperti "tidak ada pasangan valid terdeteksi sama sekali".
+    #
+    # Kenapa perlu, terpisah dari SEQ_MIN_PAIR_AREA_PX2: sebelum ada floor ini,
+    # SEARCHING akan mengejar (approach) pasangan SEKECIL/SEJAUH apa pun tanpa
+    # batas bawah — kalau yang terdeteksi cuma objek jauh yang tidak akan pernah
+    # cukup besar untuk di-LOCK (mis. buoy course lain di seberang danau, gerbang
+    # finish yang jauh, atau noise/refleksi air yang kebetulan lolos filter rasio-
+    # area & lebar-maksimum di sort_ball_pairs()), kapal akan terus mengejarnya
+    # tanpa henti dan step SEQUENTIAL_BUOY tidak pernah bisa menyimpulkan "buoy
+    # sudah habis" — SEQ_SEARCHING_TIMEOUT_SEC (12s) HANYA aktif setelah minimal
+    # 1 pasangan sudah di-cleared, jadi sebelum pasangan PERTAMA berhasil dikunci,
+    # tidak ada mekanisme timeout apa pun yang menghentikan pengejaran ini.
+    #
+    # Nilai default 4000px² @ 1920x1080 dipilih SENGAJA sama dengan nilai ASLI
+    # SEQ_MIN_PAIR_AREA_PX2 sebelum diskalakan ke resolusi 1920x1080 (dulu
+    # 4000px² @ 640x480) — di resolusi baru ini otomatis jadi jauh lebih kecil
+    # relatif terhadap frame, cocok sebagai noise-floor kasar. BELUM diverifikasi
+    # di lapangan pada resolusi ini — naikkan kalau kapal masih tertarik ke buoy
+    # yang sangat jauh, turunkan kalau buoy dekat yang sah malah ikut terbuang.
+    SEQ_IGNORE_AREA_PX2 = 4000
+
     # Durasi (detik) maksimum kapal boleh maju lurus TANPA melihat kandidat pasangan
     # ATAU fallback gate_x sama sekali ("buta total"). Setelah durasi ini terlampaui,
     # kapal STOP (throttle=0) alih-alih terus maju buta — mencegah menabrak
@@ -1236,10 +1262,17 @@ class MissionEngine:
           - Kedua bola hilang                → pasangan CLEARED, lanjut ke pasangan berikutnya
 
         Format step:
-          { "type": "SEQUENTIAL_BUOY", "throttle": 0.4 }
+          { "type": "SEQUENTIAL_BUOY", "throttle": 0.4, "ignore_area_px2": 4000 }
 
         `throttle` (0.0-1.0) opsional — fallback ke speed_scheduler.max_base_throttle
         jika tidak diisi (lihat _resolve_step_throttle()).
+
+        `ignore_area_px2` (piksel²) opsional — pasangan bola dengan area rata-rata di
+        bawah nilai ini dianggap TIDAK ADA sama sekali (bukan cuma "belum boleh dikunci"
+        seperti SEQ_MIN_PAIR_AREA_PX2), sehingga tidak dikejar (approach) maupun dikunci.
+        Ini yang memungkinkan step SELESAI walau ada deteksi bola yang sangat jauh (mis.
+        buoy course lain, noise) — tanpa floor ini, kandidat sejauh apa pun tetap dikejar
+        tanpa henti. Fallback ke SEQ_IGNORE_AREA_PX2 jika tidak diisi.
         """
         throttle    = self._resolve_step_throttle(step)
         cleared     = self._seq_pairs_cleared
@@ -1283,22 +1316,33 @@ class MissionEngine:
 
             # Sort HANYA di state SEARCHING untuk menentukan pasangan target.
             # Pasangan[0] = pasangan terdekat (area rata-rata bounding box terbesar).
-            pairs       = self._sort_buoy_pairs(searchable_balls)
+            raw_pairs = self._sort_buoy_pairs(searchable_balls)
+
+            # ── Ignore-floor: buang pasangan yang area rata-ratanya < ignore_area_px2
+            # SEBELUM dipakai sebagai kandidat LOCK *atau* APPROACH (lihat
+            # SEQ_IGNORE_AREA_PX2). Tanpa ini, pasangan sekecil/sejauh apa pun tetap
+            # dikejar tanpa henti selama masih lolos safeguard rasio-area/lebar-
+            # maksimum — kapal tidak akan pernah menyimpulkan "buoy sudah habis" kalau
+            # yang terdeteksi cuma objek jauh yang tidak akan pernah cukup besar untuk
+            # di-LOCK. Opsional per-step, fallback ke SEQ_IGNORE_AREA_PX2 kalau kosong.
+            ignore_area_px2 = float(step.get("ignore_area_px2", self.SEQ_IGNORE_AREA_PX2))
+            pairs = [
+                (r, g) for (r, g) in raw_pairs
+                if self._pair_avg_area(r, g) >= ignore_area_px2
+            ]
+
             target_pair = pairs[0] if pairs else None
 
-            # ── Area Filter: abaikan pasangan yang terlalu jauh/kecil ───
+            # ── Area Filter: abaikan pasangan yang terlalu jauh/kecil untuk DIKUNCI ──
             # Jika rata-rata area bounding box kedua bola < SEQ_MIN_PAIR_AREA_PX2,
-            # bola dianggap terlalu jauh (bukan target valid). Kapal terus maju
-            # tanpa mengunci, sehingga tidak salah jalan ke bola yang sudah lewat
-            # atau bola dari misi lain yang terdeteksi dari jarak jauh.
+            # bola dianggap terlalu jauh (bukan target LOCK valid, tapi masih boleh
+            # jadi target APPROACH — beda dari ignore-floor di atas yang membuang
+            # pasangan sepenuhnya). Kapal terus maju tanpa mengunci, sehingga tidak
+            # salah jalan ke bola yang sudah lewat atau bola dari misi lain.
             if target_pair is not None:
-                r, g = target_pair
-                avg_area = (
-                    float((r[4] - r[2]) * (r[5] - r[3])) +
-                    float((g[4] - g[2]) * (g[5] - g[3]))
-                ) / 2.0
+                avg_area = self._pair_avg_area(*target_pair)
                 if avg_area < self.SEQ_MIN_PAIR_AREA_PX2:
-                    target_pair = None  # bola terlalu jauh → abaikan, jangan kunci
+                    target_pair = None  # bola terlalu jauh untuk dikunci → tetap approach saja
 
             red_ball   = target_pair[0] if target_pair else None
             green_ball = target_pair[1] if target_pair else None
@@ -1323,15 +1367,15 @@ class MissionEngine:
                 label = f"SEQ_GATE:LOCKED | SEQUENTIAL_BUOY (pair {pair_label})"
                 return steer, throttle, label
             else:
-                # Belum cukup besar/dekat untuk DIKUNCI, TAPI `pairs` (sebelum filter
-                # area) mungkin masih berisi kandidat yang SUDAH lolos safeguard
-                # rasio-area & lebar-maksimum (_sort_buoy_pairs) — cuma belum lolos
-                # SEQ_MIN_PAIR_AREA_PX2 (masih agak jauh). PRIORITASKAN kandidat aman
-                # ini sebagai target approach, JANGAN langsung lompat ke `gate_x`
-                # mentah dari tracker (itu TIDAK punya pengaman rasio-area/lebar-
-                # maksimum sama sekali, sehingga bisa menyambungkan bola dari gate
-                # yang salah dan menyeret kapal ke arah yang keliru saat SEARCHING
-                # berlangsung lama — ini yang terjadi & diamati langsung di lapangan).
+                # Belum cukup besar/dekat untuk DIKUNCI, TAPI `pairs` (sudah lolos
+                # safeguard rasio-area/lebar-maksimum DAN ignore-floor di atas — cuma
+                # belum lolos SEQ_MIN_PAIR_AREA_PX2, masih agak jauh) mungkin masih
+                # berisi kandidat yang layak DIKEJAR (approach). PRIORITASKAN kandidat
+                # aman ini, JANGAN langsung lompat ke `gate_x` mentah dari tracker (itu
+                # TIDAK punya pengaman rasio-area/lebar-maksimum sama sekali, sehingga
+                # bisa menyambungkan bola dari gate yang salah dan menyeret kapal ke
+                # arah yang keliru saat SEARCHING berlangsung lama — ini yang terjadi &
+                # diamati langsung di lapangan).
                 if pairs:
                     # Ada sinyal (kandidat aman atau fallback kasar) → reset timer "buta".
                     self._seq_blind_search_since = None
@@ -1678,6 +1722,10 @@ class MissionEngine:
     def _bbox_area(ball: Tuple) -> float:
         """Area bounding box (piksel²) dari tuple (cx, cy, x1, y1, x2, y2)."""
         return float((ball[4] - ball[2]) * (ball[5] - ball[3]))
+
+    def _pair_avg_area(self, red_ball: Tuple, green_ball: Tuple) -> float:
+        """Rata-rata area bounding box (piksel²) dari sepasang bola merah+hijau."""
+        return (self._bbox_area(red_ball) + self._bbox_area(green_ball)) / 2.0
 
     def _resolve_step_throttle(self, step: Dict) -> float:
         """
