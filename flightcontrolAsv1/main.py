@@ -154,10 +154,32 @@ def main():
             # PENTING: RC override dikirim selama ARM — tidak menunggu konfirmasi
             # mode == "MANUAL" dari telemetry karena mode switch butuh beberapa frame
             # untuk terkonfirmasi balik, dan setiap frame yang terlewat = koreksi hilang.
+            #
+            # try/except DI SINI WAJIB ADA: kalau update_frame() melempar exception
+            # (mis. field mission JSON yang malformed lolos dari safe-parsing di
+            # mission_engine.py), kapal HARUS berhenti (RC netral), BUKAN terus
+            # jalan dengan RC command TERAKHIR yang pernah terkirim (karena tidak
+            # ada override baru yang dikirim frame ini) sampai exception ini
+            # membunuh thread streaming/kontrol sepenuhnya (lihat try/except di
+            # camera/streamer.py _upload_loop — itu lapis pertahanan LUAR yang
+            # mencegah thread mati total, tapi TIDAK otomatis menghentikan kapal;
+            # try/except di sini yang bertanggung jawab atas itu).
             # ----------------------------------------------------------------
-            steer_norm, thr_norm, step_label = mission_engine.update_frame(
-                frame, gate_x, detected_balls=detected_balls
-            )
+            try:
+                steer_norm, thr_norm, step_label = mission_engine.update_frame(
+                    frame, gate_x, detected_balls=detected_balls
+                )
+            except Exception as e:
+                print(f"[MISSION] ⚠️ update_frame() error — RC dinetralkan demi keamanan: {e}")
+                import traceback
+                traceback.print_exc()
+                asv.send_manual_rc_drive(0.0, 0.0)
+                state = "MISSION_ERROR"
+                _osd["last_label"] = state
+                error_px = gate_x - camera_width // 2 if gate_x is not None else None
+                logger.log_record(asv.get_telemetry_dict(), state=state, gate_x=gate_x, error_px=error_px)
+                return processed_frame
+
             state = step_label
             _osd["last_label"] = step_label  # simpan untuk OSD frame berikutnya
 

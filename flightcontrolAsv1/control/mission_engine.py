@@ -691,7 +691,7 @@ class MissionEngine:
 
             # ---- START (warmup sebentar) ----
             elif step_type == self.STEP_TYPE_START:
-                warmup_sec = float(step.get("duration_sec", 2.0))
+                warmup_sec = self._safe_float(step.get("duration_sec"), 2.0)
                 if time.time() - self._step_start_time >= warmup_sec:
                     self._advance_step()
                     return self.update_frame(frame, gate_x, detected_balls)
@@ -741,8 +741,8 @@ class MissionEngine:
           TRANSITIONING → Satu bola hilang. Manuver condong, DILARANG pair ulang.
           CLEARED      → Kedua bola hilang. Gate terlewati, reset ke SEARCHING.
         """
-        target_pass_count = int(step.get("pass_count", 0))
-        duration = float(step.get("duration_sec", 0.0))
+        target_pass_count = self._safe_int(step.get("pass_count"), 0)
+        duration = self._safe_float(step.get("duration_sec"), 0.0)
 
         # --- Cek kondisi selesai berdasarkan pass_count ---
         if target_pass_count > 0 and self._buoy_pass_count >= target_pass_count:
@@ -918,7 +918,7 @@ class MissionEngine:
         Increment pass count, reset state machine, dan kembali ke SEARCHING.
         """
         self._buoy_pass_count += 1
-        target_pass_count = int(step.get("pass_count", 0))
+        target_pass_count = self._safe_int(step.get("pass_count"), 0)
         new_pass_label = f"{self._buoy_pass_count}/{target_pass_count}" if target_pass_count > 0 else str(self._buoy_pass_count)
 
         print(f"[GATE] 🏁 Gate CLEARED! Pass count: {self._buoy_pass_count}")
@@ -932,8 +932,8 @@ class MissionEngine:
 
     def _handle_goto_gps(self, step, frame, gate_x, detected_balls=None):
         """Handle GOTO_GPS step."""
-        target_lat = float(step.get("lat", 0.0))
-        target_lon = float(step.get("lon", 0.0))
+        target_lat = self._safe_float(step.get("lat"), 0.0)
+        target_lon = self._safe_float(step.get("lon"), 0.0)
 
         now = time.time()
         telemetry = self.asv.get_telemetry()
@@ -955,7 +955,7 @@ class MissionEngine:
 
     def _handle_take_image(self, step, frame, gate_x, detected_balls=None):
         """Handle TAKE_IMAGE step."""
-        duration = float(step.get("duration_sec", 3.0))
+        duration = self._safe_float(step.get("duration_sec"), 3.0)
         elapsed = time.time() - self._step_start_time
 
         if elapsed >= duration:
@@ -967,7 +967,7 @@ class MissionEngine:
 
     def _handle_hold(self, step, frame, gate_x, detected_balls=None):
         """Handle HOLD step."""
-        duration = float(step.get("duration_sec", 5.0))
+        duration = self._safe_float(step.get("duration_sec"), 5.0)
         elapsed = time.time() - self._step_start_time
 
         if elapsed >= duration:
@@ -1005,9 +1005,9 @@ class MissionEngine:
           step['heading_offset_deg'] (float) — Yaw rate konstan (°/s). Default: 0.0
           step['duration_sec']       (float) — Batas waktu dalam detik. Default: 5.0
         """
-        speed_mps          = float(step.get("speed_mps", 0.5))
-        heading_offset_deg = float(step.get("heading_offset_deg", 0.0))
-        duration_sec       = float(step.get("duration_sec", 5.0))
+        speed_mps          = self._safe_float(step.get("speed_mps"), 0.5)
+        heading_offset_deg = self._safe_float(step.get("heading_offset_deg"), 0.0)
+        duration_sec       = self._safe_float(step.get("duration_sec"), 5.0)
 
         elapsed = time.time() - self._step_start_time
 
@@ -1076,10 +1076,10 @@ class MissionEngine:
                                         Default: 2.0
         """
         throttle             = self._resolve_step_throttle(step)
-        duration_sec         = float(step.get("duration_sec", 15.0))
-        min_runtime_sec      = float(step.get("min_runtime_sec", 1.5))
-        heading_kp           = float(step.get("heading_kp", 0.03))
-        heading_deadzone_deg = float(step.get("heading_deadzone_deg", 2.0))
+        duration_sec         = self._safe_float(step.get("duration_sec"), 15.0)
+        min_runtime_sec      = self._safe_float(step.get("min_runtime_sec"), 1.5)
+        heading_kp           = self._safe_float(step.get("heading_kp"), 0.03)
+        heading_deadzone_deg = self._safe_float(step.get("heading_deadzone_deg"), 2.0)
 
         # Pastikan FC selalu di mode MANUAL, sama seperti TRACKING_BUOY/SEQUENTIAL_BUOY
         # (defensive re-check tiap frame, bukan cuma sekali di awal step).
@@ -1165,8 +1165,8 @@ class MissionEngine:
           self._turn_initial_heading (Optional[float]) — Heading awal saat step dimulai (0-360°).
           self._turn_target_heading  (Optional[float]) — Heading target setelah belok (0-360°).
         """
-        turn_angle_deg = float(step.get("turn_angle_deg", 90.0))
-        turn_rate_dps  = float(step.get("turn_rate_dps", 20.0))
+        turn_angle_deg = self._safe_float(step.get("turn_angle_deg"), 90.0)
+        turn_rate_dps  = self._safe_float(step.get("turn_rate_dps"), 20.0)
 
         # Ambil telemetri untuk mendapatkan heading saat ini
         telemetry = self.asv.get_telemetry() if self.asv else None
@@ -1233,9 +1233,9 @@ class MissionEngine:
           step['throttle']     (float) — Throttle ratio: 0.0 (berhenti) .. 1.0 (full maju). Default: 0.3
           step['duration_sec'] (float) — Durasi maneuver dalam detik. Default: 3.0
         """
-        steer       = max(-1.0, min(1.0, float(step.get("steer", 0.0))))
-        throttle    = max(0.0, min(1.0, float(step.get("throttle", 0.3))))
-        duration_sec = float(step.get("duration_sec", 3.0))
+        steer       = max(-1.0, min(1.0, self._safe_float(step.get("steer"), 0.0)))
+        throttle    = max(0.0, min(1.0, self._safe_float(step.get("throttle"), 0.3)))
+        duration_sec = self._safe_float(step.get("duration_sec"), 3.0)
 
         elapsed = time.time() - self._step_start_time
 
@@ -1405,7 +1405,7 @@ class MissionEngine:
             # maksimum — kapal tidak akan pernah menyimpulkan "buoy sudah habis" kalau
             # yang terdeteksi cuma objek jauh yang tidak akan pernah cukup besar untuk
             # di-LOCK. Opsional per-step, fallback ke SEQ_IGNORE_AREA_PX2 kalau kosong.
-            ignore_area_px2 = float(step.get("ignore_area_px2", self.SEQ_IGNORE_AREA_PX2))
+            ignore_area_px2 = self._safe_float(step.get("ignore_area_px2"), self.SEQ_IGNORE_AREA_PX2)
             pairs = [
                 (r, g) for (r, g) in raw_pairs
                 if self._pair_avg_area(r, g) >= ignore_area_px2
@@ -1511,8 +1511,8 @@ class MissionEngine:
                     # pertama di-cleared), guard ini berlaku dari awal step — mengisi
                     # celah kasus tidak ada bola terdeteksi SAMA SEKALI sejak awal
                     # (kamera belum menghadap buoy, atau course memang sudah kosong).
-                    no_detection_finish_sec = float(
-                        step.get("no_detection_finish_sec", self.SEQ_NO_DETECTION_FINISH_SEC))
+                    no_detection_finish_sec = self._safe_float(
+                        step.get("no_detection_finish_sec"), self.SEQ_NO_DETECTION_FINISH_SEC)
                     if blind_duration > no_detection_finish_sec:
                         print(f"[SEQ_BUOY] ✅ Buta total selama {blind_duration:.1f}s (tidak ada "
                               f"kandidat/gate_x sama sekali) → anggap SEQUENTIAL_BUOY selesai "
@@ -1897,8 +1897,8 @@ class MissionEngine:
         saat ini (urgency 1.0 = bola tepat di tengah/paling bahaya, 0.0 = bola sudah
         >= clearance_px dari tengah/aman, tidak perlu koreksi).
         """
-        clearance_px = float(step.get("single_ball_clearance_px", self.SEQ_SINGLE_BALL_CLEARANCE_PX))
-        max_steer = float(step.get("single_ball_max_steer", self.SEQ_SINGLE_BALL_MAX_STEER))
+        clearance_px = self._safe_float(step.get("single_ball_clearance_px"), self.SEQ_SINGLE_BALL_CLEARANCE_PX)
+        max_steer = self._safe_float(step.get("single_ball_max_steer"), self.SEQ_SINGLE_BALL_MAX_STEER)
 
         center_x = self.tracking_controller.center_x
         offset_from_center = abs(ball[0] - center_x)
@@ -1910,6 +1910,46 @@ class MissionEngine:
         away_direction = -1.0 if side == "green" else 1.0
         return away_direction * urgency * max_steer
 
+    @staticmethod
+    def _safe_float(value: Any, default: float) -> float:
+        """
+        Konversi nilai field step mission ke float dengan aman — kembalikan `default`
+        kalau value None, string kosong, atau tidak valid, BUKAN melempar ValueError.
+
+        KENAPA INI PENTING (bukan sekadar jaga-jaga): dikonfirmasi crash di lapangan —
+        field "steer" pada step TIMED_STEER berisi string kosong ('') karena input
+        number di frontend sempat dikosongkan operator sebelum mission di-upload,
+        dan `float('')` melempar ValueError. Exception itu terjadi DI DALAM
+        frame_callback yang dipanggil dari _upload_loop() (camera/streamer.py) TANPA
+        try/except membungkusnya — akibatnya seluruh thread streaming+kontrol MATI
+        total (bukan cuma 1 step yang gagal), kapal berhenti menerima RC command baru
+        sama sekali sampai di-restart manual. Safety net di camera/streamer.py &
+        main.py sudah ditambahkan sebagai lapis pertahanan luar, TAPI parsing di sini
+        tetap harus aman sendiri sebagai lapis pertama — jangan andalkan lapisan luar
+        saja untuk kasus yang seharusnya bisa dicegah di sumbernya.
+
+        Pemanggilan: `self._safe_float(step.get("key"), default)` — SENGAJA tanpa
+        default kedua di `step.get()` (beda dari pola lama `step.get("key", default)`)
+        karena `step.get()` hanya memberi default saat KEY TIDAK ADA, sedangkan kasus
+        di atas key ADA tapi isinya '' — _safe_float menangani KEDUA kasus itu sekaligus.
+        """
+        if value is None:
+            return default
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _safe_int(value: Any, default: int) -> int:
+        """Versi int() dari _safe_float() — lihat catatan di sana."""
+        if value is None:
+            return default
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
     def _resolve_step_throttle(self, step: Dict) -> float:
         """
         Ambil throttle (0.0-1.0) dari field `throttle` step mission jika diisi,
@@ -1920,10 +1960,9 @@ class MissionEngine:
         """
         step_throttle = step.get("throttle")
         if step_throttle is not None:
-            try:
-                return max(0.0, min(1.0, float(step_throttle)))
-            except (TypeError, ValueError):
-                pass
+            resolved = self._safe_float(step_throttle, -1.0)
+            if resolved >= 0.0:
+                return max(0.0, min(1.0, resolved))
         return self.speed_scheduler.max_base_throttle
 
     def _find_nearest_ball(

@@ -290,9 +290,30 @@ class VideoStreamer:
                 # --------------------------------------------------------
                 # 1. Selalu jalankan YOLO callback agar kontrol ASV tetap
                 #    berjalan meskipun streaming dimatikan.
+                #
+                #    try/except DI SINI WAJIB ADA: frame_callback (process_and_
+                #    control -> mission_engine.update_frame()) berjalan di thread
+                #    ini. Sebelum ada try/except ini, exception apa pun di dalamnya
+                #    (mis. ValueError dari field mission JSON yang malformed)
+                #    langsung MEMATIKAN SELURUH thread _upload_loop — bukan cuma
+                #    1 frame yang gagal. Akibatnya: streaming berhenti total DAN
+                #    kapal berhenti menerima RC command baru sama sekali (nyangkut
+                #    di command terakhir), tanpa ada indikasi apa pun ke operator
+                #    selain traceback di log Python. Dikonfirmasi terjadi di
+                #    lapangan (field "steer" TIMED_STEER berisi string kosong).
+                #    Ini lapis pertahanan LUAR — lapis dalam (parsing aman per
+                #    field) ada di mission_engine.py (_safe_float/_safe_int) dan
+                #    lapis tengah (auto-stop saat gagal) ada di main.py
+                #    process_and_control().
                 # --------------------------------------------------------
                 if self.frame_callback:
-                    processed_frame = self.frame_callback(frame)
+                    try:
+                        processed_frame = self.frame_callback(frame)
+                    except Exception as e:
+                        print(f"[VideoStream] ⚠️ frame_callback error (thread TETAP hidup): {e}")
+                        import traceback
+                        traceback.print_exc()
+                        processed_frame = frame
                 else:
                     processed_frame = frame
 
