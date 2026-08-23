@@ -93,11 +93,12 @@ export const STEP_TYPES = [
     bg: "bg-indigo-500/10 border-indigo-500/30",
     fields: [
       {
-        key: "speed_mps",
-        label: "Speed (m/s)",
+        key: "throttle",
+        label: "Throttle (0-1)",
         type: "number",
-        default: 0.5,
-        // Kecepatan maju kapal dalam meter per detik.
+        default: 0.4,
+        // Sama seperti TRACKING_BUOY: mode MANUAL, gerak via RC Override. Kosongkan
+        // untuk fallback ke throttle global (speed_scheduler.max_base_throttle).
       },
       {
         key: "duration_sec",
@@ -120,16 +121,17 @@ export const STEP_TYPES = [
         key: "heading_kp",
         label: "Heading Correction Kp",
         type: "number",
-        default: 1.5,
-        // Gain proporsional koreksi yaw: yaw_rate = Kp × heading_error (derajat).
+        default: 0.03,
+        // Gain proporsional: steer_norm (-1..+1) per derajat error heading.
         // Heading target = heading kapal saat step ini dimulai (heading-hold).
       },
       {
-        key: "max_yaw_rate_dps",
-        label: "Max Yaw Correction (°/s)",
+        key: "heading_deadzone_deg",
+        label: "Heading Deadzone (°)",
         type: "number",
-        default: 15,
-        // Batas maksimum kecepatan koreksi yaw agar tidak overcorrect/oscillate.
+        default: 2,
+        // Error heading di bawah nilai ini dianggap lurus — tidak ada koreksi,
+        // mencegah kapal bergetar akibat micro-correction.
       },
     ],
   },

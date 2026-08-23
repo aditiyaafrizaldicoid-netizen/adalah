@@ -574,6 +574,14 @@ class MissionEngine:
                     if self.asv and self.asv.is_connected() and self.asv.get_telemetry().mode != "MANUAL":
                         print("[MissionEngine] 🔄 Switch mode → MANUAL untuk SEQUENTIAL_BUOY...")
                         self.asv.set_mode("MANUAL")
+                elif step_type == self.STEP_TYPE_GYRO_FORWARD:
+                    # SAMA seperti TRACKING_BUOY/SEQUENTIAL_BUOY/TIMED_STEER — mode MANUAL,
+                    # gerak via RC Override (send_manual_rc_drive), BUKAN GUIDED/send_velocity.
+                    # Konsepnya identik dgn TRACKING_BUOY, hanya sumber error steering-nya
+                    # yang beda: heading kompas/gyro, bukan posisi bola di kamera.
+                    if self.asv and self.asv.is_connected() and self.asv.get_telemetry().mode != "MANUAL":
+                        print("[MissionEngine] 🔄 Switch mode → MANUAL untuk GYRO_FORWARD...")
+                        self.asv.set_mode("MANUAL")
                 elif step_type in (self.STEP_TYPE_HOLD, self.STEP_TYPE_TAKE_IMAGE):
                     # Pastikan mode GUIDED agar stop_movement() (send_velocity 0) efektif
                     if self.asv and self.asv.is_connected():
@@ -582,7 +590,7 @@ class MissionEngine:
                             print(f"[MissionEngine] 🔄 Switch mode → GUIDED untuk {step_type}...")
                             self.asv.set_mode("GUIDED")
                     self.asv.stop_movement()
-                elif step_type in (self.STEP_TYPE_CUSTOM_FORWARD, self.STEP_TYPE_PRECISION_TURN, self.STEP_TYPE_GYRO_FORWARD):
+                elif step_type in (self.STEP_TYPE_CUSTOM_FORWARD, self.STEP_TYPE_PRECISION_TURN):
                     # Switch ke GUIDED dan lepaskan RC override dari step MANUAL sebelumnya
                     if self.asv and self.asv.is_connected():
                         if self.asv.get_telemetry().mode != "GUIDED":
@@ -955,12 +963,17 @@ class MissionEngine:
         """
         Handle GYRO_FORWARD step.
 
-        Kapal maju lurus dengan koreksi yaw berbasis kompas/gyro (telemetry.heading),
-        BERBEDA dari CUSTOM_FORWARD yang mengirim yaw rate KONSTAN tanpa feedback
-        (dead-reckoning, akan tetap drift kalau ada arus/angin/imbalance motor).
-        Di sini heading awal saat step dimulai direkam sebagai target "heading-hold",
-        lalu setiap frame error terhadap heading itu dikoreksi proporsional (P controller
-        sederhana: yaw_rate = Kp × heading_error, di-clamp ke max_yaw_rate_dps).
+        Konsepnya SAMA PERSIS dengan TRACKING_BUOY: mode MANUAL, kapal digerakkan via
+        RC Override (steer_norm -1..+1, throttle_norm 0..1 lewat send_manual_rc_drive) —
+        BUKAN GUIDED/send_velocity(). Satu-satunya yang beda: sumber error steering-nya
+        BUKAN posisi bola di kamera (piksel), melainkan error heading kompas/gyro
+        (derajat) terhadap heading awal saat step ini dimulai (heading-hold). throttle
+        dipertahankan konstan sepanjang step, sama seperti throttle konstan di TRACKING_BUOY.
+
+        Heading awal direkam sebagai target di frame pertama, lalu tiap frame error
+        terhadap heading itu dikoreksi proporsional (steer_norm = Kp × heading_error,
+        di-clamp ke ±1.0, dengan dead-zone kecil agar tidak jitter saat hampir lurus —
+        pola yang sama seperti TrackingController.compute_normalized_steering()).
 
         Step SELESAI jika salah satu terjadi lebih dulu:
           - duration_sec terlampaui (safety cap / cruise dianggap gagal menemukan buoy), ATAU
@@ -974,25 +987,36 @@ class MissionEngine:
             (mis. posisi start terlalu dekat gerbang, atau glare/pantulan air).
 
         Variabel step yang digunakan:
-          step['speed_mps']         (float) — Kecepatan maju (m/s). Default: 0.5
-          step['duration_sec']      (float) — Batas waktu maksimum (detik). Default: 15.0
-          step['heading_kp']        (float) — Gain proporsional koreksi yaw (°/s per ° error). Default: 1.5
-          step['max_yaw_rate_dps']  (float) — Batas maksimum yaw rate koreksi (°/s). Default: 15.0
-          step['min_runtime_sec']   (float) — Waktu minimum maju sebelum deteksi buoy boleh
-                                     mengakhiri step lebih awal. Default: 1.5
+          step['throttle']             (float) — Throttle 0.0-1.0. OPSIONAL — fallback ke
+                                        speed_scheduler.max_base_throttle jika kosong
+                                        (lihat _resolve_step_throttle(), sama seperti
+                                        TRACKING_BUOY/SEQUENTIAL_BUOY).
+          step['duration_sec']         (float) — Batas waktu maksimum (detik). Default: 15.0
+          step['min_runtime_sec']      (float) — Waktu minimum maju sebelum deteksi buoy
+                                        boleh mengakhiri step lebih awal. Default: 1.5
+          step['heading_kp']           (float) — Gain proporsional: steer_norm per derajat
+                                        error heading. Default: 0.03 (error 30° → steer ±0.9)
+          step['heading_deadzone_deg'] (float) — Error di bawah ini dianggap lurus (tidak
+                                        ada koreksi), mencegah micro-correction flicker.
+                                        Default: 2.0
         """
-        speed_mps        = float(step.get("speed_mps", 0.5))
-        duration_sec     = float(step.get("duration_sec", 15.0))
-        heading_kp       = float(step.get("heading_kp", 1.5))
-        max_yaw_rate_dps = float(step.get("max_yaw_rate_dps", 15.0))
-        min_runtime_sec  = float(step.get("min_runtime_sec", 1.5))
+        throttle             = self._resolve_step_throttle(step)
+        duration_sec         = float(step.get("duration_sec", 15.0))
+        min_runtime_sec      = float(step.get("min_runtime_sec", 1.5))
+        heading_kp           = float(step.get("heading_kp", 0.03))
+        heading_deadzone_deg = float(step.get("heading_deadzone_deg", 2.0))
+
+        # Pastikan FC selalu di mode MANUAL, sama seperti TRACKING_BUOY/SEQUENTIAL_BUOY
+        # (defensive re-check tiap frame, bukan cuma sekali di awal step).
+        if self.asv and self.asv.is_connected() and self.asv.get_telemetry().mode != "MANUAL":
+            print("[MissionEngine] 🔄 Automatic mode switch to MANUAL for GYRO_FORWARD...")
+            self.asv.set_mode("MANUAL")
 
         elapsed = time.time() - self._step_start_time
 
         # --- Selesai karena waktu habis (safety cap) ---
         if duration_sec > 0 and elapsed >= duration_sec:
             print(f"[MissionEngine] ✅ GYRO_FORWARD selesai! Durasi {duration_sec:.1f}s terpenuhi (timeout).")
-            self.asv.stop_movement()
             self._advance_step()
             return 0.0, 0.0, "GYRO_FORWARD"
 
@@ -1006,7 +1030,6 @@ class MissionEngine:
                     self._cruise_ball_seen_since = now
                 elif (now - self._cruise_ball_seen_since) >= self.GYRO_FORWARD_BALL_CONFIRM_SEC:
                     print(f"[MissionEngine] ✅ GYRO_FORWARD selesai! Buoy terdeteksi di depan kamera.")
-                    self.asv.stop_movement()
                     self._advance_step()
                     return 0.0, 0.0, "GYRO_FORWARD"
             else:
@@ -1016,32 +1039,32 @@ class MissionEngine:
         telemetry = self.asv.get_telemetry() if self.asv else None
         current_heading = getattr(telemetry, "heading", None) if telemetry else None
 
-        if self._cruise_initial_heading is None:
-            if current_heading is None:
-                print("[MissionEngine] ⏳ GYRO_FORWARD: Menunggu data heading dari telemetri...")
-                return 0.0, 0.0, "GYRO_FORWARD: WAITING_HEADING"
+        if self._cruise_initial_heading is None and current_heading is not None:
             self._cruise_initial_heading = float(current_heading)
             print(f"[MissionEngine] 🧭 GYRO_FORWARD dimulai: heading_hold={self._cruise_initial_heading:.1f}° "
-                  f"spd={speed_mps:.1f}m/s")
-
-        if current_heading is None:
-            # Kehilangan sinyal heading sementara → maju lurus tanpa koreksi (lebih aman
-            # daripada berhenti total di tengah cruise).
-            self.asv.nav.send_velocity(forward_speed=speed_mps, turn_rate_deg=0.0)
-            remaining = max(0.0, duration_sec - elapsed)
-            return 0.0, 0.0, f"GYRO_FORWARD: HEADING_LOST rem={remaining:.1f}s"
-
-        heading_error = self._angular_diff(float(current_heading), self._cruise_initial_heading)
-        yaw_correction = max(-max_yaw_rate_dps, min(max_yaw_rate_dps, heading_kp * heading_error))
-
-        self.asv.nav.send_velocity(forward_speed=speed_mps, turn_rate_deg=yaw_correction)
+                  f"thr={throttle:.2f}")
 
         remaining = max(0.0, duration_sec - elapsed)
-        label = (f"GYRO_FORWARD | spd={speed_mps:.1f}m/s hdg={current_heading:.1f}° "
-                 f"err={heading_error:+.1f}° yaw_corr={yaw_correction:+.1f}°/s rem={remaining:.1f}s")
-        # Return (0.0, 0.0) — movement via send_velocity(), NOT RC override, sama seperti
-        # CUSTOM_FORWARD/PRECISION_TURN.
-        return 0.0, 0.0, label
+
+        if self._cruise_initial_heading is None or current_heading is None:
+            # Heading belum/tidak tersedia → tetap MAJU (steer netral) alih-alih diam total.
+            # Kapal tidak boleh berhenti hanya karena data kompas belum siap.
+            label = f"GYRO_FORWARD: NO_HEADING (maju lurus) thr={throttle:.2f} rem={remaining:.1f}s"
+            return 0.0, throttle, label
+
+        heading_error = self._angular_diff(float(current_heading), self._cruise_initial_heading)
+
+        # Dead-zone: error kecil dianggap lurus — tidak ada micro-correction flicker.
+        if abs(heading_error) < heading_deadzone_deg:
+            steer_norm = 0.0
+        else:
+            steer_norm = max(-1.0, min(1.0, heading_kp * heading_error))
+
+        label = (f"GYRO_FORWARD | thr={throttle:.2f} hdg={current_heading:.1f}° "
+                 f"err={heading_error:+.1f}° steer={steer_norm:+.2f} rem={remaining:.1f}s")
+        # steer_norm/throttle dikirim via RC Override (send_manual_rc_drive) oleh main.py,
+        # SAMA seperti TRACKING_BUOY/SEQUENTIAL_BUOY/TIMED_STEER — bukan send_velocity().
+        return steer_norm, throttle, label
 
     def _handle_precision_turn(self, step: Dict) -> Tuple[float, float, str]:
         """
