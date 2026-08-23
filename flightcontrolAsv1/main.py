@@ -82,6 +82,10 @@ def main():
     ws_url = os.getenv("ASV_WS_URL", "ws://localhost:3000/api/v1/ws/asv")
     ws_client = ASVWebSocketClient(asv, ws_url=ws_url)
 
+    # set_tracker() SEBELUM set_tracking_controller(): set_tracking_controller() memicu
+    # fetch_and_apply_pid_config() (fetch sekali dari DB), yang butuh self.tracker sudah
+    # ter-set agar min_detection_area_px2 ikut ter-apply pada fetch pertama itu juga.
+    ws_client.set_tracker(tracker)
     ws_client.set_tracking_controller(controller)
     ws_client.set_speed_scheduler(speed_scheduler)
     ws_client.set_mission_engine(mission_engine)

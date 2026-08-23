@@ -181,6 +181,7 @@ export const useWebsocketStore = defineStore("websocket", () => {
       forward_speed: params.forward_speed !== undefined ? parseFloat(params.forward_speed) : undefined,
       max_turn_rate: params.max_turn_rate !== undefined ? parseFloat(params.max_turn_rate) : undefined,
       align_threshold_px: params.align_threshold_px !== undefined ? parseFloat(params.align_threshold_px) : undefined,
+      min_detection_area_px2: params.min_detection_area_px2 !== undefined ? parseFloat(params.min_detection_area_px2) : undefined,
     });
   }
 

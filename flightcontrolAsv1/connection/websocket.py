@@ -49,6 +49,7 @@ class ASVWebSocketClient:
         self.video_streamer = None
         self.tracking_controller = None
         self.speed_scheduler = None
+        self.tracker = None
         self._camera_was_ok = False
         self.mission_engine = None
 
@@ -70,6 +71,10 @@ class ASVWebSocketClient:
     def set_speed_scheduler(self, speed_scheduler):
         self.speed_scheduler = speed_scheduler
         print("[WS] SpeedScheduler registered for live throttle scale tuning")
+
+    def set_tracker(self, tracker):
+        self.tracker = tracker
+        print("[WS] BallTracker registered for live detection noise-floor tuning")
 
     def fetch_and_apply_pid_config(self):
         """Fetch PID & Motion parameters from backend database on startup."""
@@ -95,7 +100,10 @@ class ASVWebSocketClient:
                             )
                         if self.speed_scheduler and f_speed is not None:
                             self.speed_scheduler.update_throttle_limit(f_speed)
-                        print(f"[WS] 📥 Synced initial PID config from DB -> Speed/Throttle: {f_speed}, MaxTurn: {cfg.get('max_turn_rate')}deg/s")
+                        min_area = cfg.get("min_detection_area_px2")
+                        if self.tracker and min_area is not None:
+                            self.tracker.set_min_detection_area(min_area)
+                        print(f"[WS] 📥 Synced initial PID config from DB -> Speed/Throttle: {f_speed}, MaxTurn: {cfg.get('max_turn_rate')}deg/s, MinDetectionArea: {min_area}px²")
         except Exception as e:
             print(f"[WS] Warning: Could not fetch initial PID config from DB ({e})")
 
@@ -249,6 +257,7 @@ class ASVWebSocketClient:
             max_turn = cmd.get("max_turn_rate", None)
             align_tol = cmd.get("align_threshold_px", None)
             throttle = cmd.get("max_base_throttle", None) or cmd.get("throttle", None) or speed
+            min_detection_area = cmd.get("min_detection_area_px2", None)
 
             if self.tracking_controller:
                 self.tracking_controller.update_pid_params(
@@ -259,8 +268,10 @@ class ASVWebSocketClient:
                 )
             if self.speed_scheduler and throttle is not None:
                 self.speed_scheduler.update_throttle_limit(throttle)
+            if self.tracker and min_detection_area is not None:
+                self.tracker.set_min_detection_area(min_detection_area)
 
-            print(f"[WS] PID & Throttle parameters dynamically tuned -> Kp:{kp}, Ki:{ki}, Kd:{kd}, Speed/Throttle:{throttle}, MaxTurn:{max_turn}")
+            print(f"[WS] PID & Throttle parameters dynamically tuned -> Kp:{kp}, Ki:{ki}, Kd:{kd}, Speed/Throttle:{throttle}, MaxTurn:{max_turn}, MinDetectionArea:{min_detection_area}")
 
         # --- MANUAL CONTROL (Joystick / Gamepad MAVLink) ---
 

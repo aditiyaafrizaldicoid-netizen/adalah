@@ -24,17 +24,34 @@ class BallTracker:
         "CLEARED":      (255, 80, 255),   # magenta
     }
 
-    def __init__(self, model_path="yolov8n.pt", target_class=32, conf_threshold=0.5, **kwargs):
+    def __init__(self, model_path="yolov8n.pt", target_class=32, conf_threshold=0.5,
+                 min_detection_area_px2=4000, **kwargs):
         """
         :param model_path:    Path ke file bobot YOLO.
         :param target_class:  Class ID target, atau list class ID (misal [0, 1] untuk gate hijau+merah).
         :param conf_threshold: Confidence threshold deteksi minimum.
+        :param min_detection_area_px2: Area bounding box (piksel²) minimum agar sebuah
+            deteksi dianggap valid. Deteksi di bawah ini dibuang di SUMBER (sebelum masuk
+            detected_balls/gate_x sama sekali) — noise-floor kamera yang berlaku untuk
+            SEMUA mission step (TRACKING_BUOY, SEQUENTIAL_BUOY, GYRO_FORWARD), bukan
+            per-step seperti ignore_area_px2 di mission_engine.py. Live-tunable dari
+            Calibration → Vision/Camera di base station (lihat set_min_detection_area()),
+            disimpan di DB via /api/v1/pid-config.
         """
         print(f"[BallTracker] Loading YOLO model from {model_path}...")
         self.model = YOLO(model_path)
         self.target_class = target_class
         self.conf_threshold = conf_threshold
+        self.min_detection_area_px2 = float(min_detection_area_px2)
         print("[BallTracker] Model loaded successfully.")
+
+    def set_min_detection_area(self, px2: float):
+        """Update noise-floor deteksi secara live (dipanggil dari WS/REST config fetch)."""
+        try:
+            self.min_detection_area_px2 = max(0.0, float(px2))
+            print(f"[BallTracker] Min detection area updated -> {self.min_detection_area_px2:.0f}px²")
+        except (TypeError, ValueError):
+            pass
 
     def process_frame(self, frame, state_label: str = None, gate_state: str = None):
         """
@@ -85,6 +102,13 @@ class BallTracker:
                     continue
 
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
+
+                # Noise-floor: buang deteksi yang bounding box-nya lebih kecil dari
+                # min_detection_area_px2 SEBELUM masuk ke green_balls/red_balls atau
+                # gate_x fallback — berlaku di sumber untuk semua mission step.
+                if (x2 - x1) * (y2 - y1) < self.min_detection_area_px2:
+                    continue
+
                 cx = (x1 + x2) // 2
                 cy = (y1 + y2) // 2
 

@@ -61,6 +61,9 @@ func (h *PidConfigHandler) SaveConfig(c *fiber.Ctx) error {
 	if body.AlignThresholdPx != 0 {
 		config.AlignThresholdPx = body.AlignThresholdPx
 	}
+	if body.MinDetectionAreaPx2 != 0 {
+		config.MinDetectionAreaPx2 = body.MinDetectionAreaPx2
+	}
 
 	if err := h.service.SaveConfig(config); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{

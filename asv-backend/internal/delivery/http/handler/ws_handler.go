@@ -77,13 +77,14 @@ func (h *WSHandler) HandleASV(c *websocket.Conn) {
 		initialPidCmd := map[string]interface{}{
 			"type": "COMMAND",
 			"cmd": map[string]interface{}{
-				"action":             "update_pid",
-				"kp":                 pidCfg.Kp,
-				"ki":                 pidCfg.Ki,
-				"kd":                 pidCfg.Kd,
-				"forward_speed":      pidCfg.ForwardSpeed,
-				"max_turn_rate":      pidCfg.MaxTurnRate,
-				"align_threshold_px": pidCfg.AlignThresholdPx,
+				"action":                 "update_pid",
+				"kp":                     pidCfg.Kp,
+				"ki":                     pidCfg.Ki,
+				"kd":                     pidCfg.Kd,
+				"forward_speed":          pidCfg.ForwardSpeed,
+				"max_turn_rate":          pidCfg.MaxTurnRate,
+				"align_threshold_px":     pidCfg.AlignThresholdPx,
+				"min_detection_area_px2": pidCfg.MinDetectionAreaPx2,
 			},
 		}
 		if cmdBytes, err := json.Marshal(initialPidCmd); err == nil {
@@ -199,6 +200,9 @@ func (h *WSHandler) HandleWeb(c *websocket.Conn) {
 								if val, ok := cmd["align_threshold_px"].(float64); ok {
 									pidCfg.AlignThresholdPx = val
 								}
+								if val, ok := cmd["min_detection_area_px2"].(float64); ok {
+									pidCfg.MinDetectionAreaPx2 = val
+								}
 								h.pidConfigService.SaveConfig(pidCfg)
 								log.Println("[WSHandler] Saved updated PID config to Database")
 							}
@@ -211,5 +215,3 @@ func (h *WSHandler) HandleWeb(c *websocket.Conn) {
 		}
 	}
 }
-
-

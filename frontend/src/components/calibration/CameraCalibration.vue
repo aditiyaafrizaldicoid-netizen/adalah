@@ -1,6 +1,6 @@
 <script setup>
-import { Camera, Sun, Contrast, Sliders, CheckCircle2, AlertTriangle } from 'lucide-vue-next';
-import { ref, reactive } from 'vue';
+import { Camera, Sun, Contrast, Sliders, CheckCircle2, AlertTriangle, ScanEye, Save, RefreshCw } from 'lucide-vue-next';
+import { ref, reactive, onMounted } from 'vue';
 import { useWebsocketStore } from '@/stores/websocketStore';
 
 const ws = useWebsocketStore();
@@ -12,6 +12,57 @@ const cams = reactive({
 });
 
 const applyStatus = ref({}); // { surface: null | 'ok' | 'err', underwater: null | 'ok' | 'err' }
+
+// ── Deteksi Object: Minimum Area (px²) ──────────────────────────────────
+// Global untuk pipeline deteksi YOLO (bukan per-kamera) — deteksi bola dengan
+// area bounding box di bawah nilai ini diabaikan sepenuhnya di sumbernya
+// (vision/tracker.py), sebelum sampai ke mission logic apa pun. Disimpan di
+// DB via /api/v1/pid-config (field min_detection_area_px2), sama seperti
+// AI PID Tuning — dibaca flightcontrolAsv1 saat startup & live via WS.
+const minDetectionAreaPx2 = ref(4000);
+const detectionSaveStatus = ref(null); // null | 'ok' | 'err'
+
+const loadDetectionSettings = async () => {
+  try {
+    const res = await fetch('http://localhost:3000/api/v1/pid-config');
+    if (res.ok) {
+      const result = await res.json();
+      if (result.data && result.data.min_detection_area_px2 !== undefined) {
+        minDetectionAreaPx2.value = result.data.min_detection_area_px2;
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load detection settings from DB:', err);
+  }
+};
+
+const applyDetectionSettings = async () => {
+  // 1. Broadcast live via WebSocket ke ASV yang sedang terhubung
+  ws.updatePid({ min_detection_area_px2: minDetectionAreaPx2.value });
+
+  // 2. Persist di Database via HTTP REST API
+  try {
+    await fetch('http://localhost:3000/api/v1/pid-config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ min_detection_area_px2: minDetectionAreaPx2.value }),
+    });
+    detectionSaveStatus.value = 'ok';
+  } catch (err) {
+    console.error('Failed to persist detection settings in database:', err);
+    detectionSaveStatus.value = 'err';
+  }
+  setTimeout(() => { detectionSaveStatus.value = null; }, 3000);
+};
+
+const resetDetectionSettings = () => {
+  minDetectionAreaPx2.value = 4000;
+  applyDetectionSettings();
+};
+
+onMounted(() => {
+  loadDetectionSettings();
+});
 
 function applySettings(camKey) {
   if (ws.status !== 'CONNECTED') {
@@ -37,6 +88,49 @@ function resetCam(camKey) {
 </script>
 
 <template>
+  <div class="space-y-6">
+    <!-- Object Detection Noise Floor (global, saved to DB) -->
+    <div class="glass-card p-6 space-y-4">
+      <div class="flex justify-between items-center border-b border-(--border-subtle) pb-4">
+        <div class="flex items-center gap-3">
+          <ScanEye class="w-5 h-5 text-primary" />
+          <div>
+            <h2 class="text-sm font-black text-(--text-primary) uppercase tracking-widest">Object Detection Noise Floor</h2>
+            <p class="text-[10px] text-(--text-secondary) font-bold uppercase">Abaikan deteksi bola YOLO yang lebih kecil dari ini</p>
+          </div>
+        </div>
+        <button @click="resetDetectionSettings" class="text-[10px] font-bold text-(--text-secondary) hover:text-(--text-primary) uppercase flex items-center gap-1">
+          <RefreshCw class="w-3 h-3" /> Reset Default
+        </button>
+      </div>
+
+      <div class="space-y-3 bg-(--bg-secondary) p-4 rounded-xl border border-(--border-primary) max-w-md">
+        <div class="flex justify-between items-center text-[10px] font-black uppercase">
+          <span class="text-(--text-secondary)">Ignore Detections Below (px²)</span>
+          <span class="font-mono text-sm text-primary">{{ minDetectionAreaPx2 }} px²</span>
+        </div>
+        <input type="range" min="500" max="20000" step="100" v-model.number="minDetectionAreaPx2"
+          class="w-full accent-primary cursor-pointer" />
+        <input type="number" step="1" v-model.number="minDetectionAreaPx2"
+          class="w-full bg-card border border-(--border-subtle) rounded px-2 py-1 text-xs font-mono text-(--text-primary)" />
+      </div>
+
+      <div class="flex items-center justify-between pt-2">
+        <transition name="fade">
+          <div v-if="detectionSaveStatus" :class="['text-xs font-bold flex items-center gap-2',
+            detectionSaveStatus === 'ok' ? 'text-success' : 'text-danger']">
+            <CheckCircle2 v-if="detectionSaveStatus === 'ok'" class="w-4 h-4" />
+            <AlertTriangle v-else class="w-4 h-4" />
+            {{ detectionSaveStatus === 'ok' ? 'Applied & Saved to DB' : 'Gagal menyimpan ke database' }}
+          </div>
+        </transition>
+        <button @click="applyDetectionSettings"
+          class="bg-primary hover:bg-red-600 text-slate-900 font-black px-6 py-3 rounded-xl text-xs uppercase tracking-widest flex items-center gap-2 transition-all shadow-lg shadow-primary/20 ml-auto">
+          <Save class="w-4 h-4" /> Apply & Save
+        </button>
+      </div>
+    </div>
+
   <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
     <div v-for="(cam, key) in cams" :key="key" class="glass-card p-6 space-y-6">
       <div class="flex items-center gap-3">
@@ -96,6 +190,7 @@ function resetCam(camKey) {
         </button>
       </div>
     </div>
+  </div>
   </div>
 </template>
 
