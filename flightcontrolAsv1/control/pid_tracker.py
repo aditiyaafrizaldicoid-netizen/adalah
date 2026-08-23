@@ -10,7 +10,7 @@ class TrackingController:
     mencegah overshooting akibat integral yang terakumulasi terlalu besar.
     """
 
-    def __init__(self, frame_width=640, kp=1.0, ki=0.0, kd=0.0,
+    def __init__(self, frame_width=1920, kp=1.0, ki=0.0, kd=0.0,
                  forward_speed=0.2, max_turn_rate=20.0, **kwargs):
         self.frame_width = frame_width
         self.center_x = frame_width // 2
@@ -19,7 +19,10 @@ class TrackingController:
 
         # Dead-zone: error di bawah nilai ini dianggap "lurus" (tidak ada steering output).
         # Mencegah micro-correction flicker yang membuat kapal bergetar saat hampir lurus.
-        self.align_threshold_px: float = 15.0
+        # 45px @ 1920px frame width (dulu 15px @ 640px) — diskalakan 3x mengikuti
+        # kenaikan resolusi kamera (Logitech MX Brio, 1920x1080) agar dead-zone
+        # relatif terhadap lebar frame tetap sama (~2.3%).
+        self.align_threshold_px: float = 45.0
 
         # PID Sederhana: error_px (pixel) -> output = turn_rate deg/s
         self.pid = PID(kp, ki, kd, setpoint=0.0)

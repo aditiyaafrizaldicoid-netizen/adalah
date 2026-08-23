@@ -50,7 +50,9 @@ def main():
     from control.speed_scheduler import SpeedScheduler
     from control.mission_engine import MissionEngine
 
-    camera_width = 640
+    # Logitech MX Brio @ 1920x1080 (Full HD)
+    camera_width = 1920
+    camera_height = 1080
 
     model_path = os.path.join(os.path.dirname(__file__), "models", "best.pt")
     tracker = BallTracker(
@@ -189,7 +191,7 @@ def main():
     video_streamer = VideoStreamer(
         camera_index=0,
         width=camera_width,
-        height=480,
+        height=camera_height,
         fps=15,  # Ditingkatkan ke 15 FPS agar pergerakan video lebih halus
         backend_url=video_upload_url,
         frame_callback=process_and_control,
