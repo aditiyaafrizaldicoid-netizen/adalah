@@ -109,7 +109,7 @@ function resetCam(camKey) {
           <span class="text-(--text-secondary)">Ignore Detections Below (px²)</span>
           <span class="font-mono text-sm text-primary">{{ minDetectionAreaPx2 }} px²</span>
         </div>
-        <input type="range" min="1" max="20000" step="100" v-model.number="minDetectionAreaPx2"
+        <input type="range" min="1" max="20000" step="10" v-model.number="minDetectionAreaPx2"
           class="w-full accent-primary cursor-pointer" />
         <input type="number" step="1" v-model.number="minDetectionAreaPx2"
           class="w-full bg-card border border-(--border-subtle) rounded px-2 py-1 text-xs font-mono text-(--text-primary)" />
