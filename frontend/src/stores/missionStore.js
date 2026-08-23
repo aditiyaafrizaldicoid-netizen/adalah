@@ -222,6 +222,23 @@ export const STEP_TYPES = [
         // Berlaku sejak awal step, tidak peduli sudah ada pasangan yang cleared
         // atau belum.
       },
+      {
+        key: "single_ball_clearance_px",
+        label: "Single-Ball Clearance (px)",
+        type: "number",
+        default: 384,
+        // Saat cuma 1 warna bola terdeteksi (pairing gagal total), kapal menjaga
+        // jarak bola ini ke tengah frame minimal sebesar ini — bukan mengejar
+        // posisinya. Di bawah jarak ini koreksi menjauh mulai diterapkan.
+      },
+      {
+        key: "single_ball_max_steer",
+        label: "Single-Ball Max Steer (0-1)",
+        type: "number",
+        default: 0.4,
+        // Steer maksimum koreksi jaga-jarak bola tunggal, dicapai saat bola
+        // tepat di tengah frame (paling bahaya).
+      },
     ],
   },
   {

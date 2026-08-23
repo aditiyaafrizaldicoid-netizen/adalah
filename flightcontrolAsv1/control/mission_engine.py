@@ -163,6 +163,37 @@ class MissionEngine:
     # yang sangat jauh, turunkan kalau buoy dekat yang sah malah ikut terbuang.
     SEQ_IGNORE_AREA_PX2 = 4000
 
+    # ── Single-Ball Avoidance (Sequential Buoy) ─────────────────────────────
+    # Saat SEARCHING dan HANYA SATU warna bola yang terdeteksi (pasangan gagal
+    # terbentuk sama sekali — bukan kasus "pasangan terlalu jauh untuk dikunci" di
+    # atas), kapal TIDAK boleh mengejar/menyejajarkan diri ke bola itu (itu akan
+    # menabraknya begitu bola makin dekat ke tengah frame). Sebaliknya, kapal harus
+    # MENJAGA JARAK bola tersebut terhadap titik tengah kamera — dikoreksi MENJAUH
+    # dari sisi bola itu, sebanding dengan seberapa dekat bola ke tengah frame saat
+    # ini (bola dekat tengah = haluan kapal lurus ke arahnya = bahaya, butuh koreksi
+    # kuat; bola sudah jauh dari tengah = clearance aman, koreksi kecil/tidak ada).
+    # Arah menjauh mengikuti konvensi sisi gerbang yang sudah ada di file ini: bola
+    # HIJAU (kanan) terlihat sendirian → kapal condong ke KIRI; bola MERAH (kiri)
+    # terlihat sendirian → kapal condong ke KANAN.
+    #
+    # Sebelum ada logic ini, kapal memakai fallback gate_x mentah dari tracker.py
+    # (bola ± offset piksel TETAP 20% lebar frame) yang diumpankan ke PID steering
+    # yang sama dengan target pasangan — efeknya kapal tetap "mengejar" posisi bola
+    # itu setiap kali ia bergerak, bukan menjaga jarak darinya.
+
+    # Jarak lateral (piksel) dari tengah frame yang dianggap "aman" dari bola
+    # tunggal. Di bawah jarak ini, koreksi menjauh mulai diterapkan (maksimum saat
+    # bola tepat di tengah frame). 384px @ 1920px (~20% lebar frame) — sengaja sama
+    # dengan magnitude offset gate_x lama di tracker.py agar perilakunya familiar,
+    # BELUM diverifikasi di lapangan sebagai jarak clearance yang optimal.
+    SEQ_SINGLE_BALL_CLEARANCE_PX = 384
+
+    # Steer maksimum (0..1) untuk koreksi menjaga-jarak dari bola tunggal, dicapai
+    # saat bola tepat di tengah frame (urgency=1.0). Disamakan dengan
+    # TRANSITION_LEAN_MAGNITUDE agar skalanya konsisten dengan manuver
+    # condong/menghindar lain di file ini.
+    SEQ_SINGLE_BALL_MAX_STEER = TRANSITION_LEAN_MAGNITUDE
+
     # Durasi (detik) maksimum kapal boleh maju lurus TANPA melihat kandidat pasangan
     # ATAU fallback gate_x sama sekali ("buta total"). Setelah durasi ini terlampaui,
     # kapal STOP (throttle=0) alih-alih terus maju buta — mencegah menabrak
@@ -1279,9 +1310,18 @@ class MissionEngine:
           - Bola kanan (hijau) hilang duluan → kapal condong ke KANAN (steer positif)
           - Kedua bola hilang                → pasangan CLEARED, lanjut ke pasangan berikutnya
 
+        Aturan bola tunggal saat SEARCHING (pairing gagal total, cuma 1 warna
+        terdeteksi): kapal TIDAK mengejar/menyejajarkan diri ke bola itu, melainkan
+        MENJAGA JARAK-nya terhadap titik tengah kamera (lihat
+        _compute_single_ball_avoid_steer()) — koreksi MENJAUH dari sisi bola,
+        sebanding dengan seberapa dekat bola ke tengah frame:
+          - Hanya bola hijau (kanan) terlihat → kapal condong ke KIRI
+          - Hanya bola merah (kiri)  terlihat → kapal condong ke KANAN
+
         Format step:
           { "type": "SEQUENTIAL_BUOY", "throttle": 0.4, "ignore_area_px2": 4000,
-            "no_detection_finish_sec": 15.0 }
+            "no_detection_finish_sec": 15.0, "single_ball_clearance_px": 384,
+            "single_ball_max_steer": 0.4 }
 
         `throttle` (0.0-1.0) opsional — fallback ke speed_scheduler.max_base_throttle
         jika tidak diisi (lihat _resolve_step_throttle()).
@@ -1291,7 +1331,9 @@ class MissionEngine:
         seperti SEQ_MIN_PAIR_AREA_PX2), sehingga tidak dikejar (approach) maupun dikunci.
         Ini yang memungkinkan step SELESAI walau ada deteksi bola yang sangat jauh (mis.
         buoy course lain, noise) — tanpa floor ini, kandidat sejauh apa pun tetap dikejar
-        tanpa henti. Fallback ke SEQ_IGNORE_AREA_PX2 jika tidak diisi.
+        tanpa henti. Fallback ke SEQ_IGNORE_AREA_PX2 jika tidak diisi. Threshold yang SAMA
+        ini juga dipakai untuk memfilter kandidat bola TUNGGAL (lihat di bawah) — bola
+        tunggal yang lebih kecil dari ini diabaikan sepenuhnya (jatuh ke gate_x/blind).
 
         `no_detection_finish_sec` (detik) opsional — kalau BENAR-BENAR tidak ada apa pun
         terdeteksi (tidak ada kandidat pasangan SAMA SEKALI, termasuk yang di bawah
@@ -1301,6 +1343,14 @@ class MissionEngine:
         tabrakan). Berlaku TIDAK PEDULI sudah ada pasangan yang cleared atau belum —
         beda dari SEQ_SEARCHING_TIMEOUT_SEC yang hanya aktif setelah pasangan pertama
         dikunci. Fallback ke SEQ_NO_DETECTION_FINISH_SEC (15.0) jika tidak diisi.
+
+        `single_ball_clearance_px` (piksel) opsional — jarak lateral dari tengah frame
+        yang dianggap "aman" dari bola tunggal. Fallback ke SEQ_SINGLE_BALL_CLEARANCE_PX
+        (384) jika tidak diisi.
+
+        `single_ball_max_steer` (0.0-1.0) opsional — steer maksimum koreksi jaga-jarak
+        bola tunggal, dicapai saat bola tepat di tengah frame. Fallback ke
+        SEQ_SINGLE_BALL_MAX_STEER (0.4) jika tidak diisi.
         """
         throttle    = self._resolve_step_throttle(step)
         cleared     = self._seq_pairs_cleared
@@ -1412,10 +1462,27 @@ class MissionEngine:
                     steer = self.tracking_controller.compute_normalized_steering(approach_mid_x)
                     label = f"SEQ_GATE:SEARCHING (approaching) | SEQUENTIAL_BUOY (pair {pair_label})"
                     return steer, throttle, label
+
+                # ── HANYA SATU warna bola terdeteksi (pairing gagal total, bukan cuma
+                # "terlalu jauh untuk dikunci") → JAGA JARAK, jangan mengejar bola itu.
+                # Prioritaskan ini di atas gate_x mentah — gate_x adalah offset TETAP
+                # dari posisi bola yang diumpankan ke PID steering yang sama dengan
+                # target pasangan, sehingga kapal tetap "mengikuti" bola itu setiap
+                # kali ia bergerak (persis masalah yang dilaporkan). Reuse ignore_area_px2
+                # yang sama dengan filter pasangan di atas — bola tunggal yang lebih
+                # kecil dari itu diabaikan sepenuhnya (jatuh ke gate_x/blind di bawah).
+                single = self._pick_single_ball_candidate(searchable_balls, ignore_area_px2)
+                if single is not None:
+                    ball, side = single
+                    self._seq_blind_search_since = None
+                    steer = self._compute_single_ball_avoid_steer(ball, side, step)
+                    label = (f"SEQ_GATE:SEARCHING (single {side}, avoid) steer={steer:+.2f} "
+                             f"| SEQUENTIAL_BUOY (pair {pair_label})")
+                    return steer, throttle, label
                 elif gate_x is not None:
-                    # Tidak ada kandidat pasangan yang aman sama sekali → fallback
-                    # visual dari tracker (kasar, tanpa safeguard, tapi lebih baik
-                    # daripada diam total saat benar-benar tidak ada bola berpasangan).
+                    # Tidak ada kandidat pasangan MAUPUN bola tunggal yang aman sama
+                    # sekali → fallback visual dari tracker (kasar, tanpa safeguard,
+                    # tapi lebih baik daripada diam total).
                     self._seq_blind_search_since = None
                     steer = self.tracking_controller.compute_normalized_steering(gate_x)
                     label = f"SEQ_GATE:SEARCHING | SEQUENTIAL_BUOY (pair {pair_label})"
@@ -1770,6 +1837,57 @@ class MissionEngine:
     def _pair_avg_area(self, red_ball: Tuple, green_ball: Tuple) -> float:
         """Rata-rata area bounding box (piksel²) dari sepasang bola merah+hijau."""
         return (self._bbox_area(red_ball) + self._bbox_area(green_ball)) / 2.0
+
+    def _pick_single_ball_candidate(
+        self, balls: Dict, min_area_px2: float
+    ) -> Optional[Tuple[Tuple, str]]:
+        """
+        Kalau HANYA SATU warna bola yang terdeteksi (bukan dua-duanya, bukan juga
+        tidak ada sama sekali) DAN area-nya >= min_area_px2, kembalikan (ball, side)
+        — side "red" atau "green". Selain itu (dua warna terdeteksi tapi gagal
+        pairing, tidak ada bola sama sekali, atau bola tunggal terlalu kecil/jauh)
+        kembalikan None — biarkan caller jatuh ke fallback lain (gate_x / blind).
+        """
+        red = balls.get("red", [])
+        green = balls.get("green", [])
+        if red and not green:
+            candidate = red[0]  # sudah sorted foreground-first (area terbesar)
+            if self._bbox_area(candidate) >= min_area_px2:
+                return candidate, "red"
+        elif green and not red:
+            candidate = green[0]
+            if self._bbox_area(candidate) >= min_area_px2:
+                return candidate, "green"
+        return None
+
+    def _compute_single_ball_avoid_steer(self, ball: Tuple, side: str, step: Dict) -> float:
+        """
+        Hitung steer untuk MENJAGA JARAK dari satu-satunya bola yang terlihat
+        terhadap titik tengah kamera — bukan mengejar/menyejajarkan diri dengannya
+        (lihat catatan SEQ_SINGLE_BALL_CLEARANCE_PX).
+
+        side="green" (marker kanan gerbang) terlihat sendirian → kapal harus lewat
+        di SEBELAH KIRI-nya → koreksi ke KIRI (steer negatif) saat bola terlalu
+        dekat ke tengah frame.
+        side="red" (marker kiri gerbang) terlihat sendirian → kebalikannya, koreksi
+        ke KANAN (steer positif).
+
+        Magnitude koreksi proporsional terhadap seberapa dekat bola ke tengah frame
+        saat ini (urgency 1.0 = bola tepat di tengah/paling bahaya, 0.0 = bola sudah
+        >= clearance_px dari tengah/aman, tidak perlu koreksi).
+        """
+        clearance_px = float(step.get("single_ball_clearance_px", self.SEQ_SINGLE_BALL_CLEARANCE_PX))
+        max_steer = float(step.get("single_ball_max_steer", self.SEQ_SINGLE_BALL_MAX_STEER))
+
+        center_x = self.tracking_controller.center_x
+        offset_from_center = abs(ball[0] - center_x)
+
+        if clearance_px <= 0:
+            return 0.0
+        urgency = max(0.0, min(1.0, (clearance_px - offset_from_center) / clearance_px))
+
+        away_direction = -1.0 if side == "green" else 1.0
+        return away_direction * urgency * max_steer
 
     def _resolve_step_throttle(self, step: Dict) -> float:
         """
