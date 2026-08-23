@@ -108,6 +108,15 @@ export const STEP_TYPES = [
         // buoy (merah/hijau) terdeteksi kontinu di kamera, mana pun yang lebih dulu.
       },
       {
+        key: "min_runtime_sec",
+        label: "Min Runtime Before Buoy-Stop (s)",
+        type: "number",
+        default: 1.5,
+        // Deteksi buoy diabaikan sampai kapal sudah maju minimal sekian detik —
+        // mencegah step langsung selesai kalau buoy/false-positive kebetulan sudah
+        // kelihatan tepat saat step baru mulai (kapal belum sempat maju sama sekali).
+      },
+      {
         key: "heading_kp",
         label: "Heading Correction Kp",
         type: "number",

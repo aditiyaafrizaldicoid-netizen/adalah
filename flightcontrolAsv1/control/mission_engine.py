@@ -968,17 +968,24 @@ class MissionEngine:
             GYRO_FORWARD_BALL_CONFIRM_SEC (debounce — mencegah 1 frame false-positive YOLO
             memotong cruise sebelum benar-benar sampai di depan gerbang buoy). Begitu
             confirmed, step berikutnya (biasanya TRACKING_BUOY/SEQUENTIAL_BUOY) mengambil alih.
+            Kondisi ini HANYA dicek setelah min_runtime_sec terlampaui — mencegah step
+            langsung selesai dalam <1 detik (kapal belum sempat maju sama sekali) kalau
+            buoy/false-positive KEBETULAN sudah kelihatan tepat saat step baru mulai
+            (mis. posisi start terlalu dekat gerbang, atau glare/pantulan air).
 
         Variabel step yang digunakan:
           step['speed_mps']         (float) — Kecepatan maju (m/s). Default: 0.5
           step['duration_sec']      (float) — Batas waktu maksimum (detik). Default: 15.0
           step['heading_kp']        (float) — Gain proporsional koreksi yaw (°/s per ° error). Default: 1.5
           step['max_yaw_rate_dps']  (float) — Batas maksimum yaw rate koreksi (°/s). Default: 15.0
+          step['min_runtime_sec']   (float) — Waktu minimum maju sebelum deteksi buoy boleh
+                                     mengakhiri step lebih awal. Default: 1.5
         """
         speed_mps        = float(step.get("speed_mps", 0.5))
         duration_sec     = float(step.get("duration_sec", 15.0))
         heading_kp       = float(step.get("heading_kp", 1.5))
         max_yaw_rate_dps = float(step.get("max_yaw_rate_dps", 15.0))
+        min_runtime_sec  = float(step.get("min_runtime_sec", 1.5))
 
         elapsed = time.time() - self._step_start_time
 
@@ -989,19 +996,21 @@ class MissionEngine:
             self._advance_step()
             return 0.0, 0.0, "GYRO_FORWARD"
 
-        # --- Selesai karena buoy terdeteksi (confirmed, bukan 1 frame flicker) ---
-        now = time.time()
-        ball_visible_now = bool(detected_balls.get("red")) or bool(detected_balls.get("green"))
-        if ball_visible_now:
-            if self._cruise_ball_seen_since is None:
-                self._cruise_ball_seen_since = now
-            elif (now - self._cruise_ball_seen_since) >= self.GYRO_FORWARD_BALL_CONFIRM_SEC:
-                print(f"[MissionEngine] ✅ GYRO_FORWARD selesai! Buoy terdeteksi di depan kamera.")
-                self.asv.stop_movement()
-                self._advance_step()
-                return 0.0, 0.0, "GYRO_FORWARD"
-        else:
-            self._cruise_ball_seen_since = None
+        # --- Selesai karena buoy terdeteksi (confirmed, bukan 1 frame flicker, DAN kapal
+        # sudah maju minimal min_runtime_sec) ---
+        if elapsed >= min_runtime_sec:
+            now = time.time()
+            ball_visible_now = bool(detected_balls.get("red")) or bool(detected_balls.get("green"))
+            if ball_visible_now:
+                if self._cruise_ball_seen_since is None:
+                    self._cruise_ball_seen_since = now
+                elif (now - self._cruise_ball_seen_since) >= self.GYRO_FORWARD_BALL_CONFIRM_SEC:
+                    print(f"[MissionEngine] ✅ GYRO_FORWARD selesai! Buoy terdeteksi di depan kamera.")
+                    self.asv.stop_movement()
+                    self._advance_step()
+                    return 0.0, 0.0, "GYRO_FORWARD"
+            else:
+                self._cruise_ball_seen_since = None
 
         # --- Ambil heading saat ini & rekam heading-hold target di frame pertama ---
         telemetry = self.asv.get_telemetry() if self.asv else None
