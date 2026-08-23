@@ -25,7 +25,7 @@ class BallTracker:
     }
 
     def __init__(self, model_path="yolov8n.pt", target_class=32, conf_threshold=0.5,
-                 min_detection_area_px2=4000, **kwargs):
+                 min_detection_area_px2=2020, **kwargs):
         """
         :param model_path:    Path ke file bobot YOLO.
         :param target_class:  Class ID target, atau list class ID (misal [0, 1] untuk gate hijau+merah).
@@ -36,7 +36,9 @@ class BallTracker:
             SEMUA mission step (TRACKING_BUOY, SEQUENTIAL_BUOY, GYRO_FORWARD), bukan
             per-step seperti ignore_area_px2 di mission_engine.py. Live-tunable dari
             Calibration → Vision/Camera di base station (lihat set_min_detection_area()),
-            disimpan di DB via /api/v1/pid-config.
+            disimpan di DB via /api/v1/pid-config. Default 2020px² @ 1024x1024 (kamera
+            persegi) — diskalakan dari 4000px² @ 1920x1080 dengan faktor luas ≈0.5057
+            (lebar 1024/1920 × tinggi 1024/1080).
         """
         print(f"[BallTracker] Loading YOLO model from {model_path}...")
         self.model = YOLO(model_path)

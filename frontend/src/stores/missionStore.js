@@ -21,6 +21,16 @@ export const STEP_TYPES = [
     fields: [
       { key: "pass_count", label: "Gate Pass Count", type: "number", default: 1 },
       { key: "throttle", label: "Throttle (0-1)", type: "number", default: 0.4 },
+      {
+        key: "locked_timeout_area_growth_min_ratio",
+        label: "Locked-Timeout Auto-Count Growth (x)",
+        type: "number",
+        default: 1.5,
+        // Kalau kapal LOCKED >8 detik pada pasangan yang sama (kedua bola tidak
+        // pernah hilang dari frame), dan area pasangan sudah membesar sebesar
+        // rasio ini sejak lock pertama, dihitung sebagai 1 pass otomatis —
+        // bukti kapal sudah mendekat/lewat, bukan cuma diam menatap gerbang.
+      },
     ],
   },
   {
@@ -205,7 +215,7 @@ export const STEP_TYPES = [
         key: "ignore_area_px2",
         label: "Ignore Below Area (px²)",
         type: "number",
-        default: 4000,
+        default: 2020,
         // Pasangan bola dengan area rata-rata bounding box di bawah nilai ini
         // dianggap TIDAK ADA sama sekali (bukan sekadar "belum boleh dikunci") —
         // tidak dikejar maupun dikunci. Ini yang membuat step bisa SELESAI walau
@@ -226,7 +236,7 @@ export const STEP_TYPES = [
         key: "single_ball_clearance_px",
         label: "Single-Ball Clearance (px)",
         type: "number",
-        default: 384,
+        default: 205,
         // Saat cuma 1 warna bola terdeteksi (pairing gagal total), kapal menjaga
         // jarak bola ini ke tengah frame minimal sebesar ini — bukan mengejar
         // posisinya. Di bawah jarak ini koreksi menjauh mulai diterapkan.
@@ -238,6 +248,16 @@ export const STEP_TYPES = [
         default: 0.4,
         // Steer maksimum koreksi jaga-jarak bola tunggal, dicapai saat bola
         // tepat di tengah frame (paling bahaya).
+      },
+      {
+        key: "locked_timeout_area_growth_min_ratio",
+        label: "Locked-Timeout Auto-Count Growth (x)",
+        type: "number",
+        default: 1.5,
+        // Kalau kapal LOCKED >8 detik pada pasangan yang sama (kedua bola tidak
+        // pernah hilang dari frame), dan area pasangan sudah membesar sebesar
+        // rasio ini sejak lock pertama, dihitung sebagai 1 pasangan cleared
+        // otomatis — bukti kapal sudah mendekat/lewat, bukan cuma diam.
       },
     ],
   },

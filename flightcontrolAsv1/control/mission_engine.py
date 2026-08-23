@@ -103,13 +103,35 @@ class MissionEngine:
 
     # Jarak maksimum (piksel) untuk mengenali bola yang sama saat LOCKED/TRANSITIONING.
     # Bola yang lebih jauh dari ini dianggap bola dari gerbang lain dan diabaikan.
-    # 900px (~47% frame 1920px, kamera Logitech MX Brio) — diskalakan 3x dari nilai
-    # asli 300px @ 640px agar makna relatifnya (persentase lebar frame) tetap sama.
-    GATE_IDENTITY_MAX_DIST_PX = 900
+    # 480px @ 1024px lebar frame (~47% lebar frame, sama persis dengan makna relatif
+    # 900px @ 1920px sebelumnya) — kamera diganti ke resolusi 1024x1024 (persegi),
+    # diskalakan ulang dengan faktor lebar 1024/1920 = 0.5333 dari nilai lama.
+    GATE_IDENTITY_MAX_DIST_PX = 480
 
     # Timeout (detik) maksimum di state LOCKED sebelum di-reset ke SEARCHING.
     # Handle kasus kapal berhenti menghadap gate tapi tidak maju / bola tidak hilang-hilang.
     GATE_LOCKED_TIMEOUT_SEC = 8.0
+
+    # Rasio pertumbuhan area (dari area pasangan SAAT PERTAMA LOCK) yang dianggap
+    # bukti kapal SUDAH MENDEKAT/MELEWATI gerbang — dipakai HANYA saat
+    # GATE_LOCKED_TIMEOUT_SEC terlampaui TAPI kedua bola masih terlihat terus-menerus
+    # (kasus di mana kamera/FOV tidak membuat bola keluar frame saat kapal benar-benar
+    # lewat — mis. gerbang sempit atau kamera bersudut lebar — sehingga gate TIDAK
+    # PERNAH mencapai CLEARED via jalur normal "kedua bola hilang", padahal kapal
+    # sudah nyata-nyata lewat).
+    #
+    # Kalau area pasangan sudah membesar >= rasio ini sejak saat lock pertama kali,
+    # itu bukti kapal BENAR mendekat (ukuran bola membesar karena jarak mengecil),
+    # bukan cuma diam menghadap gerbang dari jauh (area tidak membesar berarti jarak
+    # tidak berubah) — dihitung sebagai 1 pass VALID (panggil _handle_gate_cleared)
+    # alih-alih di-reset diam-diam ke SEARCHING tanpa hitungan sama sekali seperti
+    # sebelumnya. Kalau area TIDAK membesar cukup, perilaku lama (reset tanpa hitung)
+    # tetap dipertahankan sebagai jaring pengaman terhadap false-count.
+    #
+    # 1.5 = area minimal 1.5x lebih besar dari saat lock. BELUM diverifikasi di
+    # lapangan — turunkan kalau pass valid masih sering tidak terhitung, naikkan
+    # kalau mulai ada false-count (gate dihitung padahal kapal cuma diam/mundur).
+    GATE_LOCKED_TIMEOUT_AREA_GROWTH_MIN_RATIO = 1.5
 
     # Timeout (detik) maksimum di state TRANSITIONING sebelum dipaksa CLEARED.
     # Handle kasus bola tersisa terus terlihat (kapal tidak maju / false detection).
@@ -127,15 +149,16 @@ class MissionEngine:
     # Area rata-rata minimum (piksel²) untuk bola agar dianggap valid sebagai target LOCK.
     # Pasangan buoy dengan area rata-rata < nilai ini dianggap terlalu jauh dan dilewati.
     # Kapal tidak mengunci pasangan tersebut dan tetap maju menunggu bola yang lebih dekat.
-    # 27000px² @ 1920x1080 (kamera Logitech MX Brio) — diskalakan dari nilai asli
-    # 4000px² @ 640x480 dengan faktor luas (3× lebar × 2.25× tinggi = 6.75×), BUKAN
-    # sekadar 3× linear, karena ini ukuran AREA bukan jarak. Nilai asli 4000 sendiri
-    # sudah dinaikkan dari 1600 setelah dikonfirmasi langsung di lapangan (arena danau
-    # terbuka) bahwa 1600 masih terlalu longgar — kapal masih menganggap cluster buoy
-    # yang JAUH (di seberang danau) sebagai target valid. Perlu verifikasi ulang di
-    # lapangan pada resolusi baru ini; turunkan lagi jika bola dekat jadi sering
-    # terlewat, naikkan jika kapal masih tertarik ke bola jauh.
-    SEQ_MIN_PAIR_AREA_PX2 = 27000
+    # 13650px² @ 1024x1024 (kamera persegi) — diskalakan dari nilai 27000px² @ 1920x1080
+    # dengan faktor luas (lebar 1024/1920=0.5333 × tinggi 1024/1080=0.9481 ≈ 0.5057),
+    # BUKAN sekadar rasio lebar linear, karena ini ukuran AREA bukan jarak. Nilai
+    # 27000 sendiri sudah dinaikkan dari 4000 (@640x480, lalu dari 1600) setelah
+    # dikonfirmasi langsung di lapangan (arena danau terbuka) bahwa nilai lebih
+    # rendah masih terlalu longgar — kapal masih menganggap cluster buoy yang JAUH
+    # sebagai target valid. PERLU VERIFIKASI ULANG di lapangan pada resolusi
+    # 1024x1024 ini; turunkan lagi jika bola dekat jadi sering terlewat, naikkan
+    # jika kapal masih tertarik ke bola jauh.
+    SEQ_MIN_PAIR_AREA_PX2 = 13650
 
     # Area rata-rata minimum (piksel²) untuk pasangan bola agar DIANGGAP SEBAGAI
     # KANDIDAT SAMA SEKALI — beda dari SEQ_MIN_PAIR_AREA_PX2 di atas yang cuma
@@ -155,13 +178,13 @@ class MissionEngine:
     # 1 pasangan sudah di-cleared, jadi sebelum pasangan PERTAMA berhasil dikunci,
     # tidak ada mekanisme timeout apa pun yang menghentikan pengejaran ini.
     #
-    # Nilai default 4000px² @ 1920x1080 dipilih SENGAJA sama dengan nilai ASLI
-    # SEQ_MIN_PAIR_AREA_PX2 sebelum diskalakan ke resolusi 1920x1080 (dulu
-    # 4000px² @ 640x480) — di resolusi baru ini otomatis jadi jauh lebih kecil
-    # relatif terhadap frame, cocok sebagai noise-floor kasar. BELUM diverifikasi
-    # di lapangan pada resolusi ini — naikkan kalau kapal masih tertarik ke buoy
-    # yang sangat jauh, turunkan kalau buoy dekat yang sah malah ikut terbuang.
-    SEQ_IGNORE_AREA_PX2 = 4000
+    # 2020px² @ 1024x1024 — diskalakan dari nilai 4000px² @ 1920x1080 dengan
+    # faktor luas yang sama dengan SEQ_MIN_PAIR_AREA_PX2 (≈0.5057), menjaga
+    # proporsi relatifnya (~15% dari SEQ_MIN_PAIR_AREA_PX2) tetap sama seperti
+    # sebelumnya. BELUM diverifikasi di lapangan pada resolusi ini — naikkan
+    # kalau kapal masih tertarik ke buoy yang sangat jauh, turunkan kalau buoy
+    # dekat yang sah malah ikut terbuang.
+    SEQ_IGNORE_AREA_PX2 = 2020
 
     # ── Single-Ball Avoidance (Sequential Buoy) ─────────────────────────────
     # Saat SEARCHING dan HANYA SATU warna bola yang terdeteksi (pasangan gagal
@@ -183,10 +206,10 @@ class MissionEngine:
 
     # Jarak lateral (piksel) dari tengah frame yang dianggap "aman" dari bola
     # tunggal. Di bawah jarak ini, koreksi menjauh mulai diterapkan (maksimum saat
-    # bola tepat di tengah frame). 384px @ 1920px (~20% lebar frame) — sengaja sama
-    # dengan magnitude offset gate_x lama di tracker.py agar perilakunya familiar,
+    # bola tepat di tengah frame). 205px @ 1024px (~20% lebar frame, sama seperti
+    # sebelumnya — diskalakan dari 384px @ 1920px dengan faktor lebar 0.5333),
     # BELUM diverifikasi di lapangan sebagai jarak clearance yang optimal.
-    SEQ_SINGLE_BALL_CLEARANCE_PX = 384
+    SEQ_SINGLE_BALL_CLEARANCE_PX = 205
 
     # Steer maksimum (0..1) untuk koreksi menjaga-jarak dari bola tunggal, dicapai
     # saat bola tepat di tengah frame (urgency=1.0). Disamakan dengan
@@ -228,13 +251,14 @@ class MissionEngine:
     # seperti ini BUKAN gate valid dan menghasilkan titik tengah yang salah arah.
     # Nilai asli 200px dikalibrasi dari frame kamera live sungguhan @ 640px (bukan
     # tebakan): kasus false-pair nyata yang ditemukan berjarak ~280px, 200px memberi
-    # margin aman di bawah itu. Sekarang 600px @ 1920px (kamera Logitech MX Brio,
-    # diskalakan 3x linear mengikuti lebar frame). KEMUNGKINAN BESAR PERLU
-    # DIKALIBRASI ULANG setelah lebih banyak data uji lapangan pada resolusi baru
-    # ini (jarak kamera-ke-buoy mempengaruhi lebar gate asli dalam piksel — makin
-    # dekat kamera, makin lebar gate asli tampak, sehingga threshold ini bisa jadi
-    # perlu dinaikkan atau dibuat dinamis).
-    SEQ_MAX_PAIR_WIDTH_PX = 600
+    # margin aman di bawah itu. Sempat 600px @ 1920px, sekarang 320px @ 1024px
+    # (kamera diganti ke resolusi persegi, diskalakan linear dengan faktor lebar
+    # 0.5333 dari nilai 1920px). KEMUNGKINAN BESAR PERLU DIKALIBRASI ULANG setelah
+    # lebih banyak data uji lapangan pada resolusi baru ini (jarak kamera-ke-buoy
+    # mempengaruhi lebar gate asli dalam piksel — makin dekat kamera, makin lebar
+    # gate asli tampak, sehingga threshold ini bisa jadi perlu dinaikkan atau
+    # dibuat dinamis).
+    SEQ_MAX_PAIR_WIDTH_PX = 320
 
     # ── Pair Locking / False-Pairing Prevention (Sequential Buoy) ─────────
     # Arena Sequential Buoy berbentuk LENGKUNG/ARC (gate-gate tersusun sepanjang
@@ -260,12 +284,12 @@ class MissionEngine:
     SEQ_AREA_CONTINUITY_MIN_RATIO = 0.55
 
     # Jarak maksimum (piksel) untuk pelacakan identitas bola per-frame KHUSUS
-    # SEQUENTIAL_BUOY — LEBIH KETAT dari GATE_IDENTITY_MAX_DIST_PX (900px @ 1920px)
+    # SEQUENTIAL_BUOY — LEBIH KETAT dari GATE_IDENTITY_MAX_DIST_PX (480px @ 1024px)
     # milik TRACKING_BUOY, karena SEQUENTIAL_BUOY punya BANYAK gate yang bisa
     # berdekatan di arena melengkung, sehingga radius pelacakan yang longgar
     # berisiko "melompat" ke bola gate lain yang kebetulan masuk radius.
-    # 450px @ 1920px (diskalakan 3x dari 150px @ 640px, kamera Logitech MX Brio).
-    SEQ_IDENTITY_MAX_DIST_PX = 450
+    # 240px @ 1024px (diskalakan dari 450px @ 1920px dengan faktor lebar 0.5333).
+    SEQ_IDENTITY_MAX_DIST_PX = 240
 
     # Radius (piksel) & durasi (detik) "zona larangan" di sekitar posisi terakhir
     # sepasang bola yang BARU SAJA dinyatakan CLEARED. Selama cooldown ini, bola
@@ -273,8 +297,8 @@ class MissionEngine:
     # pairing SEARCHING — mencegah residual/ghost detection dari gate yang baru
     # dilewati (atau bola gate berikutnya yang kebetulan sangat dekat secara
     # piksel) langsung ke-pairing salah begitu FSM kembali ke SEARCHING.
-    # 450px @ 1920px (diskalakan 3x dari 150px @ 640px, kamera Logitech MX Brio).
-    SEQ_CLEARED_EXCLUSION_RADIUS_PX = 450
+    # 240px @ 1024px (diskalakan dari 450px @ 1920px dengan faktor lebar 0.5333).
+    SEQ_CLEARED_EXCLUSION_RADIUS_PX = 240
     SEQ_CLEARED_EXCLUSION_SEC = 2.0
 
     # Durasi (detik) bola tersisa harus TERUS-MENERUS tidak terdeteksi sebelum dianggap
@@ -325,6 +349,11 @@ class MissionEngine:
         # Timestamp saat mission di-pause dalam state LOCKED/TRANSITIONING.
         # Digunakan untuk mengkompensasi durasi pause agar timeout tidak salah tembak saat resume.
         self._gate_pause_start: float = 0.0
+        # Area rata-rata (piksel²) pasangan SAAT PERTAMA KALI LOCK — TIDAK pernah
+        # di-update setelahnya (beda dari posisi yang terus di-update tiap frame).
+        # Dipakai GATE_LOCKED_TIMEOUT_AREA_GROWTH_MIN_RATIO untuk mendeteksi apakah
+        # kapal benar-benar sudah mendekat saat LOCKED timeout tercapai.
+        self._locked_entry_area: Optional[float] = None
 
         # ---- SEQUENTIAL_BUOY state ----
         # Semua variabel diberi prefix _seq_ agar tidak bersinggungan sama sekali
@@ -338,6 +367,11 @@ class MissionEngine:
         # yang kebetulan dekat secara piksel tidak diambil-alih sebagai "bola yang sama".
         self._seq_locked_red_area: Optional[float] = None
         self._seq_locked_green_area: Optional[float] = None
+        # Area rata-rata (piksel²) pasangan SAAT PERTAMA KALI LOCK — TIDAK pernah
+        # di-update setelahnya (beda dari _seq_locked_red_area/_seq_locked_green_area
+        # di atas yang di-update tiap frame untuk validasi identitas). Dipakai
+        # GATE_LOCKED_TIMEOUT_AREA_GROWTH_MIN_RATIO yang sama dengan TRACKING_BUOY.
+        self._seq_locked_entry_area: Optional[float] = None
         self._seq_missing_side: Optional[str] = None
         self._seq_transition_steer: float = 0.0
         self._seq_gate_state_entered_at: float = 0.0
@@ -740,6 +774,15 @@ class MissionEngine:
           LOCKED       → Pasangan bola dikunci. PID ke midpoint locked pair.
           TRANSITIONING → Satu bola hilang. Manuver condong, DILARANG pair ulang.
           CLEARED      → Kedua bola hilang. Gate terlewati, reset ke SEARCHING.
+
+        Kasus khusus LOCKED timeout (GATE_LOCKED_TIMEOUT_SEC, 8s): kalau kedua bola
+        MASIH terlihat terus-menerus melewati durasi ini (kamera/FOV tidak membuat
+        bola keluar frame walau kapal sudah lewat), dicek area pasangan sudah
+        membesar sejak lock pertama atau belum (lihat GATE_LOCKED_TIMEOUT_AREA_
+        GROWTH_MIN_RATIO). Membesar signifikan → dihitung sebagai 1 pass valid.
+        Tidak membesar (kapal diam menatap dari jauh) → reset tanpa hitungan seperti
+        semula. `locked_timeout_area_growth_min_ratio` (step field, opsional)
+        override rasio pertumbuhan minimumnya.
         """
         target_pass_count = self._safe_int(step.get("pass_count"), 0)
         duration = self._safe_float(step.get("duration_sec"), 0.0)
@@ -781,10 +824,12 @@ class MissionEngine:
                 closest_green = detected_balls["green"][0]
                 self._locked_red_pos   = (closest_red[0],   closest_red[1])
                 self._locked_green_pos = (closest_green[0], closest_green[1])
+                self._locked_entry_area = self._pair_avg_area(closest_red, closest_green)
                 self._gate_lock_state  = self.GATE_LOCKED
                 self._gate_state_entered_at = time.time()
                 print(f"[GATE] SEARCHING → LOCKED "
-                      f"(red=({self._locked_red_pos}), green=({self._locked_green_pos}))")
+                      f"(red=({self._locked_red_pos}), green=({self._locked_green_pos}), "
+                      f"entry_area={self._locked_entry_area:.0f}px²)")
 
                 # Hitung steer ke midpoint locked pair
                 locked_midpoint_x = (self._locked_red_pos[0] + self._locked_green_pos[0]) // 2
@@ -814,14 +859,38 @@ class MissionEngine:
             green_visible_locked = nearest_green is not None
 
             # ── Timeout guard: jika terlalu lama LOCKED tanpa bola hilang, kembali ke SEARCHING
-            # Ini handle kasus kapal stuck menghadap gate tapi tidak bergerak maju.
+            # KECUALI area pasangan sudah membesar signifikan sejak lock pertama kali —
+            # itu bukti kapal BENAR mendekat (bukan cuma diam menghadap gate dari jauh),
+            # sehingga kamera/FOV kemungkinan besar memang tidak membuat bola keluar
+            # frame saat kapal lewat (gerbang sempit, kamera bersudut lebar, dst).
+            # Dalam kasus itu, hitung sebagai 1 pass VALID alih-alih reset diam-diam
+            # tanpa hitungan (lihat GATE_LOCKED_TIMEOUT_AREA_GROWTH_MIN_RATIO).
             now = time.time()
             locked_duration = now - self._gate_state_entered_at
             if locked_duration > self.GATE_LOCKED_TIMEOUT_SEC and red_visible_locked and green_visible_locked:
-                print(f"[GATE] LOCKED TIMEOUT ({locked_duration:.1f}s) → SEARCHING (reset untuk coba lagi)")
-                self._reset_gate_state_machine()
-                label = f"GATE:SEARCHING (timeout) | TRACKING_BUOY ({pass_label} pass)"
-                return 0.0, throttle, label
+                growth_ratio = self._safe_float(
+                    step.get("locked_timeout_area_growth_min_ratio"),
+                    self.GATE_LOCKED_TIMEOUT_AREA_GROWTH_MIN_RATIO)
+                current_area = self._pair_avg_area(nearest_red, nearest_green)
+                area_grew_enough = (
+                    self._locked_entry_area is not None and self._locked_entry_area > 0
+                    and current_area >= self._locked_entry_area * growth_ratio
+                )
+                if area_grew_enough:
+                    print(f"[GATE] LOCKED TIMEOUT ({locked_duration:.1f}s) TAPI area membesar "
+                          f"{current_area:.0f}px² (dari {self._locked_entry_area:.0f}px² saat lock, "
+                          f"rasio {current_area / self._locked_entry_area:.2f}x) → anggap SUDAH LEWAT, "
+                          f"hitung sebagai pass.")
+                    self._gate_lock_state = self.GATE_CLEARED
+                    return self._handle_gate_cleared(pass_label, step)
+                else:
+                    entry_area_label = f"{self._locked_entry_area:.0f}" if self._locked_entry_area else "?"
+                    print(f"[GATE] LOCKED TIMEOUT ({locked_duration:.1f}s), area TIDAK membesar cukup "
+                          f"({current_area:.0f}px² vs {entry_area_label}px² saat lock) → SEARCHING "
+                          f"(reset, bukan pass valid).")
+                    self._reset_gate_state_machine()
+                    label = f"GATE:SEARCHING (timeout) | TRACKING_BUOY ({pass_label} pass)"
+                    return 0.0, throttle, label
 
             if red_visible_locked and green_visible_locked:
                 # Kedua bola masih terlihat → update posisi locked pair (supaya smooth tracking)
@@ -1348,11 +1417,17 @@ class MissionEngine:
 
         `single_ball_clearance_px` (piksel) opsional — jarak lateral dari tengah frame
         yang dianggap "aman" dari bola tunggal. Fallback ke SEQ_SINGLE_BALL_CLEARANCE_PX
-        (384) jika tidak diisi.
+        (205) jika tidak diisi.
 
         `single_ball_max_steer` (0.0-1.0) opsional — steer maksimum koreksi jaga-jarak
         bola tunggal, dicapai saat bola tepat di tengah frame. Fallback ke
         SEQ_SINGLE_BALL_MAX_STEER (0.4) jika tidak diisi.
+
+        `locked_timeout_area_growth_min_ratio` (opsional) — sama seperti TRACKING_BUOY:
+        kalau LOCKED timeout (GATE_LOCKED_TIMEOUT_SEC) tercapai TAPI kedua bola masih
+        terlihat dan area pasangan sudah membesar sebesar rasio ini sejak lock pertama,
+        dihitung sebagai 1 pasangan CLEARED alih-alih reset tanpa hitungan. Fallback ke
+        GATE_LOCKED_TIMEOUT_AREA_GROWTH_MIN_RATIO (1.5) jika tidak diisi.
         """
         throttle    = self._resolve_step_throttle(step)
         cleared     = self._seq_pairs_cleared
@@ -1435,6 +1510,7 @@ class MissionEngine:
                 self._seq_locked_green_pos = (green_ball[0], green_ball[1])
                 self._seq_locked_red_area   = self._bbox_area(red_ball)
                 self._seq_locked_green_area = self._bbox_area(green_ball)
+                self._seq_locked_entry_area = self._pair_avg_area(red_ball, green_ball)
                 self._seq_gate_lock_state  = self.GATE_LOCKED
                 self._seq_gate_state_entered_at = time.time()
                 self._seq_missing_lost_since = None
@@ -1547,13 +1623,35 @@ class MissionEngine:
             green_visible_locked = nearest_green is not None
 
             # ── Timeout guard: terlalu lama LOCKED tanpa bola hilang → kembali SEARCHING
+            # KECUALI area pasangan sudah membesar signifikan sejak lock pertama kali —
+            # bukti kapal BENAR mendekat, bukan cuma diam. Sama seperti TRACKING_BUOY,
+            # lihat GATE_LOCKED_TIMEOUT_AREA_GROWTH_MIN_RATIO.
             now = time.time()
             locked_duration = now - self._seq_gate_state_entered_at
             if locked_duration > self.GATE_LOCKED_TIMEOUT_SEC and red_visible_locked and green_visible_locked:
-                print(f"[SEQ_GATE] LOCKED TIMEOUT ({locked_duration:.1f}s) → SEARCHING (pair {pair_label})")
-                self._reset_sequential_gate_fsm()
-                label = f"SEQ_GATE:SEARCHING (timeout) | SEQUENTIAL_BUOY (pair {pair_label})"
-                return 0.0, throttle, label
+                growth_ratio = self._safe_float(
+                    step.get("locked_timeout_area_growth_min_ratio"),
+                    self.GATE_LOCKED_TIMEOUT_AREA_GROWTH_MIN_RATIO)
+                current_area = self._pair_avg_area(nearest_red, nearest_green)
+                area_grew_enough = (
+                    self._seq_locked_entry_area is not None and self._seq_locked_entry_area > 0
+                    and current_area >= self._seq_locked_entry_area * growth_ratio
+                )
+                if area_grew_enough:
+                    print(f"[SEQ_GATE] LOCKED TIMEOUT ({locked_duration:.1f}s) TAPI area membesar "
+                          f"{current_area:.0f}px² (dari {self._seq_locked_entry_area:.0f}px² saat lock, "
+                          f"rasio {current_area / self._seq_locked_entry_area:.2f}x, pair {pair_label}) → "
+                          f"anggap SUDAH LEWAT, hitung sebagai pass.")
+                    self._seq_gate_lock_state = self.GATE_CLEARED
+                    return self._handle_seq_gate_cleared(pair_num)
+                else:
+                    entry_area_label = f"{self._seq_locked_entry_area:.0f}" if self._seq_locked_entry_area else "?"
+                    print(f"[SEQ_GATE] LOCKED TIMEOUT ({locked_duration:.1f}s), area TIDAK membesar cukup "
+                          f"({current_area:.0f}px² vs {entry_area_label}px² saat lock, pair {pair_label}) → "
+                          f"SEARCHING (reset, bukan pass valid).")
+                    self._reset_sequential_gate_fsm()
+                    label = f"SEQ_GATE:SEARCHING (timeout) | SEQUENTIAL_BUOY (pair {pair_label})"
+                    return 0.0, throttle, label
 
             if red_visible_locked and green_visible_locked:
                 # Kedua bola masih terlihat → update posisi + area locked pair & PID ke midpoint
@@ -1784,6 +1882,7 @@ class MissionEngine:
         self._seq_locked_green_pos      = None
         self._seq_locked_red_area       = None
         self._seq_locked_green_area     = None
+        self._seq_locked_entry_area     = None
         self._seq_missing_side          = None
         self._seq_transition_steer      = 0.0
         self._seq_gate_state_entered_at = time.time()  # mulai timer SEARCHING timeout
@@ -1829,6 +1928,7 @@ class MissionEngine:
         self._gate_lock_state      = self.GATE_SEARCHING
         self._locked_red_pos       = None
         self._locked_green_pos     = None
+        self._locked_entry_area    = None
         self._missing_side         = None
         self._transition_steer     = 0.0
         self._gate_state_entered_at = 0.0
