@@ -72,7 +72,7 @@ const handleToggleStreaming = () => {
         <!-- Video Viewport -->
         <div
             :class="['relative bg-black flex items-center justify-center overflow-hidden flex-1 group-hover/video:shadow-[inset_0_0_40px_rgba(0,0,0,0.8)] transition-all', aspect]">
-            <img ref="imgRef" :src="activeSrc" @error="onError" @load="onLoad" class="w-full h-full"
+            <img ref="imgRef" :src="activeSrc" @error="onError" @load="onLoad" class="w-full h-full  object-contain"
                 :class="[objectFit, { 'opacity-0': isError || activeSrc === BLANK }]" />
 
             <!-- Record & Streaming Overlay Controls (Top Right overlay inside video) -->

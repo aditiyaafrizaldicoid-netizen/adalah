@@ -45,7 +45,7 @@ const handleToggleRecord = () => {
     <!-- Camera Overlay -->
     <div class="absolute inset-0 bg-(--bg-secondary) flex flex-col items-center justify-center">
       <Camera class="w-12 h-12 text-slate-800" />
-      <img :src="liveStreamUrl" class="w-full h-full object-cover"
+      <img :src="liveStreamUrl" class="w-full h-full object-contain"
         onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
         onload="this.style.display='block'; this.nextElementSibling.style.display='none';" />
     </div>
