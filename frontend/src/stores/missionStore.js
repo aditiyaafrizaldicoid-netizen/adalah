@@ -18,7 +18,10 @@ export const STEP_TYPES = [
     icon: "🎯",
     color: "text-primary",
     bg: "bg-primary/10 border-primary/30",
-    fields: [{ key: "pass_count", label: "Gate Pass Count", type: "number", default: 1 }],
+    fields: [
+      { key: "pass_count", label: "Gate Pass Count", type: "number", default: 1 },
+      { key: "throttle", label: "Throttle (0-1)", type: "number", default: 0.4 },
+    ],
   },
   {
     type: "GOTO_GPS",
@@ -146,7 +149,7 @@ export const STEP_TYPES = [
     icon: "🛟",
     color: "text-teal-400",
     bg: "bg-teal-500/10 border-teal-500/30",
-    fields: [],
+    fields: [{ key: "throttle", label: "Throttle (0-1)", type: "number", default: 0.4 }],
   },
   {
     type: "FINISH",

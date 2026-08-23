@@ -10,11 +10,15 @@ Engine ini mengeksekusi mission steps secara berurutan:
 
 Format Mission Steps (JSON array):
 [
-    { "id": 1, "type": "TRACKING_BUOY", "name": "Gate 1-10",  "pass_count": 5 },
+    { "id": 1, "type": "TRACKING_BUOY", "name": "Gate 1-10",  "pass_count": 5, "throttle": 0.4 },
     { "id": 2, "type": "GOTO_GPS",      "name": "Waypoint A", "lat": -7.921, "lon": 112.597 },
     { "id": 3, "type": "TAKE_IMAGE",    "name": "Foto Spot",  "duration_sec": 3.0 },
     { "id": 4, "type": "FINISH",        "name": "Mission End" }
 ]
+
+Field `throttle` (0.0-1.0) pada TRACKING_BUOY & SEQUENTIAL_BUOY bersifat OPSIONAL —
+jika tidak diisi, engine fallback ke speed_scheduler.max_base_throttle (global,
+live-tunable via WS PID config). Lihat _resolve_step_throttle().
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Gate Locking & Transition Maneuver — State Machine
@@ -645,7 +649,7 @@ class MissionEngine:
 
         red_visible   = len(detected_balls.get("red", [])) > 0
         green_visible = len(detected_balls.get("green", [])) > 0
-        throttle      = self.speed_scheduler.max_base_throttle
+        throttle      = self._resolve_step_throttle(step)
 
         pass_label = f"{self._buoy_pass_count}/{target_pass_count}" if target_pass_count > 0 else str(self._buoy_pass_count)
 
@@ -1084,9 +1088,12 @@ class MissionEngine:
           - Kedua bola hilang                → pasangan CLEARED, lanjut ke pasangan berikutnya
 
         Format step:
-          { "type": "SEQUENTIAL_BUOY" }
+          { "type": "SEQUENTIAL_BUOY", "throttle": 0.4 }
+
+        `throttle` (0.0-1.0) opsional — fallback ke speed_scheduler.max_base_throttle
+        jika tidak diisi (lihat _resolve_step_throttle()).
         """
-        throttle    = self.speed_scheduler.max_base_throttle
+        throttle    = self._resolve_step_throttle(step)
         cleared     = self._seq_pairs_cleared
         pair_num    = cleared + 1   # Display: pasangan yang sedang diincar (1-indexed)
 
@@ -1523,6 +1530,22 @@ class MissionEngine:
     def _bbox_area(ball: Tuple) -> float:
         """Area bounding box (piksel²) dari tuple (cx, cy, x1, y1, x2, y2)."""
         return float((ball[4] - ball[2]) * (ball[5] - ball[3]))
+
+    def _resolve_step_throttle(self, step: Dict) -> float:
+        """
+        Ambil throttle (0.0-1.0) dari field `throttle` step mission jika diisi,
+        jika tidak fallback ke speed_scheduler.max_base_throttle (global, live-tunable
+        via WS PID config). Dipakai TRACKING_BUOY & SEQUENTIAL_BUOY agar tiap step bisa
+        override kecepatan majunya sendiri, konsisten dengan CUSTOM_FORWARD (speed_mps)
+        dan TIMED_STEER (throttle) yang sudah lebih dulu configurable per-step.
+        """
+        step_throttle = step.get("throttle")
+        if step_throttle is not None:
+            try:
+                return max(0.0, min(1.0, float(step_throttle)))
+            except (TypeError, ValueError):
+                pass
+        return self.speed_scheduler.max_base_throttle
 
     def _find_nearest_ball(
         self,
