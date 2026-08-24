@@ -103,10 +103,9 @@ class MissionEngine:
 
     # Jarak maksimum (piksel) untuk mengenali bola yang sama saat LOCKED/TRANSITIONING.
     # Bola yang lebih jauh dari ini dianggap bola dari gerbang lain dan diabaikan.
-    # 480px @ 1024px lebar frame (~47% lebar frame, sama persis dengan makna relatif
-    # 900px @ 1920px sebelumnya) — kamera diganti ke resolusi 1024x1024 (persegi),
-    # diskalakan ulang dengan faktor lebar 1024/1920 = 0.5333 dari nilai lama.
-    GATE_IDENTITY_MAX_DIST_PX = 480
+    # 900px (~47% frame 1920px, kamera Logitech MX Brio) — diskalakan 3x dari nilai
+    # asli 300px @ 640px agar makna relatifnya (persentase lebar frame) tetap sama.
+    GATE_IDENTITY_MAX_DIST_PX = 900
 
     # Timeout (detik) maksimum di state LOCKED sebelum di-reset ke SEARCHING.
     # Handle kasus kapal berhenti menghadap gate tapi tidak maju / bola tidak hilang-hilang.
@@ -149,16 +148,15 @@ class MissionEngine:
     # Area rata-rata minimum (piksel²) untuk bola agar dianggap valid sebagai target LOCK.
     # Pasangan buoy dengan area rata-rata < nilai ini dianggap terlalu jauh dan dilewati.
     # Kapal tidak mengunci pasangan tersebut dan tetap maju menunggu bola yang lebih dekat.
-    # 13650px² @ 1024x1024 (kamera persegi) — diskalakan dari nilai 27000px² @ 1920x1080
-    # dengan faktor luas (lebar 1024/1920=0.5333 × tinggi 1024/1080=0.9481 ≈ 0.5057),
-    # BUKAN sekadar rasio lebar linear, karena ini ukuran AREA bukan jarak. Nilai
-    # 27000 sendiri sudah dinaikkan dari 4000 (@640x480, lalu dari 1600) setelah
-    # dikonfirmasi langsung di lapangan (arena danau terbuka) bahwa nilai lebih
-    # rendah masih terlalu longgar — kapal masih menganggap cluster buoy yang JAUH
-    # sebagai target valid. PERLU VERIFIKASI ULANG di lapangan pada resolusi
-    # 1024x1024 ini; turunkan lagi jika bola dekat jadi sering terlewat, naikkan
-    # jika kapal masih tertarik ke bola jauh.
-    SEQ_MIN_PAIR_AREA_PX2 = 13650
+    # 27000px² @ 1920x1080 (kamera Logitech MX Brio) — diskalakan dari nilai asli
+    # 4000px² @ 640x480 dengan faktor luas (3× lebar × 2.25× tinggi = 6.75×), BUKAN
+    # sekadar 3× linear, karena ini ukuran AREA bukan jarak. Nilai asli 4000 sendiri
+    # sudah dinaikkan dari 1600 setelah dikonfirmasi langsung di lapangan (arena danau
+    # terbuka) bahwa 1600 masih terlalu longgar — kapal masih menganggap cluster buoy
+    # yang JAUH (di seberang danau) sebagai target valid. Perlu verifikasi ulang di
+    # lapangan pada resolusi baru ini; turunkan lagi jika bola dekat jadi sering
+    # terlewat, naikkan jika kapal masih tertarik ke bola jauh.
+    SEQ_MIN_PAIR_AREA_PX2 = 27000
 
     # Area rata-rata minimum (piksel²) untuk pasangan bola agar DIANGGAP SEBAGAI
     # KANDIDAT SAMA SEKALI — beda dari SEQ_MIN_PAIR_AREA_PX2 di atas yang cuma
@@ -178,13 +176,10 @@ class MissionEngine:
     # 1 pasangan sudah di-cleared, jadi sebelum pasangan PERTAMA berhasil dikunci,
     # tidak ada mekanisme timeout apa pun yang menghentikan pengejaran ini.
     #
-    # 2020px² @ 1024x1024 — diskalakan dari nilai 4000px² @ 1920x1080 dengan
-    # faktor luas yang sama dengan SEQ_MIN_PAIR_AREA_PX2 (≈0.5057), menjaga
-    # proporsi relatifnya (~15% dari SEQ_MIN_PAIR_AREA_PX2) tetap sama seperti
-    # sebelumnya. BELUM diverifikasi di lapangan pada resolusi ini — naikkan
-    # kalau kapal masih tertarik ke buoy yang sangat jauh, turunkan kalau buoy
-    # dekat yang sah malah ikut terbuang.
-    SEQ_IGNORE_AREA_PX2 = 2020
+    # 4000px² @ 1920x1080 (~15% dari SEQ_MIN_PAIR_AREA_PX2) — BELUM diverifikasi
+    # di lapangan; naikkan kalau kapal masih tertarik ke buoy yang sangat jauh,
+    # turunkan kalau buoy dekat yang sah malah ikut terbuang.
+    SEQ_IGNORE_AREA_PX2 = 4000
 
     # ── Single-Ball Avoidance (Sequential Buoy) ─────────────────────────────
     # Saat SEARCHING dan HANYA SATU warna bola yang terdeteksi (pasangan gagal
@@ -206,10 +201,9 @@ class MissionEngine:
 
     # Jarak lateral (piksel) dari tengah frame yang dianggap "aman" dari bola
     # tunggal. Di bawah jarak ini, koreksi menjauh mulai diterapkan (maksimum saat
-    # bola tepat di tengah frame). 205px @ 1024px (~20% lebar frame, sama seperti
-    # sebelumnya — diskalakan dari 384px @ 1920px dengan faktor lebar 0.5333),
-    # BELUM diverifikasi di lapangan sebagai jarak clearance yang optimal.
-    SEQ_SINGLE_BALL_CLEARANCE_PX = 205
+    # bola tepat di tengah frame). 384px @ 1920px (~20% lebar frame) — BELUM
+    # diverifikasi di lapangan sebagai jarak clearance yang optimal.
+    SEQ_SINGLE_BALL_CLEARANCE_PX = 384
 
     # Steer maksimum (0..1) untuk koreksi menjaga-jarak dari bola tunggal, dicapai
     # saat bola tepat di tengah frame (urgency=1.0). Disamakan dengan
@@ -251,14 +245,13 @@ class MissionEngine:
     # seperti ini BUKAN gate valid dan menghasilkan titik tengah yang salah arah.
     # Nilai asli 200px dikalibrasi dari frame kamera live sungguhan @ 640px (bukan
     # tebakan): kasus false-pair nyata yang ditemukan berjarak ~280px, 200px memberi
-    # margin aman di bawah itu. Sempat 600px @ 1920px, sekarang 320px @ 1024px
-    # (kamera diganti ke resolusi persegi, diskalakan linear dengan faktor lebar
-    # 0.5333 dari nilai 1920px). KEMUNGKINAN BESAR PERLU DIKALIBRASI ULANG setelah
-    # lebih banyak data uji lapangan pada resolusi baru ini (jarak kamera-ke-buoy
-    # mempengaruhi lebar gate asli dalam piksel — makin dekat kamera, makin lebar
-    # gate asli tampak, sehingga threshold ini bisa jadi perlu dinaikkan atau
-    # dibuat dinamis).
-    SEQ_MAX_PAIR_WIDTH_PX = 320
+    # margin aman di bawah itu. Sekarang 600px @ 1920px, kamera Logitech MX Brio,
+    # diskalakan 3x linear mengikuti lebar frame. KEMUNGKINAN BESAR PERLU
+    # DIKALIBRASI ULANG setelah lebih banyak data uji lapangan pada resolusi baru
+    # ini (jarak kamera-ke-buoy mempengaruhi lebar gate asli dalam piksel — makin
+    # dekat kamera, makin lebar gate asli tampak, sehingga threshold ini bisa jadi
+    # perlu dinaikkan atau dibuat dinamis).
+    SEQ_MAX_PAIR_WIDTH_PX = 600
 
     # ── Pair Locking / False-Pairing Prevention (Sequential Buoy) ─────────
     # Arena Sequential Buoy berbentuk LENGKUNG/ARC (gate-gate tersusun sepanjang
@@ -284,12 +277,12 @@ class MissionEngine:
     SEQ_AREA_CONTINUITY_MIN_RATIO = 0.55
 
     # Jarak maksimum (piksel) untuk pelacakan identitas bola per-frame KHUSUS
-    # SEQUENTIAL_BUOY — LEBIH KETAT dari GATE_IDENTITY_MAX_DIST_PX (480px @ 1024px)
+    # SEQUENTIAL_BUOY — LEBIH KETAT dari GATE_IDENTITY_MAX_DIST_PX (900px @ 1920px)
     # milik TRACKING_BUOY, karena SEQUENTIAL_BUOY punya BANYAK gate yang bisa
     # berdekatan di arena melengkung, sehingga radius pelacakan yang longgar
     # berisiko "melompat" ke bola gate lain yang kebetulan masuk radius.
-    # 240px @ 1024px (diskalakan dari 450px @ 1920px dengan faktor lebar 0.5333).
-    SEQ_IDENTITY_MAX_DIST_PX = 240
+    # 450px @ 1920px (diskalakan 3x dari 150px @ 640px, kamera Logitech MX Brio).
+    SEQ_IDENTITY_MAX_DIST_PX = 450
 
     # Radius (piksel) & durasi (detik) "zona larangan" di sekitar posisi terakhir
     # sepasang bola yang BARU SAJA dinyatakan CLEARED. Selama cooldown ini, bola
@@ -297,8 +290,8 @@ class MissionEngine:
     # pairing SEARCHING — mencegah residual/ghost detection dari gate yang baru
     # dilewati (atau bola gate berikutnya yang kebetulan sangat dekat secara
     # piksel) langsung ke-pairing salah begitu FSM kembali ke SEARCHING.
-    # 240px @ 1024px (diskalakan dari 450px @ 1920px dengan faktor lebar 0.5333).
-    SEQ_CLEARED_EXCLUSION_RADIUS_PX = 240
+    # 450px @ 1920px (diskalakan 3x dari 150px @ 640px, kamera Logitech MX Brio).
+    SEQ_CLEARED_EXCLUSION_RADIUS_PX = 450
     SEQ_CLEARED_EXCLUSION_SEC = 2.0
 
     # Durasi (detik) bola tersisa harus TERUS-MENERUS tidak terdeteksi sebelum dianggap

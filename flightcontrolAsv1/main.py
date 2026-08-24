@@ -51,8 +51,8 @@ def main():
     from control.mission_engine import MissionEngine
 
     # Logitech MX Brio @ 1920x1080 (Full HD)
-    camera_width = 1024
-    camera_height = 1024
+    camera_width = 1920
+    camera_height = 1080
 
     model_path = os.path.join(os.path.dirname(__file__), "models", "best.pt")
     tracker = BallTracker(

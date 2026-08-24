@@ -19,7 +19,7 @@ const applyStatus = ref({}); // { surface: null | 'ok' | 'err', underwater: null
 // (vision/tracker.py), sebelum sampai ke mission logic apa pun. Disimpan di
 // DB via /api/v1/pid-config (field min_detection_area_px2), sama seperti
 // AI PID Tuning — dibaca flightcontrolAsv1 saat startup & live via WS.
-const minDetectionAreaPx2 = ref(2020);
+const minDetectionAreaPx2 = ref(4000);
 const detectionSaveStatus = ref(null); // null | 'ok' | 'err'
 
 const loadDetectionSettings = async () => {
@@ -56,7 +56,7 @@ const applyDetectionSettings = async () => {
 };
 
 const resetDetectionSettings = () => {
-  minDetectionAreaPx2.value = 2020;
+  minDetectionAreaPx2.value = 4000;
   applyDetectionSettings();
 };
 

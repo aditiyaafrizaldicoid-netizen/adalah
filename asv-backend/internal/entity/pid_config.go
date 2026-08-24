@@ -12,6 +12,6 @@ type PidConfig struct {
 	AlignThresholdPx    float64   `gorm:"default:40.0" json:"align_threshold_px"`
 	PassDuration        float64   `gorm:"default:2.5" json:"pass_duration"`
 	CooldownDuration    float64   `gorm:"default:3.0" json:"cooldown_duration"`
-	MinDetectionAreaPx2 float64   `gorm:"default:2020" json:"min_detection_area_px2"`
+	MinDetectionAreaPx2 float64   `gorm:"default:4000" json:"min_detection_area_px2"`
 	UpdatedAt           time.Time `gorm:"autoUpdateTime" json:"updated_at"`
 }

@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from 'vue';
+import { ref, watch } from 'vue';
 import { Settings2, Compass, MapPin, Camera, Zap, Cpu, Sliders } from "lucide-vue-next";
 
 // Sub-components
@@ -28,9 +28,15 @@ const changeTab = (tabId) => {
   activeTab.value = tabId;
   router.push({ name: 'Calibration', query: { tab: tabId } });
 };
-onMounted(() => {
-  activeTab.value = route.query.tab || 'pid';
-})
+// watch (immediate) instead of onMounted: on a fresh full page load, the router's
+// initial navigation may not have finished resolving yet when onMounted fires, so
+// route.query.tab can still read as empty at that exact instant — silently falling
+// back to the ref's default ('channel') instead of the URL's ?tab=... value. watch
+// re-syncs reactively whenever route.query.tab actually becomes available (and also
+// on subsequent query changes, e.g. browser back/forward), not just once at mount.
+watch(() => route.query.tab, (tab) => {
+  activeTab.value = tab || 'pid';
+}, { immediate: true })
 </script>
 
 <template>
