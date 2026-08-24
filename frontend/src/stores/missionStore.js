@@ -215,7 +215,7 @@ export const STEP_TYPES = [
         key: "ignore_area_px2",
         label: "Ignore Below Area (px²)",
         type: "number",
-        default: 2020,
+        default: 4000,
         // Pasangan bola dengan area rata-rata bounding box di bawah nilai ini
         // dianggap TIDAK ADA sama sekali (bukan sekadar "belum boleh dikunci") —
         // tidak dikejar maupun dikunci. Ini yang membuat step bisa SELESAI walau
@@ -236,7 +236,7 @@ export const STEP_TYPES = [
         key: "single_ball_clearance_px",
         label: "Single-Ball Clearance (px)",
         type: "number",
-        default: 205,
+        default: 384,
         // Saat cuma 1 warna bola terdeteksi (pairing gagal total), kapal menjaga
         // jarak bola ini ke tengah frame minimal sebesar ini — bukan mengejar
         // posisinya. Di bawah jarak ini koreksi menjauh mulai diterapkan.
@@ -258,6 +258,32 @@ export const STEP_TYPES = [
         // pernah hilang dari frame), dan area pasangan sudah membesar sebesar
         // rasio ini sejak lock pertama, dihitung sebagai 1 pasangan cleared
         // otomatis — bukti kapal sudah mendekat/lewat, bukan cuma diam.
+      },
+    ],
+  },
+  // ── Buoy Chase (Simple Tracking) ────────────────────────────────────────
+  // Versi permukaan-konfigurasi SEDERHANA dari SEQUENTIAL_BUOY di atas — cuma
+  // 2 field (throttle + filter jarak), TANPA target pass_count. Selesai
+  // OTOMATIS begitu buoy habis dari frame, sama seperti SEQUENTIAL_BUOY.
+  // Delegasi penuh ke engine SEQUENTIAL_BUOY (safeguard pairing, TRANSITIONING,
+  // safety timeout — semua sudah teruji lapangan lewat step itu).
+  {
+    type: "BUOY_CHASE",
+    label: "Buoy Chase (Simple Tracking)",
+    icon: "🎣",
+    color: "text-lime-400",
+    bg: "bg-lime-500/10 border-lime-500/30",
+    fields: [
+      { key: "throttle", label: "Throttle (0-1)", type: "number", default: 0.4 },
+      {
+        key: "ignore_area_px2",
+        label: "Ignore Below Area (px²)",
+        type: "number",
+        default: 4000,
+        // Bola/pasangan dengan area bounding box di bawah nilai ini dianggap
+        // "terlalu jauh" dan diabaikan total — tidak dikejar maupun dikunci.
+        // Naikkan kalau kapal masih tertarik ke bola jauh, turunkan kalau
+        // bola dekat yang sah malah ikut terbuang.
       },
     ],
   },
@@ -400,6 +426,13 @@ export const useMissionStore = defineStore("mission", () => {
     if (step.type === "SEQUENTIAL_BUOY") {
       const pairDone = seqPairsCleared.value || 0;
       return `[${stepNum}/${totalNum}] Sequential Buoy — Pair ${seqCurrentPair.value} (${pairDone} cleared)`;
+    }
+
+    if (step.type === "BUOY_CHASE") {
+      // BUOY_CHASE delegasi ke engine SEQUENTIAL_BUOY, jadi seqPairsCleared/
+      // seqGateLockState ikut terisi meski tidak ada konsep target pass_count di sini.
+      const found = seqPairsCleared.value || 0;
+      return `[${stepNum}/${totalNum}] Buoy Chase (${found} passed)`;
     }
 
     if (step.duration_sec) {

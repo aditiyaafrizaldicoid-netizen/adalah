@@ -4,6 +4,7 @@ MissionEngine - Autonomous Mission Sequence Executor untuk ASV.
 Engine ini mengeksekusi mission steps secara berurutan:
 - TRACKING_BUOY  : AI Vision PID untuk melewati gerbang bola hijau+merah
 - SEQUENTIAL_BUOY: Lewati N pasang buoy (hijau+merah) berurutan tanpa perlu di-configure jumlahnya
+- BUOY_CHASE     : Versi sederhana SEQUENTIAL_BUOY (cuma throttle + ignore_area_px2), selesai saat buoy habis dari frame
 - GYRO_FORWARD   : Maju lurus dgn koreksi yaw kompas/gyro (heading-hold), berhenti di waktu ATAU saat buoy terdeteksi
 - GOTO_GPS       : Navigasi ke koordinat GPS tertentu
 - TAKE_IMAGE     : Berhenti dan ambil foto/rekam video
@@ -79,6 +80,7 @@ class MissionEngine:
     STEP_TYPE_TIMED_STEER    = "TIMED_STEER"     # Manuver timer RC override (MANUAL mode)
     STEP_TYPE_SEQUENTIAL_BUOY = "SEQUENTIAL_BUOY"  # Lewati N pasang buoy (hijau+merah) secara berurutan
     STEP_TYPE_GYRO_FORWARD   = "GYRO_FORWARD"    # Maju lurus dgn koreksi yaw kompas/gyro, berhenti di waktu ATAU saat buoy terdeteksi
+    STEP_TYPE_BUOY_CHASE     = "BUOY_CHASE"      # Versi sederhana SEQUENTIAL_BUOY: cuma throttle + filter jarak (px²), selesai saat buoy habis dari frame
 
     # Radius acceptance untuk GOTO_GPS: dianggap tiba jika < X meter dari target
     ARRIVAL_RADIUS_M = 2.0
@@ -669,12 +671,15 @@ class MissionEngine:
                     if self.asv and self.asv.is_connected() and self.asv.get_telemetry().mode != "MANUAL":
                         print("[MissionEngine] 🔄 Switch mode → MANUAL untuk TIMED_STEER...")
                         self.asv.set_mode("MANUAL")
-                elif step_type == self.STEP_TYPE_SEQUENTIAL_BUOY:
+                elif step_type in (self.STEP_TYPE_SEQUENTIAL_BUOY, self.STEP_TYPE_BUOY_CHASE):
+                    # BUOY_CHASE memakai state _seq_* & handler yang SAMA dengan
+                    # SEQUENTIAL_BUOY (lihat _handle_buoy_chase) — harus di-reset sama
+                    # persis saat step manapun dari keduanya baru dimulai.
                     if hasattr(self.tracking_controller, 'reset'):
                         self.tracking_controller.reset()
                     self._reset_sequential_state()
                     if self.asv and self.asv.is_connected() and self.asv.get_telemetry().mode != "MANUAL":
-                        print("[MissionEngine] 🔄 Switch mode → MANUAL untuk SEQUENTIAL_BUOY...")
+                        print(f"[MissionEngine] 🔄 Switch mode → MANUAL untuk {step_type}...")
                         self.asv.set_mode("MANUAL")
                 elif step_type == self.STEP_TYPE_GYRO_FORWARD:
                     # SAMA seperti TRACKING_BUOY/SEQUENTIAL_BUOY/TIMED_STEER — mode MANUAL,
@@ -743,6 +748,10 @@ class MissionEngine:
             # ---- GYRO_FORWARD ----
             elif step_type == self.STEP_TYPE_GYRO_FORWARD:
                 return self._handle_gyro_forward(step, detected_balls or {"red": [], "green": []})
+
+            # ---- BUOY_CHASE ----
+            elif step_type == self.STEP_TYPE_BUOY_CHASE:
+                return self._handle_buoy_chase(step, gate_x, detected_balls or {"red": [], "green": []})
 
             # ---- FINISH ----
             elif step_type == self.STEP_TYPE_FINISH:
@@ -1315,6 +1324,37 @@ class MissionEngine:
     # ------------------------------------------------------------------ #
     #  Sequential Buoy Tracking Handlers                                 #
     # ------------------------------------------------------------------ #
+
+    def _handle_buoy_chase(self, step, gate_x: Optional[float], detected_balls: Dict) -> Tuple[float, float, str]:
+        """
+        Handle BUOY_CHASE step.
+
+        Versi permukaan-konfigurasi SEDERHANA dari SEQUENTIAL_BUOY — TANPA target
+        pass_count, hanya 2 field yang bisa diatur operator:
+          step['throttle']         (float) — Throttle 0.0-1.0. Opsional, fallback ke
+                                    speed_scheduler.max_base_throttle.
+          step['ignore_area_px2']  (float) — Bola/pasangan dengan area bbox di bawah
+                                    nilai ini ("terlalu jauh") diabaikan total, tidak
+                                    dikejar maupun dikunci. Opsional, fallback ke
+                                    SEQ_IGNORE_AREA_PX2.
+
+        Selesai OTOMATIS begitu tidak ada buoy terdeteksi lagi di frame (tidak perlu
+        target jumlah pasangan) — sama seperti perilaku default SEQUENTIAL_BUOY saat
+        buoy course sudah habis.
+
+        SENGAJA delegasi PENUH ke _handle_sequential_buoy(): mesin gate FSM, safeguard
+        pairing (rasio area, lebar maksimum, identity-tracking per-frame), manuver
+        TRANSITIONING/single-ball-avoidance, dan safety timeout SEMUA sudah teruji
+        lapangan lewat SEQUENTIAL_BUOY — menulis ulang logic yang sama dari nol untuk
+        step "sederhana" ini justru RAWAN memperkenalkan bug baru yang sudah pernah
+        diperbaiki di sana. State (_seq_*) dan reset-nya SUDAH SAMA (lihat blok mode-
+        switch di update_frame() — BUOY_CHASE ikut memicu _reset_sequential_state()).
+
+        Catatan kosmetik: label debug yang di-overlay ke frame kamera (bukan status
+        mission utama di UI) akan tetap menyebut "SEQUENTIAL_BUOY" karena berasal dari
+        handler yang sama — tidak memengaruhi perilaku kontrol.
+        """
+        return self._handle_sequential_buoy(step, gate_x, detected_balls)
 
     def _handle_sequential_buoy(self, step, gate_x: Optional[float], detected_balls: Dict):
         """
