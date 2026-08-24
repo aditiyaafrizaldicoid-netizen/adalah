@@ -289,6 +289,17 @@ export const STEP_TYPES = [
         // bola tepat di garis haluan kapal.
       },
       {
+        key: "transition_use_next_pair",
+        label: "Handoff To Next Gate (1=on, 0=off)",
+        type: "number",
+        default: 1,
+        // Saat satu bola gerbang ini hilang (jumlah bola jadi ganjil), kapal
+        // langsung membidik gerbang BERIKUTNYA yang masih utuh, bukan condong
+        // buta ke arah bola yang hilang. Bola sisa gerbang lama dibuang dari
+        // pairing supaya tidak bikin "gerbang hantu", dan kapal tetap dijaga
+        // jaraknya dari bola sisa itu. Set 0 untuk kembali ke perilaku lama.
+      },
+      {
         key: "transition_lean_magnitude",
         label: "Transition Lean Strength (0-1)",
         type: "number",
@@ -351,6 +362,17 @@ export const STEP_TYPES = [
         default: 0.5,
         // Kekuatan MAKSIMUM koreksi anti-tabrak di atas, dicapai saat salah satu
         // bola tepat di garis haluan kapal (paling bahaya).
+      },
+      {
+        key: "transition_use_next_pair",
+        label: "Handoff To Next Gate (1=on, 0=off)",
+        type: "number",
+        default: 1,
+        // Saat satu bola gerbang ini hilang (jumlah bola jadi ganjil), kapal
+        // langsung membidik gerbang BERIKUTNYA yang masih utuh, bukan condong
+        // buta ke arah bola yang hilang. Bola sisa gerbang lama dibuang dari
+        // pairing supaya tidak bikin "gerbang hantu", dan kapal tetap dijaga
+        // jaraknya dari bola sisa itu. Set 0 untuk kembali ke perilaku lama.
       },
       {
         key: "transition_lean_magnitude",

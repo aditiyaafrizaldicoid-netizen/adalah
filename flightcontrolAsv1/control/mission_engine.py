@@ -1536,7 +1536,17 @@ class MissionEngine:
         TRANSITIONING (satu bola hilang, kapal dipaksa condong ke sisi bola yang
         hilang). Naikkan kalau kapal masih menyenggol bola tersisa saat melintas,
         turunkan kalau kapal terlalu membanting keluar jalur. Fallback ke
-        TRANSITION_LEAN_MAGNITUDE (0.4).
+        TRANSITION_LEAN_MAGNITUDE (0.4). Hanya dipakai kalau handoff di bawah TIDAK
+        menemukan gerbang berikutnya (atau dimatikan).
+
+        `transition_use_next_pair` (bool, default TRUE) — saat satu bola gerbang ini
+        hilang, bidik gerbang BERIKUTNYA yang masih terlihat utuh alih-alih condong
+        buta. Gerbang yang sudah kehilangan satu bola tidak lagi memberi arah yang
+        utuh; mengarah ke bola tunggal yang tersisa justru menyeret kapal
+        menabraknya. Bola sisa gerbang ini dibuang dulu dari kandidat pairing supaya
+        tidak membentuk "gerbang hantu" dengan bola gerbang berikutnya, dan steer ke
+        gerbang baru tetap ditambah koreksi jaga-jarak terhadap bola sisa itu (kapal
+        masih fisik melintasinya). Set false untuk kembali ke perilaku lama.
         """
         throttle    = self._resolve_step_throttle(step)
         cleared     = self._seq_pairs_cleared
@@ -1546,6 +1556,12 @@ class MissionEngine:
         # atau memperlemah kalau kapal terlalu membanting keluar jalur.
         lean_magnitude = self._safe_float(
             step.get("transition_lean_magnitude"), self.TRANSITION_LEAN_MAGNITUDE)
+        # Noise-floor pasangan. Dihitung di sini (bukan di dalam blok SEARCHING saja)
+        # karena TRANSITIONING juga memakainya untuk mencari pasangan BERIKUTNYA.
+        ignore_area_px2 = self._safe_float(step.get("ignore_area_px2"), self.SEQ_IGNORE_AREA_PX2)
+        # Handoff ke gerbang berikutnya saat satu bola gerbang ini hilang (default ON).
+        # Set 0/false untuk kembali ke perilaku lama (condong PAKSA konstan saja).
+        use_next_pair = self._safe_bool(step.get("transition_use_next_pair"), True)
 
         # ── Pastikan mode MANUAL ─────────────────────────────────────────
         if self.asv and self.asv.is_connected() and self.asv.get_telemetry().mode != "MANUAL":
@@ -1593,8 +1609,7 @@ class MissionEngine:
             # dikejar tanpa henti selama masih lolos safeguard rasio-area/lebar-
             # maksimum — kapal tidak akan pernah menyimpulkan "buoy sudah habis" kalau
             # yang terdeteksi cuma objek jauh yang tidak akan pernah cukup besar untuk
-            # di-LOCK. Opsional per-step, fallback ke SEQ_IGNORE_AREA_PX2 kalau kosong.
-            ignore_area_px2 = self._safe_float(step.get("ignore_area_px2"), self.SEQ_IGNORE_AREA_PX2)
+            # di-LOCK. Opsional per-step (dihitung sekali di awal handler ini).
             pairs = [
                 (r, g) for (r, g) in raw_pairs
                 if self._pair_avg_area(r, g) >= ignore_area_px2
@@ -1837,6 +1852,8 @@ class MissionEngine:
             # _find_nearest_ball() dengan area-gating agar identitas bola tetap terjaga.
             now = time.time()
             remaining_found_this_frame = False
+            remaining_ball = None   # bola sisa gerbang ini (untuk handoff & jaga jarak)
+            remaining_side = None
 
             if self._seq_missing_side == "left":
                 # Bola merah sudah hilang → tunggu bola hijau juga hilang
@@ -1846,6 +1863,7 @@ class MissionEngine:
                     max_dist_px=self.SEQ_IDENTITY_MAX_DIST_PX)
                 if nearest_green:
                     remaining_found_this_frame = True
+                    remaining_ball, remaining_side = nearest_green, "green"
                     self._seq_locked_green_pos = (nearest_green[0], nearest_green[1])
                     self._seq_locked_green_area = self._bbox_area(nearest_green)
                     # Steer tetap PAKSA konstan ke KIRI selama bola hijau masih terlihat.
@@ -1859,6 +1877,7 @@ class MissionEngine:
                     max_dist_px=self.SEQ_IDENTITY_MAX_DIST_PX)
                 if nearest_red:
                     remaining_found_this_frame = True
+                    remaining_ball, remaining_side = nearest_red, "red"
                     self._seq_locked_red_pos = (nearest_red[0], nearest_red[1])
                     self._seq_locked_red_area = self._bbox_area(nearest_red)
                     # Steer tetap PAKSA konstan ke KANAN selama bola merah masih terlihat.
@@ -1902,8 +1921,40 @@ class MissionEngine:
                 self._seq_gate_lock_state = self.GATE_CLEARED
                 return self._handle_seq_gate_cleared(pair_num)
 
-            # Bola tersisa masih ada di frame (atau baru hilang tapi belum confirmed) →
-            # pertahankan manuver condong adaptif / last-known trajectory.
+            # ── HANDOFF ke gerbang BERIKUTNYA ──────────────────────────
+            # CATATAN alur: frame PERTAMA saat sebuah bola hilang masih di-return
+            # dari blok LOCKED di atas (condong PAKSA), jadi handoff baru aktif mulai
+            # frame BERIKUTNYA. Jeda 1 frame (~67ms @15fps) ini disengaja dibiarkan —
+            # tidak signifikan secara fisik, dan mempertahankan jalur masuk
+            # TRANSITIONING yang sudah teruji lapangan apa adanya.
+            # Begitu satu bola gerbang ini hilang, gerbang ini tidak lagi memberi
+            # target arah yang utuh — yang tersisa cuma satu bola, dan mengarah ke
+            # bola tunggal itu justru menyeret kapal MENABRAKNYA. Alih-alih condong
+            # buta, bidik gerbang BERIKUTNYA yang masih utuh terlihat (ide operator:
+            # "kalau jumlah bola jadi ganjil, ambil gerbang di belakangnya").
+            #
+            # Dua pengaman yang tetap dipertahankan:
+            #   1. Bola sisa gerbang ini DIBUANG dari kandidat pairing
+            #      (_find_next_pair_excluding) supaya tidak membentuk gerbang hantu.
+            #   2. Steer ke gerbang berikutnya TETAP ditambah koreksi JAGA JARAK
+            #      terhadap bola sisa gerbang ini — kapal masih fisik melintasinya,
+            #      jadi tidak boleh membelok ke arahnya demi mengejar gerbang baru.
+            if remaining_found_this_frame and remaining_ball is not None and use_next_pair:
+                next_pair = self._find_next_pair_excluding(
+                    detected_balls, remaining_side, remaining_ball, ignore_area_px2)
+                if next_pair is not None:
+                    nxt_red, nxt_green = next_pair
+                    nxt_mid_x = (nxt_red[0] + nxt_green[0]) // 2
+                    steer = self.tracking_controller.compute_normalized_steering(nxt_mid_x)
+                    steer += self._compute_gate_clearance_steer(nxt_red[0], nxt_green[0], step)
+                    avoid = self._compute_single_ball_avoid_steer(remaining_ball, remaining_side, step)
+                    steer = max(-1.0, min(1.0, steer + avoid))
+                    label = (f"SEQ_GATE:TRANSITIONING(→next gate) steer={steer:+.2f} "
+                             f"avoid={avoid:+.2f} | SEQUENTIAL_BUOY (pair {pair_label})")
+                    return steer, throttle, label
+
+            # Tidak ada gerbang berikutnya yang terlihat (atau handoff dimatikan) →
+            # pertahankan manuver condong PAKSA / last-known trajectory seperti semula.
             lean_dir = "←" if self._seq_missing_side == "left" else "→"
             label = (f"SEQ_GATE:TRANSITIONING({lean_dir}) "
                      f"steer={self._seq_transition_steer:+.2f} "
@@ -2219,6 +2270,46 @@ class MissionEngine:
         away_direction = -1.0 if side == "green" else 1.0
         return away_direction * urgency * max_steer
 
+    def _find_next_pair_excluding(
+        self, detected_balls: Dict, exclude_side: Optional[str],
+        exclude_ball: Optional[Tuple], min_area_px2: float
+    ) -> Optional[Tuple]:
+        """
+        Cari pasangan gerbang BERIKUTNYA yang valid, dengan MEMBUANG dulu bola sisa
+        gerbang yang sedang dilewati (`exclude_ball` pada sisi `exclude_side`).
+
+        Dipakai saat TRANSITIONING untuk "handoff": begitu satu bola gerbang saat ini
+        hilang, kapal pindah membidik gerbang berikutnya alih-alih condong buta.
+
+        Pembuangan bola sisa itu WAJIB, bukan opsional: kalau tidak dibuang,
+        _sort_buoy_pairs() bisa memasangkannya dengan bola gerbang BERIKUTNYA dan
+        menghasilkan "gerbang hantu" yang titik tengahnya mengarah ke tempat yang
+        salah — persis false-pairing yang sudah lama dijaga di file ini.
+
+        PENTING — buang berdasarkan IDENTITAS PERSIS (posisi cx,cy bola itu sendiri),
+        BUKAN radius. Versi pertama fungsi ini membuang semua bola dalam radius
+        SEQ_IDENTITY_MAX_DIST_PX (450px @1920) dari bola sisa, dan itu terbukti
+        (lewat test) IKUT MEMBUANG bola gerbang berikutnya — di arena nyata jarak
+        antar-gerbang bisa lebih kecil dari radius itu (mis. ~331px), sehingga
+        handoff tidak pernah aktif sama sekali. `exclude_ball` selalu berasal dari
+        `detected_balls` frame ini juga, jadi pencocokan posisi persis aman.
+
+        Return (red_ball, green_ball) atau None kalau tidak ada pasangan valid.
+        """
+        filtered = {"red": list(detected_balls.get("red", [])),
+                    "green": list(detected_balls.get("green", []))}
+        if exclude_ball is not None and exclude_side in filtered:
+            ex, ey = exclude_ball[0], exclude_ball[1]
+            filtered[exclude_side] = [
+                b for b in filtered[exclude_side]
+                if not (b[0] == ex and b[1] == ey)
+            ]
+
+        for red_ball, green_ball in self._sort_buoy_pairs(filtered):
+            if self._pair_avg_area(red_ball, green_ball) >= min_area_px2:
+                return red_ball, green_ball
+        return None
+
     def _compute_gate_clearance_steer(self, red_x: float, green_x: float, step: Dict) -> float:
         """
         Koreksi tambahan saat LOCKED: jaga agar haluan kapal berada di tengah CELAH
@@ -2291,6 +2382,31 @@ class MissionEngine:
         urgency = (magnitude - deadband) / (1.0 - deadband)
         direction = 1.0 if imbalance > 0 else -1.0
         return max(-1.0, min(1.0, direction * urgency * max_steer))
+
+    @staticmethod
+    def _safe_bool(value: Any, default: bool) -> bool:
+        """
+        Konversi field step mission ke bool dengan aman.
+
+        WAJIB hati-hati di sini: frontend mengirim angka 1/0 (input bertipe number),
+        bukan true/false. Cek naif seperti `value is not False` SALAH untuk angka —
+        di Python `0 is False` bernilai False, sehingga 0 justru lolos sebagai "aktif"
+        dan toggle-nya tidak pernah bisa dimatikan. Tangani angka, string, dan bool
+        secara eksplisit; nilai kosong/None/tidak valid jatuh ke `default`.
+        """
+        if value is None or value == "":
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value != 0
+        if isinstance(value, str):
+            v = value.strip().lower()
+            if v in ("0", "false", "no", "off"):
+                return False
+            if v in ("1", "true", "yes", "on"):
+                return True
+        return default
 
     @staticmethod
     def _safe_float(value: Any, default: float) -> float:
