@@ -1,3 +1,5 @@
+import time
+
 from simple_pid import PID
 
 
@@ -30,6 +32,13 @@ class TrackingController:
 
         # Simpan tanda error sebelumnya untuk deteksi zero-crossing (anti-windup)
         self._last_error_sign: float = 0.0
+
+        # ── Diagnostik saturasi (lihat _track_saturation) ──────────────────
+        self._SAT_WINDOW_SIZE = 30          # ~2 detik @15 FPS
+        self._SAT_WARN_RATIO = 0.5          # >50% frame mentok = gain bermasalah
+        self._SAT_WARN_INTERVAL_SEC = 10.0  # jangan spam terminal
+        self._sat_window: list = []
+        self._sat_last_warn: float = 0.0
 
     def reset(self):
         self.pid.reset()
@@ -124,4 +133,51 @@ class TrackingController:
 
         # Normalisasi output dari range [-max_turn_rate, +max_turn_rate] ke [-1.0, +1.0]
         steering_norm = raw_output / self.max_turn_rate if self.max_turn_rate > 0 else 0.0
-        return max(-1.0, min(1.0, steering_norm))
+        steering_norm = max(-1.0, min(1.0, steering_norm))
+        self._track_saturation(steering_norm)
+        return steering_norm
+
+    def _track_saturation(self, steer: float):
+        """
+        Diagnostik: peringatkan kalau steering terlalu sering MENTOK di ±1.0.
+
+        Kenapa ini ada (ditemukan setelah berhari-hari kapal menabrak buoy dan
+        beberapa perbaikan logika yang ternyata TIDAK berpengaruh sama sekali):
+        gain yang terlalu tinggi membuat PID mentok ±1.0 hampir setiap frame.
+        Akibatnya dua-duanya fatal dan sulit dilihat dari luar:
+          1. Kemudi jadi bang-bang — banting kiri/kanan penuh berkali-kali per
+             detik hanya karena jitter deteksi YOLO beberapa piksel, kapal tidak
+             pernah benar-benar mengikuti gerbang.
+          2. SEMUA koreksi halus di mission_engine (jaga jarak, keseimbangan
+             gerbang, handoff) hilang tak berbekas, karena ditambahkan ke nilai
+             yang sudah ±1.0 lalu di-clamp balik ke ±1.0.
+        Dengan konfigurasi lama (Kp=0.309, Kd=0.683 @ max_turn_rate=30), 23 dari
+        30 frame mentok penuh padahal targetnya DIAM — dan itulah sebabnya
+        perbaikan-perbaikan sebelumnya tidak mengubah apa pun di air.
+
+        Rasio saturasi tinggi = gain terlalu besar untuk resolusi/loop rate saat
+        ini. Turunkan Kp (atau naikkan max_turn_rate — yang menentukan cuma rasio
+        Kp/max_turn_rate), dan pakai Kd sangat kecil / nol: pada 15 FPS, Kd besar
+        mengubah noise deteksi jadi banting kemudi penuh.
+        """
+        self._sat_window.append(1 if abs(steer) >= 0.999 else 0)
+        if len(self._sat_window) < self._SAT_WINDOW_SIZE:
+            return
+        if len(self._sat_window) > self._SAT_WINDOW_SIZE:
+            self._sat_window.pop(0)
+
+        ratio = sum(self._sat_window) / float(len(self._sat_window))
+        if ratio < self._SAT_WARN_RATIO:
+            return
+
+        now = time.time()
+        if now - self._sat_last_warn < self._SAT_WARN_INTERVAL_SEC:
+            return
+        self._sat_last_warn = now
+        print(f"[TrackingController] ⚠️ Steering MENTOK ±1.0 pada {ratio*100:.0f}% "
+              f"dari {self._SAT_WINDOW_SIZE} frame terakhir — gain kemungkinan besar "
+              f"KETINGGIAN (Kp={self.pid.Kp}, Kd={self.pid.Kd}, "
+              f"max_turn_rate={self.max_turn_rate}). Kemudi jadi bang-bang dan koreksi "
+              f"halus dari mission engine ikut hilang kena clamp. "
+              f"Full-lock mulai di error {self.max_turn_rate/self.pid.Kp:.0f}px "
+              f"(lebar setengah-frame {self.center_x}px).")
