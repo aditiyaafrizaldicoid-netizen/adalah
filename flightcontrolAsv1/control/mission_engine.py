@@ -228,6 +228,30 @@ class MissionEngine:
     # condong/menghindar lain di file ini.
     SEQ_SINGLE_BALL_MAX_STEER = TRANSITION_LEAN_MAGNITUDE
 
+    # ── Gate Balance Guard (saat LOCKED) ────────────────────────────────────
+    # Toleransi KETIDAKSEIMBANGAN celah kiri-vs-kanan haluan (rasio 0..1, TANPA
+    # satuan piksel — lihat _compute_gate_clearance_steer). Selama ketidakseimbangan
+    # masih di bawah nilai ini, guard diam dan tracking midpoint normal berjalan apa
+    # adanya. Di atasnya, koreksi menjauh dari bola yang lebih dekat mulai diterapkan.
+    #
+    # KENAPA PERLU (bug nyata di lapangan — kapal menabrak bola): steer LOCKED
+    # memakai error midpoint dalam PIKSEL MUTLAK, yang tidak bisa membedakan
+    # "meleset 60px di gerbang lebar 400px" (aman) dari "meleset 60px di gerbang
+    # sempit 200px" (nyaris nabrak) — keduanya menghasilkan koreksi identik.
+    # Guard ini menormalisasi terhadap lebar gerbang sehingga gerbang yang tampak
+    # lebih sempit otomatis dikoreksi lebih agresif.
+    #
+    # 0.25 = boleh meleset sampai 25% dari tengah celah sebelum guard bereaksi.
+    # PERLU KALIBRASI LAPANGAN: TURUNKAN kalau kapal masih menyenggol (guard jadi
+    # lebih cepat bereaksi), NAIKKAN kalau kapal terlalu banyak koreksi/goyah.
+    SEQ_GATE_BALANCE_DEADBAND = 0.25
+
+    # Steer maksimum (0..1) untuk koreksi keseimbangan di atas, dicapai saat salah
+    # satu bola tepat di garis haluan (imbalance ±1, paling bahaya). Sengaja LEBIH
+    # BESAR dari SEQ_SINGLE_BALL_MAX_STEER (0.4) karena ini situasi tabrakan yang
+    # sudah imminent (kapal sedang melintas di antara kedua bola).
+    SEQ_GATE_MAX_AVOID_STEER = 0.5
+
     # Durasi (detik) maksimum kapal boleh maju lurus TANPA melihat kandidat pasangan
     # ATAU fallback gate_x sama sekali ("buta total"). Setelah durasi ini terlampaui,
     # kapal STOP (throttle=0) alih-alih terus maju buta — mencegah menabrak
@@ -1495,10 +1519,33 @@ class MissionEngine:
         masih valid — kapal tetap menahan arah lean sampai bola tersisa BENAR hilang
         ATAU durasi ini terlampaui, mana pun lebih dulu. Fallback ke
         SEQ_TRANSITIONING_SAFETY_TIMEOUT_SEC (20.0) jika tidak diisi.
+
+        `gate_balance_deadband` (rasio 0.0-1.0) opsional — toleransi ketidakseimbangan
+        celah kiri-vs-kanan haluan sebelum koreksi menjauh diterapkan di atas steer
+        midpoint (lihat _compute_gate_clearance_steer — ini perbaikan untuk kapal yang
+        menabrak bola: error midpiksel mutlak tidak bisa membedakan gerbang sempit
+        yang berbahaya dari gerbang lebar yang aman). TURUNKAN kalau kapal masih
+        menyenggol, NAIKKAN kalau kapal jadi goyah. Fallback ke
+        SEQ_GATE_BALANCE_DEADBAND (0.25).
+
+        `gate_max_avoid_steer` (0.0-1.0) opsional — steer maksimum koreksi
+        keseimbangan di atas, dicapai saat salah satu bola tepat di garis haluan.
+        Fallback ke SEQ_GATE_MAX_AVOID_STEER (0.5).
+
+        `transition_lean_magnitude` (0.0-1.0) opsional — kekuatan condong PAKSA saat
+        TRANSITIONING (satu bola hilang, kapal dipaksa condong ke sisi bola yang
+        hilang). Naikkan kalau kapal masih menyenggol bola tersisa saat melintas,
+        turunkan kalau kapal terlalu membanting keluar jalur. Fallback ke
+        TRANSITION_LEAN_MAGNITUDE (0.4).
         """
         throttle    = self._resolve_step_throttle(step)
         cleared     = self._seq_pairs_cleared
         pair_num    = cleared + 1   # Display: pasangan yang sedang diincar (1-indexed)
+        # Kekuatan condong PAKSA saat TRANSITIONING (satu bola hilang) — configurable
+        # per-step supaya operator bisa memperkuat kalau kapal masih menyenggol bola,
+        # atau memperlemah kalau kapal terlalu membanting keluar jalur.
+        lean_magnitude = self._safe_float(
+            step.get("transition_lean_magnitude"), self.TRANSITION_LEAN_MAGNITUDE)
 
         # ── Pastikan mode MANUAL ─────────────────────────────────────────
         if self.asv and self.asv.is_connected() and self.asv.get_telemetry().mode != "MANUAL":
@@ -1587,6 +1634,12 @@ class MissionEngine:
                       f"green={self._seq_locked_green_pos})")
                 locked_mid_x = (self._seq_locked_red_pos[0] + self._seq_locked_green_pos[0]) // 2
                 steer = self.tracking_controller.compute_normalized_steering(locked_mid_x)
+                # Clearance guard: jaga jarak per-BOLA, bukan cuma midpoint (lihat
+                # _compute_gate_clearance_steer — ini yang mencegah kapal menabrak
+                # bola saat midpoint sudah "pas tengah" tapi salah satu bola nyaris
+                # di garis haluan).
+                steer = max(-1.0, min(1.0, steer + self._compute_gate_clearance_steer(
+                    self._seq_locked_red_pos[0], self._seq_locked_green_pos[0], step)))
                 label = f"SEQ_GATE:LOCKED | SEQUENTIAL_BUOY (pair {pair_label})"
                 return steer, throttle, label
             else:
@@ -1728,7 +1781,14 @@ class MissionEngine:
                 self._seq_locked_green_area = self._bbox_area(nearest_green)
                 locked_mid_x = (self._seq_locked_red_pos[0] + self._seq_locked_green_pos[0]) // 2
                 steer = self.tracking_controller.compute_normalized_steering(locked_mid_x)
-                label = f"SEQ_GATE:LOCKED | SEQUENTIAL_BUOY (pair {pair_label})"
+                # Clearance guard per-BOLA di atas steer midpoint (lihat
+                # _compute_gate_clearance_steer). Ini jalur yang paling sering aktif
+                # saat kapal benar-benar melintasi gerbang.
+                clearance_steer = self._compute_gate_clearance_steer(
+                    self._seq_locked_red_pos[0], self._seq_locked_green_pos[0], step)
+                steer = max(-1.0, min(1.0, steer + clearance_steer))
+                clearance_tag = f" avoid={clearance_steer:+.2f}" if abs(clearance_steer) > 0.01 else ""
+                label = f"SEQ_GATE:LOCKED{clearance_tag} | SEQUENTIAL_BUOY (pair {pair_label})"
                 return steer, throttle, label
 
             elif not red_visible_locked and green_visible_locked:
@@ -1740,7 +1800,7 @@ class MissionEngine:
                 self._seq_locked_green_pos  = (nearest_green[0], nearest_green[1])
                 self._seq_locked_green_area = self._bbox_area(nearest_green)
                 # Steer PAKSA konstan ke KIRI — pertahankan sampai bola hijau juga hilang.
-                self._seq_transition_steer = -self.TRANSITION_LEAN_MAGNITUDE
+                self._seq_transition_steer = -lean_magnitude
                 print(f"[SEQ_GATE] LOCKED → TRANSITIONING "
                       f"(pair {pair_label}, missing=LEFT/red, lean={self._seq_transition_steer:+.2f})")
                 label = f"SEQ_GATE:TRANSITIONING(←) | SEQUENTIAL_BUOY (pair {pair_label})"
@@ -1755,7 +1815,7 @@ class MissionEngine:
                 self._seq_locked_red_pos    = (nearest_red[0], nearest_red[1])
                 self._seq_locked_red_area   = self._bbox_area(nearest_red)
                 # Steer PAKSA konstan ke KANAN — pertahankan sampai bola merah juga hilang.
-                self._seq_transition_steer = self.TRANSITION_LEAN_MAGNITUDE
+                self._seq_transition_steer = lean_magnitude
                 print(f"[SEQ_GATE] LOCKED → TRANSITIONING "
                       f"(pair {pair_label}, missing=RIGHT/green, lean={self._seq_transition_steer:+.2f})")
                 label = f"SEQ_GATE:TRANSITIONING(→) | SEQUENTIAL_BUOY (pair {pair_label})"
@@ -1789,7 +1849,7 @@ class MissionEngine:
                     self._seq_locked_green_pos = (nearest_green[0], nearest_green[1])
                     self._seq_locked_green_area = self._bbox_area(nearest_green)
                     # Steer tetap PAKSA konstan ke KIRI selama bola hijau masih terlihat.
-                    self._seq_transition_steer = -self.TRANSITION_LEAN_MAGNITUDE
+                    self._seq_transition_steer = -lean_magnitude
 
             elif self._seq_missing_side == "right":
                 # Bola hijau sudah hilang → tunggu bola merah juga hilang
@@ -1802,7 +1862,7 @@ class MissionEngine:
                     self._seq_locked_red_pos = (nearest_red[0], nearest_red[1])
                     self._seq_locked_red_area = self._bbox_area(nearest_red)
                     # Steer tetap PAKSA konstan ke KANAN selama bola merah masih terlihat.
-                    self._seq_transition_steer = self.TRANSITION_LEAN_MAGNITUDE
+                    self._seq_transition_steer = lean_magnitude
 
             # ── Debounce "confirmed hilang" ────────────────────────────
             if remaining_found_this_frame:
@@ -2158,6 +2218,79 @@ class MissionEngine:
 
         away_direction = -1.0 if side == "green" else 1.0
         return away_direction * urgency * max_steer
+
+    def _compute_gate_clearance_steer(self, red_x: float, green_x: float, step: Dict) -> float:
+        """
+        Koreksi tambahan saat LOCKED: jaga agar haluan kapal berada di tengah CELAH
+        secara PROPORSIONAL, diukur relatif terhadap lebar gerbang saat itu.
+
+        ── Kenapa steer midpoint saja TIDAK cukup (penyebab kapal menabrak bola) ──
+        Steer midpoint memakai error dalam PIKSEL MUTLAK: (midpoint − tengah_frame).
+        Error piksel yang sama bisa berarti "masih aman" ATAU "hampir nabrak",
+        tergantung selebar apa gerbangnya tampak saat itu — dan midpoint TIDAK
+        membedakan keduanya. Contoh nyata (tengah frame = 960):
+
+          merah=800, hijau=1000 → error midpoint = −60 px
+              celah kiri 160px, celah kanan HANYA 40px → hijau nyaris di haluan!
+          merah=700, hijau=1100 → error midpoint = −60 px  (SAMA PERSIS)
+              celah kiri 260px, celah kanan 140px → masih relatif aman
+
+        Kedua kasus menghasilkan koreksi yang identik dari steer midpoint, padahal
+        tingkat bahayanya jauh berbeda. Itulah celah yang membuat kapal menyenggol.
+
+        CATATAN PENTING (sudah diverifikasi secara aljabar, jangan diganti balik):
+        pendekatan "jaga jarak MUTLAK per-bola dalam piksel" TIDAK menyelesaikan ini —
+        di area linearnya, hasilnya terbukti hanya KELIPATAN KONSTAN dari error
+        midpoint (guard/error = konstan), alias cuma menaikkan gain PID tanpa
+        menambah informasi baru sama sekali, dan tetap memberi koreksi identik untuk
+        kedua contoh di atas.
+
+        ── Solusinya: normalisasi terhadap lebar gerbang ──
+          red_gap   = tengah_frame − merah_x   (celah di sisi kiri haluan)
+          green_gap = hijau_x − tengah_frame   (celah di sisi kanan haluan)
+          imbalance = (green_gap − red_gap) / (green_gap + red_gap)   → −1..+1
+
+        imbalance = 0  → haluan tepat di tengah celah (aman, tidak ada koreksi)
+        imbalance > 0  → celah kanan lebih lega, MERAH lebih dekat → dorong KANAN (+)
+        imbalance < 0  → celah kiri lebih lega, HIJAU lebih dekat → dorong KIRI (−)
+        imbalance = ±1 → salah satu bola TEPAT di garis haluan (paling bahaya)
+
+        Karena dibagi lebar gerbang, error piksel yang sama otomatis menghasilkan
+        koreksi LEBIH BESAR saat gerbang tampak sempit (jauh/sempit = berbahaya) dan
+        LEBIH KECIL saat gerbang tampak lebar (dekat/lega = aman) — persis yang
+        dibutuhkan, dan inilah informasi yang benar-benar BARU dibanding steer
+        midpoint. Untuk dua contoh di atas: kasus pertama imbalance = −0.60
+        (koreksi kuat), kasus kedua −0.30 (koreksi setengahnya).
+
+        `gate_balance_deadband` memberi toleransi ketidakseimbangan wajar supaya guard
+        ini tidak terus-menerus melawan tracking midpoint normal saat kapal sebetulnya
+        sudah cukup di tengah.
+        """
+        deadband = self._safe_float(step.get("gate_balance_deadband"), self.SEQ_GATE_BALANCE_DEADBAND)
+        max_steer = self._safe_float(step.get("gate_max_avoid_steer"), self.SEQ_GATE_MAX_AVOID_STEER)
+
+        center_x = self.tracking_controller.center_x
+        red_gap = center_x - red_x      # celah sisi kiri haluan
+        green_gap = green_x - center_x  # celah sisi kanan haluan
+        total_gap = red_gap + green_gap
+
+        # Kapal sudah DI LUAR gerbang (kedua bola di sisi yang sama) atau lebar 0 —
+        # tidak ada "celah" yang bermakna untuk dinormalisasi. Serahkan ke steer
+        # midpoint biasa, jangan menghasilkan koreksi ngawur dari pembagian aneh.
+        if total_gap <= 0:
+            return 0.0
+
+        imbalance = (green_gap - red_gap) / total_gap
+        imbalance = max(-1.0, min(1.0, imbalance))
+
+        deadband = max(0.0, min(0.99, deadband))
+        magnitude = abs(imbalance)
+        if magnitude <= deadband:
+            return 0.0
+
+        urgency = (magnitude - deadband) / (1.0 - deadband)
+        direction = 1.0 if imbalance > 0 else -1.0
+        return max(-1.0, min(1.0, direction * urgency * max_steer))
 
     @staticmethod
     def _safe_float(value: Any, default: float) -> float:

@@ -271,6 +271,30 @@ export const STEP_TYPES = [
         // manuver yang masih valid: kapal tetap menahan arah lean sampai bola
         // tersisa BENAR hilang atau durasi ini terlampaui, mana pun lebih dulu.
       },
+      {
+        key: "gate_balance_deadband",
+        label: "Gate Balance Deadband (0-1)",
+        type: "number",
+        default: 0.25,
+        // ANTI-TABRAK: toleransi ketidakseimbangan celah kiri-vs-kanan haluan
+        // sebelum kapal dikoreksi menjauh dari bola yang lebih dekat. TURUNKAN
+        // kalau kapal masih menyenggol bola, NAIKKAN kalau kapal jadi goyah.
+      },
+      {
+        key: "gate_max_avoid_steer",
+        label: "Gate Max Avoid Steer (0-1)",
+        type: "number",
+        default: 0.5,
+        // Kekuatan MAKSIMUM koreksi anti-tabrak di atas, dicapai saat salah satu
+        // bola tepat di garis haluan kapal.
+      },
+      {
+        key: "transition_lean_magnitude",
+        label: "Transition Lean Strength (0-1)",
+        type: "number",
+        default: 0.4,
+        // Kekuatan condong PAKSA saat satu bola hilang.
+      },
     ],
   },
   // ── Buoy Chase (Simple Tracking) ────────────────────────────────────────
@@ -307,6 +331,35 @@ export const STEP_TYPES = [
         // ini batas waktu MAKSIMUM menahan condong itu sebelum dipaksa
         // dianggap lewat — jaring pengaman kalau bola tersisa terus terdeteksi
         // tanpa henti (false-positive statis).
+      },
+      {
+        key: "gate_balance_deadband",
+        label: "Gate Balance Deadband (0-1)",
+        type: "number",
+        default: 0.25,
+        // ANTI-TABRAK: toleransi ketidakseimbangan celah kiri-vs-kanan haluan
+        // sebelum kapal dikoreksi menjauh dari bola yang lebih dekat. Steer
+        // midpoint saja tidak cukup karena pakai piksel MUTLAK — meleset 60px
+        // di gerbang sempit jauh lebih bahaya daripada di gerbang lebar, tapi
+        // midpoint memperlakukan keduanya sama. TURUNKAN kalau kapal masih
+        // menyenggol bola, NAIKKAN kalau kapal jadi goyah/terlalu mengoreksi.
+      },
+      {
+        key: "gate_max_avoid_steer",
+        label: "Gate Max Avoid Steer (0-1)",
+        type: "number",
+        default: 0.5,
+        // Kekuatan MAKSIMUM koreksi anti-tabrak di atas, dicapai saat salah satu
+        // bola tepat di garis haluan kapal (paling bahaya).
+      },
+      {
+        key: "transition_lean_magnitude",
+        label: "Transition Lean Strength (0-1)",
+        type: "number",
+        default: 0.4,
+        // Kekuatan condong PAKSA saat satu bola hilang. Naikkan kalau kapal
+        // masih menyenggol bola tersisa saat melintas, turunkan kalau kapal
+        // terlalu membanting keluar jalur.
       },
     ],
   },
