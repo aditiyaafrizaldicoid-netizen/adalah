@@ -1,5 +1,5 @@
 <script setup>
-import { Camera, Sun, Contrast, Sliders, CheckCircle2, AlertTriangle, ScanEye, Save, RefreshCw } from 'lucide-vue-next';
+import { Camera, Sun, Contrast, Sliders, CheckCircle2, AlertTriangle, ScanEye, Save, RefreshCw, Maximize2 } from 'lucide-vue-next';
 import { ref, reactive, onMounted } from 'vue';
 import { useWebsocketStore } from '@/stores/websocketStore';
 
@@ -12,6 +12,69 @@ const cams = reactive({
 });
 
 const applyStatus = ref({}); // { surface: null | 'ok' | 'err', underwater: null | 'ok' | 'err' }
+
+// ── Resolusi Kamera ──────────────────────────────────────────────────────
+// Disimpan di DB via /api/v1/pid-config (field camera_width/camera_height),
+// dibaca flightcontrolAsv1 di AWAL startup (main.py) — SEMUA threshold
+// berbasis piksel di MissionEngine ikut diskalakan otomatis mengikuti resolusi
+// ini (lihat MissionEngine._apply_resolution_scaling()), TIDAK perlu edit
+// kode manual. BEDA dari setting lain di tab ini: TIDAK bisa berlaku live —
+// kamera fisik harus di-restart untuk menerapkan resolusi baru, jadi TIDAK
+// di-broadcast via WebSocket seperti min_detection_area_px2, cuma disimpan
+// ke DB untuk dibaca saat proses berikutnya start.
+const RESOLUTION_PRESETS = [
+  { label: '1920 × 1080 (Full HD)', width: 1920, height: 1080 },
+  { label: '1280 × 720 (HD)', width: 1280, height: 720 },
+  { label: '640 × 360 (Low-Res)', width: 640, height: 360 },
+];
+const cameraWidth = ref(1920);
+const cameraHeight = ref(1080);
+const resolutionSaveStatus = ref(null); // null | 'ok' | 'err'
+
+const loadResolutionSettings = async () => {
+  try {
+    const res = await fetch('http://localhost:3000/api/v1/pid-config');
+    if (res.ok) {
+      const result = await res.json();
+      if (result.data) {
+        if (result.data.camera_width) cameraWidth.value = result.data.camera_width;
+        if (result.data.camera_height) cameraHeight.value = result.data.camera_height;
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load camera resolution from DB:', err);
+  }
+};
+
+const applyResolutionSettings = async () => {
+  try {
+    const res = await fetch('http://localhost:3000/api/v1/pid-config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ camera_width: cameraWidth.value, camera_height: cameraHeight.value }),
+    });
+    // fetch() only rejects on network failure -- an HTTP error status (4xx/5xx)
+    // still resolves normally, so res.ok must be checked explicitly or a failed
+    // save would silently report success.
+    resolutionSaveStatus.value = res.ok ? 'ok' : 'err';
+  } catch (err) {
+    console.error('Failed to persist camera resolution in database:', err);
+    resolutionSaveStatus.value = 'err';
+  }
+  setTimeout(() => { resolutionSaveStatus.value = null; }, 3000);
+};
+
+const applyResolutionPreset = (preset) => {
+  cameraWidth.value = preset.width;
+  cameraHeight.value = preset.height;
+  applyResolutionSettings();
+};
+
+const resetResolutionSettings = () => {
+  cameraWidth.value = 1920;
+  cameraHeight.value = 1080;
+  applyResolutionSettings();
+};
 
 // ── Deteksi Object: Minimum Area (px²) ──────────────────────────────────
 // Global untuk pipeline deteksi YOLO (bukan per-kamera) — deteksi bola dengan
@@ -42,12 +105,15 @@ const applyDetectionSettings = async () => {
 
   // 2. Persist di Database via HTTP REST API
   try {
-    await fetch('http://localhost:3000/api/v1/pid-config', {
+    const res = await fetch('http://localhost:3000/api/v1/pid-config', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ min_detection_area_px2: minDetectionAreaPx2.value }),
     });
-    detectionSaveStatus.value = 'ok';
+    // fetch() only rejects on network failure -- an HTTP error status (4xx/5xx)
+    // still resolves normally, so res.ok must be checked explicitly or a failed
+    // save would silently report success.
+    detectionSaveStatus.value = res.ok ? 'ok' : 'err';
   } catch (err) {
     console.error('Failed to persist detection settings in database:', err);
     detectionSaveStatus.value = 'err';
@@ -62,6 +128,7 @@ const resetDetectionSettings = () => {
 
 onMounted(() => {
   loadDetectionSettings();
+  loadResolutionSettings();
 });
 
 function applySettings(camKey) {
@@ -89,6 +156,65 @@ function resetCam(camKey) {
 
 <template>
   <div class="space-y-6">
+    <!-- Camera Resolution (global, saved to DB, requires flightcontrolAsv1 restart) -->
+    <div class="glass-card p-6 space-y-4">
+      <div class="flex justify-between items-center border-b border-(--border-subtle) pb-4">
+        <div class="flex items-center gap-3">
+          <Maximize2 class="w-5 h-5 text-primary" />
+          <div>
+            <h2 class="text-sm font-black text-(--text-primary) uppercase tracking-widest">Camera Resolution</h2>
+            <p class="text-[10px] text-(--text-secondary) font-bold uppercase">Semua threshold piksel tracking otomatis menyesuaikan</p>
+          </div>
+        </div>
+        <button @click="resetResolutionSettings" class="text-[10px] font-bold text-(--text-secondary) hover:text-(--text-primary) uppercase flex items-center gap-1">
+          <RefreshCw class="w-3 h-3" /> Reset Default
+        </button>
+      </div>
+
+      <div class="grid grid-cols-3 gap-2 max-w-lg">
+        <button v-for="preset in RESOLUTION_PRESETS" :key="preset.label" @click="applyResolutionPreset(preset)"
+          :class="['py-3 px-2 rounded-xl text-[10px] font-bold uppercase tracking-wide transition-all border',
+            cameraWidth === preset.width && cameraHeight === preset.height
+              ? 'bg-primary text-slate-900 border-primary shadow-lg shadow-primary/20'
+              : 'bg-(--bg-secondary) text-(--text-secondary) border-(--border-subtle) hover:text-(--text-primary)']">
+          {{ preset.label }}
+        </button>
+      </div>
+
+      <div class="flex items-end gap-3 bg-(--bg-secondary) p-4 rounded-xl border border-(--border-primary) max-w-lg">
+        <div class="flex-1 space-y-1">
+          <span class="text-[10px] font-black uppercase text-(--text-secondary)">Width (px)</span>
+          <input type="number" step="1" min="1" v-model.number="cameraWidth"
+            class="w-full bg-card border border-(--border-subtle) rounded px-2 py-1.5 text-xs font-mono text-(--text-primary)" />
+        </div>
+        <span class="text-(--text-muted) pb-1.5 font-bold">×</span>
+        <div class="flex-1 space-y-1">
+          <span class="text-[10px] font-black uppercase text-(--text-secondary)">Height (px)</span>
+          <input type="number" step="1" min="1" v-model.number="cameraHeight"
+            class="w-full bg-card border border-(--border-subtle) rounded px-2 py-1.5 text-xs font-mono text-(--text-primary)" />
+        </div>
+      </div>
+
+      <p class="text-[10px] text-(--text-muted) font-bold uppercase max-w-lg">
+        ⚠ Butuh restart proses flightcontrolAsv1 (main.py) di boat untuk berlaku — kamera fisik tidak bisa diganti resolusinya secara live.
+      </p>
+
+      <div class="flex items-center justify-between pt-2">
+        <transition name="fade">
+          <div v-if="resolutionSaveStatus" :class="['text-xs font-bold flex items-center gap-2',
+            resolutionSaveStatus === 'ok' ? 'text-success' : 'text-danger']">
+            <CheckCircle2 v-if="resolutionSaveStatus === 'ok'" class="w-4 h-4" />
+            <AlertTriangle v-else class="w-4 h-4" />
+            {{ resolutionSaveStatus === 'ok' ? 'Saved to DB (restart to apply)' : 'Gagal menyimpan ke database' }}
+          </div>
+        </transition>
+        <button @click="applyResolutionSettings"
+          class="bg-primary hover:bg-red-600 text-slate-900 font-black px-6 py-3 rounded-xl text-xs uppercase tracking-widest flex items-center gap-2 transition-all shadow-lg shadow-primary/20 ml-auto">
+          <Save class="w-4 h-4" /> Save
+        </button>
+      </div>
+    </div>
+
     <!-- Object Detection Noise Floor (global, saved to DB) -->
     <div class="glass-card p-6 space-y-4">
       <div class="flex justify-between items-center border-b border-(--border-subtle) pb-4">

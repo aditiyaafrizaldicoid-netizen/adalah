@@ -13,5 +13,7 @@ type PidConfig struct {
 	PassDuration        float64   `gorm:"default:2.5" json:"pass_duration"`
 	CooldownDuration    float64   `gorm:"default:3.0" json:"cooldown_duration"`
 	MinDetectionAreaPx2 float64   `gorm:"default:4000" json:"min_detection_area_px2"`
+	CameraWidth         int       `gorm:"default:1920" json:"camera_width"`
+	CameraHeight        int       `gorm:"default:1080" json:"camera_height"`
 	UpdatedAt           time.Time `gorm:"autoUpdateTime" json:"updated_at"`
 }

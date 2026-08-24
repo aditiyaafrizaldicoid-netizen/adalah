@@ -15,6 +15,38 @@ from connection.websocket import ASVWebSocketClient
 from camera.streamer import VideoStreamer
 
 
+def _fetch_camera_resolution(default_width: int, default_height: int):
+    """
+    Fetch camera_width/camera_height dari /api/v1/pid-config di awal startup —
+    SEBELUM tracker/controller/mission_engine/video_streamer dibuat, karena resolusi
+    capture kamera fisik tidak bisa diganti live setelah cv2.VideoCapture ter-init.
+
+    Selalu kembalikan sepasang int yang valid — fallback ke default_width/height
+    kalau backend belum siap, field belum diisi di DB, atau nilainya tidak masuk
+    akal (<=0), supaya boot tidak pernah gagal gara-gara config resolusi.
+    """
+    import urllib.request
+    import json
+    try:
+        url = "http://localhost:3000/api/v1/pid-config"
+        req = urllib.request.Request(url, headers={"User-Agent": "ASVFlightController"})
+        with urllib.request.urlopen(req, timeout=3.0) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode("utf-8"))
+                if data.get("status") == "success" and data.get("data"):
+                    cfg = data["data"]
+                    w = int(cfg.get("camera_width") or 0)
+                    h = int(cfg.get("camera_height") or 0)
+                    if w > 0 and h > 0:
+                        print(f"[Main] 📥 Resolusi kamera dari DB: {w}x{h}")
+                        return w, h
+    except Exception as e:
+        print(f"[Main] Warning: Could not fetch camera resolution from DB ({e})")
+
+    print(f"[Main] Menggunakan resolusi kamera default: {default_width}x{default_height}")
+    return default_width, default_height
+
+
 def main():
     print("==================================================")
     print(" 🚢 ASV FLIGHT CONTROLLER + WEBSOCKET CLIENT ")
@@ -50,9 +82,16 @@ def main():
     from control.speed_scheduler import SpeedScheduler
     from control.mission_engine import MissionEngine
 
-    # Logitech MX Brio @ 1920x1080 (Full HD)
-    camera_width = 1920
-    camera_height = 1080
+    # Resolusi kamera live-tunable dari Calibration → Vision/Camera di base station
+    # (disimpan di DB via /api/v1/pid-config, field camera_width/camera_height).
+    # HARUS diambil SEBELUM tracker/controller/mission_engine/video_streamer dibuat —
+    # beda dari PID gain dkk. yang bisa di-update live setelah objek dibuat, resolusi
+    # capture kamera fisik (cv2.VideoCapture) tidak bisa diganti setelah kamera
+    # ter-inisialisasi tanpa re-init hardware penuh. Fallback ke 1920x1080 (Logitech
+    # MX Brio) kalau fetch gagal (mis. backend belum siap) — resolusi REFERENSI
+    # tempat semua threshold piksel MissionEngine dikalibrasi (lihat
+    # MissionEngine.REFERENCE_FRAME_WIDTH/HEIGHT & _apply_resolution_scaling()).
+    camera_width, camera_height = _fetch_camera_resolution(default_width=1920, default_height=1080)
 
     model_path = os.path.join(os.path.dirname(__file__), "models", "best.pt")
     tracker = BallTracker(
@@ -71,12 +110,17 @@ def main():
 
     speed_scheduler = SpeedScheduler(max_base_throttle=0.4)
 
-    # Inisialisasi Mission Engine dengan SpeedScheduler
+    # Inisialisasi Mission Engine dengan SpeedScheduler — camera_width/height dipakai
+    # untuk menskalakan otomatis SEMUA threshold berbasis piksel (lihat
+    # MissionEngine._apply_resolution_scaling()), TIDAK perlu edit konstanta manual
+    # tiap kali resolusi kamera diganti.
     mission_engine = MissionEngine(
         asv=asv,
         tracker=tracker,
         tracking_controller=controller,
-        speed_scheduler=speed_scheduler
+        speed_scheduler=speed_scheduler,
+        camera_width=camera_width,
+        camera_height=camera_height
     )
 
     ws_url = os.getenv("ASV_WS_URL", "ws://localhost:3000/api/v1/ws/asv")

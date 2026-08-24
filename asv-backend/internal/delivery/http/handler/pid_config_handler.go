@@ -64,6 +64,12 @@ func (h *PidConfigHandler) SaveConfig(c *fiber.Ctx) error {
 	if body.MinDetectionAreaPx2 != 0 {
 		config.MinDetectionAreaPx2 = body.MinDetectionAreaPx2
 	}
+	if body.CameraWidth != 0 {
+		config.CameraWidth = body.CameraWidth
+	}
+	if body.CameraHeight != 0 {
+		config.CameraHeight = body.CameraHeight
+	}
 
 	if err := h.service.SaveConfig(config); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{

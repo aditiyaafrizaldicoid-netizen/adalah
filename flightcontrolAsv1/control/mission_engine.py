@@ -82,6 +82,21 @@ class MissionEngine:
     STEP_TYPE_GYRO_FORWARD   = "GYRO_FORWARD"    # Maju lurus dgn koreksi yaw kompas/gyro, berhenti di waktu ATAU saat buoy terdeteksi
     STEP_TYPE_BUOY_CHASE     = "BUOY_CHASE"      # Versi sederhana SEQUENTIAL_BUOY: cuma throttle + filter jarak (px²), selesai saat buoy habis dari frame
 
+    # ── Resolusi Referensi ───────────────────────────────────────────────────
+    # SEMUA konstanta berbasis piksel di bawah (GATE_IDENTITY_MAX_DIST_PX,
+    # SEQ_MIN_PAIR_AREA_PX2, SEQ_IGNORE_AREA_PX2, dkk.) dikalibrasi & didokumentasikan
+    # untuk resolusi kamera INI (1920x1080, Logitech MX Brio) — nilainya tetap
+    # merepresentasikan hasil kalibrasi lapangan yang sebenarnya PADA resolusi ini.
+    #
+    # Kalau kamera dijalankan pada resolusi LAIN (mis. 640x360), __init__() memanggil
+    # _apply_resolution_scaling() yang menskalakan ulang SEMUA konstanta ini secara
+    # OTOMATIS berdasarkan rasio terhadap resolusi referensi ini — TIDAK perlu edit
+    # kode manual setiap kali resolusi kamera diganti. Ini menggantikan proses rescale
+    # manual per-konstanta yang sebelumnya dilakukan langsung di kode (rawan lupa/
+    # keliru — pernah dua kali menyebabkan bug nyata dalam pengembangan proyek ini).
+    REFERENCE_FRAME_WIDTH = 1920
+    REFERENCE_FRAME_HEIGHT = 1080
+
     # Radius acceptance untuk GOTO_GPS: dianggap tiba jika < X meter dari target
     ARRIVAL_RADIUS_M = 2.0
 
@@ -315,11 +330,20 @@ class MissionEngine:
     # sampai di depan gerbang buoy.
     GYRO_FORWARD_BALL_CONFIRM_SEC = 0.3
 
-    def __init__(self, asv, tracker, tracking_controller, speed_scheduler: Optional[SpeedScheduler] = None):
+    def __init__(self, asv, tracker, tracking_controller, speed_scheduler: Optional[SpeedScheduler] = None,
+                 camera_width: int = REFERENCE_FRAME_WIDTH, camera_height: int = REFERENCE_FRAME_HEIGHT):
         self.asv = asv
         self.tracker = tracker
         self.tracking_controller = tracking_controller
         self.speed_scheduler = speed_scheduler or SpeedScheduler(max_base_throttle=0.4)
+
+        # Skalakan semua threshold berbasis piksel (GATE_IDENTITY_MAX_DIST_PX,
+        # SEQ_MIN_PAIR_AREA_PX2, dkk.) dari resolusi referensi 1920x1080 ke resolusi
+        # kamera AKTUAL — lihat _apply_resolution_scaling() untuk kenapa ini penting.
+        # HARUS dipanggil SEBELUM state lain di bawah diinisialisasi karena beberapa
+        # nilai (tidak ada saat ini, tapi jaga urutan untuk masa depan) bisa bergantung
+        # padanya.
+        self._apply_resolution_scaling(camera_width, camera_height)
 
         self._steps: List[Dict[str, Any]] = []
         self._current_step_idx: int = 0
@@ -1951,6 +1975,84 @@ class MissionEngine:
         """
         diff = (target_deg - current_deg + 540.0) % 360.0 - 180.0
         return diff
+
+    # ------------------------------------------------------------------ #
+    #  Resolution Scaling                                                 #
+    # ------------------------------------------------------------------ #
+
+    def set_camera_resolution(self, camera_width: int, camera_height: int):
+        """
+        API publik untuk mengubah resolusi kamera SETELAH engine sudah dibuat (mis.
+        saat konfigurasi resolusi difetch dari DB async setelah __init__ dipanggil).
+        Aman dipanggil berkali-kali — selalu menskalakan ULANG dari nilai REFERENSI
+        class (1920x1080), bukan dari hasil skala sebelumnya, jadi tidak ada resiko
+        "double-scaling" kalau dipanggil lebih dari sekali.
+
+        CATATAN: ini HANYA mengubah threshold piksel di MissionEngine. Resolusi
+        capture kamera fisik (cv2.VideoCapture) & TrackingController.frame_width
+        HARUS diset terpisah saat konstruksi (lihat main.py) — mengubah resolusi
+        capture kamera yang SEDANG BERJALAN butuh re-inisialisasi hardware yang
+        jauh lebih berisiko, jadi SENGAJA tidak dicoba di sini.
+        """
+        self._apply_resolution_scaling(camera_width, camera_height)
+        print(f"[MissionEngine] 📐 Resolusi kamera diperbarui → threshold piksel "
+              f"diskalakan ulang untuk {self.camera_width}x{self.camera_height}.")
+
+    def _apply_resolution_scaling(self, camera_width: int, camera_height: int):
+        """
+        Skalakan semua threshold berbasis piksel dari resolusi REFERENSI (1920x1080,
+        tempat nilainya dikalibrasi & didokumentasikan — lihat REFERENCE_FRAME_WIDTH/
+        HEIGHT) ke resolusi kamera AKTUAL yang sedang dipakai. Dipanggil sekali di
+        __init__() dan bisa dipanggil ulang via set_camera_resolution().
+
+        Kenapa ini penting: sebelumnya, mengganti resolusi kamera berarti mengedit
+        MANUAL setiap konstanta piksel satu-per-satu di seluruh file ini (dan file
+        lain: main.py, vision/tracker.py, Go entity, frontend) — proses yang TERBUKTI
+        rawan bug (dua kali dalam pengembangan proyek ini ada nilai yang lupa
+        di-rescale atau salah rescale). Dengan skala otomatis di sini, TIDAK ADA lagi
+        konstanta yang perlu diedit manual saat resolusi berubah — cukup berikan
+        camera_width/camera_height yang benar (lihat main.py), sisanya otomatis.
+
+        Konvensi skala (SAMA seperti yang sudah dipakai di seluruh komentar rescale
+        640→1920 di file ini sebelumnya):
+          - Jarak piksel LINEAR (mis. jarak identitas bola, lebar pasangan maksimum):
+            diskalakan dengan rasio LEBAR saja (camera_width / REFERENCE_FRAME_WIDTH).
+          - AREA piksel² (mis. luas minimum pasangan untuk LOCK): diskalakan dengan
+            rasio LEBAR × TINGGI, BUKAN cuma rasio lebar — luas adalah besaran 2D.
+
+        Nilai selalu dihitung dari konstanta CLASS (MissionEngine.<NAMA>), BUKAN dari
+        self.<NAMA> — mencegah "double-scaling" kalau method ini dipanggil lebih dari
+        sekali (lihat set_camera_resolution()). Hasil disimpan sebagai ATRIBUT
+        INSTANCE dengan nama PERSIS SAMA seperti konstanta class-nya, sehingga
+        otomatis menimpa (shadow) nilai class di setiap tempat lain yang mengakses
+        self.<NAMA> — TIDAK ADA satu pun tempat lain di file ini yang perlu diubah.
+
+        Kalau camera_width/height == resolusi referensi (default __init__), scale
+        factor = 1.0 dan hasilnya IDENTIK dengan nilai class asli — TIDAK ADA
+        perubahan perilaku untuk setup yang sudah ada (1920x1080).
+        """
+        self.camera_width = int(camera_width)
+        self.camera_height = int(camera_height)
+
+        px_scale = self.camera_width / float(MissionEngine.REFERENCE_FRAME_WIDTH)
+        area_scale = px_scale * (self.camera_height / float(MissionEngine.REFERENCE_FRAME_HEIGHT))
+
+        # Jarak piksel LINEAR — skala LEBAR
+        self.GATE_IDENTITY_MAX_DIST_PX = round(MissionEngine.GATE_IDENTITY_MAX_DIST_PX * px_scale)
+        self.SEQ_SINGLE_BALL_CLEARANCE_PX = round(MissionEngine.SEQ_SINGLE_BALL_CLEARANCE_PX * px_scale)
+        self.SEQ_MAX_PAIR_WIDTH_PX = round(MissionEngine.SEQ_MAX_PAIR_WIDTH_PX * px_scale)
+        self.SEQ_IDENTITY_MAX_DIST_PX = round(MissionEngine.SEQ_IDENTITY_MAX_DIST_PX * px_scale)
+        self.SEQ_CLEARED_EXCLUSION_RADIUS_PX = round(MissionEngine.SEQ_CLEARED_EXCLUSION_RADIUS_PX * px_scale)
+
+        # AREA piksel² — skala LEBAR × TINGGI
+        self.SEQ_MIN_PAIR_AREA_PX2 = round(MissionEngine.SEQ_MIN_PAIR_AREA_PX2 * area_scale)
+        self.SEQ_IGNORE_AREA_PX2 = round(MissionEngine.SEQ_IGNORE_AREA_PX2 * area_scale)
+
+        if self.camera_width != MissionEngine.REFERENCE_FRAME_WIDTH or self.camera_height != MissionEngine.REFERENCE_FRAME_HEIGHT:
+            print(f"[MissionEngine] 📐 Threshold piksel diskalakan dari referensi "
+                  f"{MissionEngine.REFERENCE_FRAME_WIDTH}x{MissionEngine.REFERENCE_FRAME_HEIGHT} "
+                  f"ke {self.camera_width}x{self.camera_height} "
+                  f"(px_scale={px_scale:.3f}, area_scale={area_scale:.3f})")
 
     # ------------------------------------------------------------------ #
     #  Internal helpers                                                   #
