@@ -259,6 +259,18 @@ export const STEP_TYPES = [
         // rasio ini sejak lock pertama, dihitung sebagai 1 pasangan cleared
         // otomatis — bukti kapal sudah mendekat/lewat, bukan cuma diam.
       },
+      {
+        key: "transitioning_lean_timeout_sec",
+        label: "Max Lean Duration Before Auto-Clear (s)",
+        type: "number",
+        default: 20,
+        // Berapa lama kapal boleh menahan manuver condong PAKSA (kiri/kanan
+        // konstan, ke arah bola yang hilang) sebelum jaring pengaman terakhir
+        // memaksa pasangan dianggap cleared — untuk kasus bola tersisa TERUS
+        // terdeteksi tanpa henti (mis. false-positive statis). TIDAK memotong
+        // manuver yang masih valid: kapal tetap menahan arah lean sampai bola
+        // tersisa BENAR hilang atau durasi ini terlampaui, mana pun lebih dulu.
+      },
     ],
   },
   // ── Buoy Chase (Simple Tracking) ────────────────────────────────────────
@@ -284,6 +296,17 @@ export const STEP_TYPES = [
         // "terlalu jauh" dan diabaikan total — tidak dikejar maupun dikunci.
         // Naikkan kalau kapal masih tertarik ke bola jauh, turunkan kalau
         // bola dekat yang sah malah ikut terbuang.
+      },
+      {
+        key: "transitioning_lean_timeout_sec",
+        label: "Max Lean Duration Before Auto-Clear (s)",
+        type: "number",
+        default: 20,
+        // Kalau salah satu bola hilang, kapal condong PAKSA ke arah bola yang
+        // hilang (kiri/kanan konstan) sampai bola tersisa JUGA hilang. Field
+        // ini batas waktu MAKSIMUM menahan condong itu sebelum dipaksa
+        // dianggap lewat — jaring pengaman kalau bola tersisa terus terdeteksi
+        // tanpa henti (false-positive statis).
       },
     ],
   },

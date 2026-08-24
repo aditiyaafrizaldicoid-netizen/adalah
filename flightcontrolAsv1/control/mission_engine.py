@@ -1449,7 +1449,7 @@ class MissionEngine:
         Format step:
           { "type": "SEQUENTIAL_BUOY", "throttle": 0.4, "ignore_area_px2": 4000,
             "no_detection_finish_sec": 15.0, "single_ball_clearance_px": 384,
-            "single_ball_max_steer": 0.4 }
+            "single_ball_max_steer": 0.4, "transitioning_lean_timeout_sec": 20.0 }
 
         `throttle` (0.0-1.0) opsional — fallback ke speed_scheduler.max_base_throttle
         jika tidak diisi (lihat _resolve_step_throttle()).
@@ -1474,7 +1474,8 @@ class MissionEngine:
 
         `single_ball_clearance_px` (piksel) opsional — jarak lateral dari tengah frame
         yang dianggap "aman" dari bola tunggal. Fallback ke SEQ_SINGLE_BALL_CLEARANCE_PX
-        (205) jika tidak diisi.
+        (instance-scaled, 384 @ resolusi referensi 1920x1080 — lihat
+        _apply_resolution_scaling()) jika tidak diisi.
 
         `single_ball_max_steer` (0.0-1.0) opsional — steer maksimum koreksi jaga-jarak
         bola tunggal, dicapai saat bola tepat di tengah frame. Fallback ke
@@ -1485,6 +1486,15 @@ class MissionEngine:
         terlihat dan area pasangan sudah membesar sebesar rasio ini sejak lock pertama,
         dihitung sebagai 1 pasangan CLEARED alih-alih reset tanpa hitungan. Fallback ke
         GATE_LOCKED_TIMEOUT_AREA_GROWTH_MIN_RATIO (1.5) jika tidak diisi.
+
+        `transitioning_lean_timeout_sec` (detik) opsional — berapa lama kapal boleh
+        mempertahankan manuver condong PAKSA (TRANSITIONING) sebelum jaring pengaman
+        terakhir memaksa CLEARED, untuk kasus bola tersisa TERUS terdeteksi tanpa henti
+        (mis. false-positive statis) sehingga gate tidak pernah CLEARED lewat jalur
+        normal (bola tersisa confirmed hilang). TIDAK memotong manuver condong yang
+        masih valid — kapal tetap menahan arah lean sampai bola tersisa BENAR hilang
+        ATAU durasi ini terlampaui, mana pun lebih dulu. Fallback ke
+        SEQ_TRANSITIONING_SAFETY_TIMEOUT_SEC (20.0) jika tidak diisi.
         """
         throttle    = self._resolve_step_throttle(step)
         cleared     = self._seq_pairs_cleared
@@ -1821,8 +1831,12 @@ class MissionEngine:
             # secara normal. Durasinya sengaja jauh lebih besar dari waktu lintas gate
             # normal — TIDAK memaksa CLEARED saat kapal masih benar-benar melintasi
             # pasangan aktif (sesuai aturan: unlock hanya jika kedua bola confirmed hilang).
+            # Configurable per-step (transitioning_lean_timeout_sec) supaya operator bisa
+            # menentukan sendiri berapa lama kapal boleh menahan manuver condong paksa.
+            transitioning_timeout = self._safe_float(
+                step.get("transitioning_lean_timeout_sec"), self.SEQ_TRANSITIONING_SAFETY_TIMEOUT_SEC)
             transitioning_duration = now - self._seq_gate_state_entered_at
-            if transitioning_duration > self.SEQ_TRANSITIONING_SAFETY_TIMEOUT_SEC:
+            if transitioning_duration > transitioning_timeout:
                 print(f"[SEQ_GATE] ⚠️ TRANSITIONING SAFETY TIMEOUT ({transitioning_duration:.1f}s) "
                       f"→ CLEARED (pair {pair_label}, paksa — bola tersisa tak kunjung hilang)")
                 self._seq_gate_lock_state = self.GATE_CLEARED
