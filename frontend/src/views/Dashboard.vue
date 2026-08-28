@@ -6,6 +6,7 @@ import { useScoringStore } from "@/stores/scoringStore";
 import { useWebsocketStore } from "@/stores/websocketStore";
 import {
   Navigation,
+  Compass,
   Battery,
   MapPin,
   Zap,
@@ -101,7 +102,7 @@ const wsStore = useWebsocketStore();
     <!-- Main Grid -->
     <div class="grid grid-cols-12 gap-6">
       <!-- Telemetry Highlights -->
-      <div class="col-span-12 lg:col-span-8 grid grid-cols-4 gap-4">
+      <div class="col-span-12 lg:col-span-8 grid grid-cols-2 lg:grid-cols-5 gap-4">
         <MetricCard
           label="SPEED OVER GROUND"
           :value="vessel.sog.toFixed(2)"
@@ -116,6 +117,14 @@ const wsStore = useWebsocketStore();
           unit="DEG"
           :icon="Navigation"
           color="warning"
+        />
+        <MetricCard
+          label="COURSE OVER GROUND"
+          :value="vessel.cogValid ? vessel.cog.toFixed(2) : '—'"
+          unit="DEG"
+          :icon="Compass"
+          color="success"
+          :note="vessel.cogValid ? '' : 'kapal terlalu pelan'"
         />
         <MetricCard
           label="BATTERY"

@@ -789,6 +789,11 @@ class ASVWebSocketClient:
                         "lat": t.get("lat"),
                         "lng": t.get("lon"),
                         "heading": t.get("heading"),
+                        # COG = arah gerak sesungguhnya (dari vektor kecepatan GPS),
+                        # beda dari heading yang menunjukkan arah haluan menghadap.
+                        # cog_valid=False berarti kapal terlalu pelan → angka basi.
+                        "cog": t.get("cog"),
+                        "cog_valid": t.get("cog_valid", False),
                         "sog": t.get("ground_speed"),
                         "pitch": t.get("pitch"),
                         "roll": t.get("roll"),

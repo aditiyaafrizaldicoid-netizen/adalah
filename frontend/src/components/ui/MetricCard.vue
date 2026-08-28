@@ -8,7 +8,10 @@ defineProps({
     type: String,
     default: 'primary'
   },
-  trend: String
+  trend: String,
+  // Catatan kaki opsional, mis. alasan sebuah nilai sedang tidak tersedia.
+  // Dipakai COG saat kapal terlalu pelan untuk punya arah gerak yang berarti.
+  note: String
 });
 </script>
 
@@ -36,6 +39,9 @@ defineProps({
     <div v-if="trend" class="mt-3 flex items-center gap-1">
       <span class="text-[10px] font-bold text-success">{{ trend }} ↑</span>
       <span class="text-[10px] text-(--text-muted) font-bold uppercase">vs last session</span>
+    </div>
+    <div v-else-if="note" class="mt-3">
+      <span class="text-[10px] text-(--text-muted) font-bold uppercase">{{ note }}</span>
     </div>
 
     <!-- Decorative element -->

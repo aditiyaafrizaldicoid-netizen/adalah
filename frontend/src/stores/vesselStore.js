@@ -7,7 +7,14 @@ export const useVesselStore = defineStore("vessel", () => {
   const lng = ref(112.5973649);
   const heading = ref(0);
   const sog = ref(0); // Speed Over Ground (knots)
-  const cog = ref(0); // Course Over Ground
+  // Course Over Ground: arah GERAK kapal sesungguhnya (dari vektor kecepatan GPS),
+  // beda dari `heading` yang menunjukkan ke mana haluan menghadap. Selisih keduanya
+  // memperlihatkan hanyutan arus/angin. Satuan 0-360° (konvensi maritim), TIDAK
+  // dinormalisasi ke -180..180 seperti heading di bawah.
+  const cog = ref(0);
+  // false = kapal terlalu pelan untuk punya arah gerak yang berarti; `cog` masih
+  // berisi nilai valid terakhir, jadi jangan ditampilkan sebagai angka terkini.
+  const cogValid = ref(false);
 
   const pitch = ref(0);
   const roll = ref(0);
@@ -80,7 +87,8 @@ export const useVesselStore = defineStore("vessel", () => {
       }
     }
     if (data.sog !== undefined) sog.value = data.sog;
-    if (data.cog !== undefined) cog.value = data.cog;
+    if (data.cog !== undefined && data.cog !== null) cog.value = data.cog;
+    if (data.cog_valid !== undefined) cogValid.value = data.cog_valid;
     if (data.pitch !== undefined) pitch.value = data.pitch;
     if (data.roll !== undefined) roll.value = data.roll;
     if (data.yaw !== undefined) yaw.value = data.yaw;
@@ -150,7 +158,7 @@ export const useVesselStore = defineStore("vessel", () => {
   }
 
   return {
-    lat, lng, heading, sog, cog,
+    lat, lng, heading, sog, cog, cogValid,
     pitch, roll, yaw,
     batteryPct, batteryVolt,
     gpsFix, satellites, signalStrength,

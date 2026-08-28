@@ -1,6 +1,16 @@
+import math
 import threading
 import time
 from dataclasses import dataclass, field, asdict
+
+# Kecepatan minimum (m/s) agar COG (Course Over Ground) dianggap berarti.
+# Di bawah ini, vx/vy dari GPS/EKF didominasi derau: arah hasil atan2-nya melompat
+# acak ke segala penjuru walau kapal diam di tempat. Karena itu COG TIDAK dihitung
+# ulang saat kapal (nyaris) berhenti — nilai valid terakhir dipertahankan dan
+# ditandai tidak-valid, supaya operator tahu angkanya sudah basi alih-alih melihat
+# jarum berputar-putar sendiri.
+# 0.3 m/s ≈ 0.6 knot — cukup di atas derau, masih jauh di bawah kecepatan jelajah.
+COG_MIN_SPEED_MS = 0.3
 from typing import List, Dict, Any
 
 @dataclass
@@ -16,7 +26,9 @@ class ASVStateData:
     lat: float = 0.0          # Derajat (contoh: -6.123456)
     lon: float = 0.0          # Derajat (contoh: 106.123456)
     alt: float = 0.0          # Meter di atas permukaan laut
-    heading: float = 0.0      # Derajat kompas (0 - 360)
+    heading: float = 0.0      # Derajat kompas (0 - 360) — arah HALUAN menghadap
+    cog: float = 0.0          # Course Over Ground (derajat 0-360) — arah GERAK sesungguhnya
+    cog_valid: bool = False   # False = kapal terlalu pelan, `cog` adalah nilai lama
     ground_speed: float = 0.0 # m/s
     vx: float = 0.0           # Kecepatan maju m/s (relatif bumi/utara)
     vy: float = 0.0           # Kecepatan lateral m/s (relatif bumi/timur)
@@ -71,6 +83,17 @@ class ASVState:
             self._data.vx = vx
             self._data.vy = vy
             self._data.vz = vz
+
+            # COG diturunkan dari vektor kecepatan bumi (frame NED: vx = ke UTARA,
+            # vy = ke TIMUR), BUKAN dari kompas. Bedanya dengan heading itulah yang
+            # menunjukkan kapal sedang dihanyutkan arus/angin: haluan menghadap ke
+            # satu arah, jalannya ke arah lain.
+            if ground_speed >= COG_MIN_SPEED_MS:
+                self._data.cog = math.degrees(math.atan2(vy, vx)) % 360.0
+                self._data.cog_valid = True
+            else:
+                # Terlalu pelan untuk dipercaya — pertahankan nilai terakhir, tandai basi.
+                self._data.cog_valid = False
 
     def update_attitude(self, roll: float, pitch: float, yaw: float):
         with self._lock:
