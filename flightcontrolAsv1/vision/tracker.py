@@ -1,6 +1,8 @@
 import cv2
 from ultralytics import YOLO
 
+from vision.gate_convention import virtual_gate_center_x
+
 
 class BallTracker:
     """
@@ -15,6 +17,11 @@ class BallTracker:
     COLOR_MIDPOINT    = (255, 0, 255)    # Titik tengah gate (magenta)
     COLOR_CENTER_LINE = (80, 80, 80)     # Garis tengah frame (abu-abu)
     COLOR_ERROR_LINE  = (255, 128, 0)    # Garis error (oranye)
+
+    # Lebar SETENGAH gerbang yang diasumsikan saat hanya SATU bola yang terlihat,
+    # sebagai rasio terhadap lebar frame. Dipakai untuk memproyeksikan titik tengah
+    # gerbang dari satu bola (lihat gate_convention.virtual_gate_center_x).
+    SINGLE_BALL_HALF_GATE_RATIO = 0.2
 
     # Warna OSD untuk setiap gate state
     _GATE_STATE_COLORS = {
@@ -143,7 +150,9 @@ class BallTracker:
         sorted_green = sorted(green_balls, key=lambda b: (b[4] - b[2]) * (b[5] - b[3]), reverse=True)
 
         if len(sorted_red) > 0 and len(sorted_green) > 0:
-            # Pasangan bola merah (kiri) & hijau (kanan) TERDEKAT di depan kapal
+            # Pasangan bola merah & hijau TERDEKAT di depan kapal. Midpoint dua
+            # bola tidak bergantung pada bola mana yang di kiri/kanan, jadi blok ini
+            # aman terhadap konvensi sisi mana pun (lihat vision/gate_convention.py).
             closest_red = sorted_red[0]
             closest_green = sorted_green[0]
             red_pt = (closest_red[0], closest_red[1])
@@ -156,17 +165,19 @@ class BallTracker:
             cv2.line(frame, red_pt, green_pt, self.COLOR_GATE_LINE, 2, cv2.LINE_AA)
 
         elif len(sorted_green) > 0 and len(sorted_red) == 0:
-            # Hanya bola hijau terdeteksi → offset target ke kiri (-120px)
+            # Hanya bola HIJAU terdeteksi. Arah offset ditentukan MURNI oleh warna
+            # bola (hijau = penanda tepi KIRI → lintasan ada di KANAN-nya), BUKAN
+            # oleh posisi bola relatif terhadap garis tengah frame.
             g = sorted_green[0]
-            offset_px = int(w * 0.2)
-            gate_center_x = max(0, g[0] - offset_px)
+            gate_center_x = int(round(virtual_gate_center_x(
+                g[0], "green", w * self.SINGLE_BALL_HALF_GATE_RATIO)))
             gate_center_y = g[1]
 
         elif len(sorted_red) > 0 and len(sorted_green) == 0:
-            # Hanya bola merah terdeteksi → offset target ke kanan (+120px)
+            # Hanya bola MERAH terdeteksi (penanda tepi KANAN → lintasan di KIRI-nya).
             r = sorted_red[0]
-            offset_px = int(w * 0.2)
-            gate_center_x = min(w, r[0] + offset_px)
+            gate_center_x = int(round(virtual_gate_center_x(
+                r[0], "red", w * self.SINGLE_BALL_HALF_GATE_RATIO)))
             gate_center_y = r[1]
 
         elif len(all_centers_x) >= 2:
@@ -174,18 +185,27 @@ class BallTracker:
             gate_center_y = sum(all_centers_y) // len(all_centers_y)
 
         if gate_center_x is not None:
-            # Gambar midpoint gate (magenta)
-            cv2.circle(frame, (gate_center_x, gate_center_y), 10, self.COLOR_MIDPOINT, -1)
-            cv2.circle(frame, (gate_center_x, gate_center_y), 14, self.COLOR_MIDPOINT, 2)
-            cv2.putText(frame, "GATE MID", (gate_center_x - 40, max(gate_center_y - 18, 0)),
+            # Titik tengah gerbang BOLEH berada di luar frame saat hanya satu bola
+            # terlihat (bola pasangannya memang sudah keluar frame) — nilai yang
+            # DIKEMBALIKAN sengaja tidak di-clamp supaya error piksel tetap kontinu
+            # dan proporsional. Yang di-clamp hanya koordinat GAMBAR, supaya penanda
+            # OSD-nya tetap kelihatan menempel di tepi frame.
+            draw_x = max(0, min(w - 1, gate_center_x))
+            draw_y = max(0, min(h - 1, gate_center_y))
+            off_screen = draw_x != gate_center_x
+
+            cv2.circle(frame, (draw_x, draw_y), 10, self.COLOR_MIDPOINT, -1)
+            cv2.circle(frame, (draw_x, draw_y), 14, self.COLOR_MIDPOINT, 2)
+            mid_label = "GATE MID (luar frame)" if off_screen else "GATE MID"
+            cv2.putText(frame, mid_label, (max(draw_x - 40, 0), max(draw_y - 18, 0)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, self.COLOR_MIDPOINT, 2)
 
             # Gambar garis error dari tengah frame ke midpoint gate
             error_px = gate_center_x - frame_center_x
-            cv2.line(frame, (frame_center_x, gate_center_y), (gate_center_x, gate_center_y),
+            cv2.line(frame, (frame_center_x, draw_y), (draw_x, draw_y),
                      self.COLOR_ERROR_LINE, 2, cv2.LINE_AA)
             cv2.putText(frame, f"err:{error_px:+d}px",
-                        (min(frame_center_x, gate_center_x), gate_center_y - 8),
+                        (min(frame_center_x, draw_x), max(draw_y - 8, 0)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, self.COLOR_ERROR_LINE, 1)
 
         # ---- OSD: State label (mission step) ----

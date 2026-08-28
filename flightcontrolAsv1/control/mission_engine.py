@@ -35,8 +35,11 @@ SEARCHING → LOCKED → TRANSITIONING → CLEARED → buoy_pass_count += 1 → 
   CLEARED      : Bola tersisa juga hilang. Gate dinyatakan terlewati. Reset ke SEARCHING.
 
 Aturan lean saat TRANSITIONING:
-  - Bola kiri (merah) hilang duluan → kapal DIPAKSA condong ke KIRI (steer negatif konstan)
-  - Bola kanan (hijau) hilang duluan → kapal DIPAKSA condong ke KANAN (steer positif konstan)
+  - Bola yang hilang duluan menentukan arah condong: kapal DIPAKSA condong KE ARAH
+    SISI bola tersebut (steer konstan). Sisi setiap warna TIDAK boleh ditulis sebagai
+    literal di file ini — diambil dari vision/gate_convention.py. Pada arena saat ini
+    (merah = KANAN, hijau = KIRI): merah hilang duluan → condong KANAN, hijau hilang
+    duluan → condong KIRI.
   - Steer KONSTAN (TRANSITION_LEAN_MAGNITUDE), BUKAN proporsional terhadap posisi bola
     tersisa di layar — kapal harus menahan arah itu sampai bola tersisa JUGA hilang,
     apa pun posisi bola tersisa saat itu. Steer proporsional/adaptif di sini pernah
@@ -53,6 +56,12 @@ from typing import Optional, List, Dict, Any, Tuple
 
 from control.speed_scheduler import SpeedScheduler
 from vision.ball_pairing import sort_ball_pairs
+from vision.gate_convention import (
+    LEFT,
+    channel_sign,
+    side_of,
+    steer_sign_toward,
+)
 
 
 class MissionEngine:
@@ -198,28 +207,34 @@ class MissionEngine:
     # turunkan kalau buoy dekat yang sah malah ikut terbuang.
     SEQ_IGNORE_AREA_PX2 = 4000
 
-    # ── Single-Ball Avoidance (Sequential Buoy) ─────────────────────────────
-    # Saat SEARCHING dan HANYA SATU warna bola yang terdeteksi (pasangan gagal
-    # terbentuk sama sekali — bukan kasus "pasangan terlalu jauh untuk dikunci" di
-    # atas), kapal TIDAK boleh mengejar/menyejajarkan diri ke bola itu (itu akan
-    # menabraknya begitu bola makin dekat ke tengah frame). Sebaliknya, kapal harus
-    # MENJAGA JARAK bola tersebut terhadap titik tengah kamera — dikoreksi MENJAUH
-    # dari sisi bola itu, sebanding dengan seberapa dekat bola ke tengah frame saat
-    # ini (bola dekat tengah = haluan kapal lurus ke arahnya = bahaya, butuh koreksi
-    # kuat; bola sudah jauh dari tengah = clearance aman, koreksi kecil/tidak ada).
-    # Arah menjauh mengikuti konvensi sisi gerbang yang sudah ada di file ini: bola
-    # HIJAU (kanan) terlihat sendirian → kapal condong ke KIRI; bola MERAH (kiri)
-    # terlihat sendirian → kapal condong ke KANAN.
+    # ── Navigasi Satu-Bola (Sequential Buoy) ────────────────────────────────
+    # Saat hanya SATU bola yang bisa dijadikan acuan — entah karena cuma satu warna
+    # yang terdeteksi, atau pasangan gagal terbentuk sama sekali — arah koreksi
+    # ditentukan MURNI oleh IDENTITAS WARNA bola lewat vision/gate_convention.py:
+    # bola menandai salah satu TEPI lintasan, jadi jalur yang aman selalu berada di
+    # sisi seberang bola itu, berapa pun posisi bola di layar.
     #
-    # Sebelum ada logic ini, kapal memakai fallback gate_x mentah dari tracker.py
-    # (bola ± offset piksel TETAP 20% lebar frame) yang diumpankan ke PID steering
-    # yang sama dengan target pasangan — efeknya kapal tetap "mengejar" posisi bola
-    # itu setiap kali ia bergerak, bukan menjaga jarak darinya.
+    # BUG YANG DIPERBAIKI (dilaporkan dari lapangan, dua gejala kembar):
+    #   Versi lama memakai JARAK MUTLAK bola ke tengah frame — abs(ball_x - center_x)
+    #   — sebagai ukuran bahaya, tanpa melihat bola ada di SISI MANA. Akibatnya:
+    #     1. Besar koreksi memuncak tepat saat bola MENYEBERANGI garis tengah frame,
+    #        lalu mengecil lagi setelah lewat — nilai titik tengah "melonjak" persis
+    #        di perbatasan, padahal secara fisik tidak ada yang berubah mendadak.
+    #     2. Arah koreksi TIDAK PERNAH ikut membalik saat bola menyeberang, sehingga
+    #        kapal justru dikemudikan ke sisi yang salah (bola hijau yang menyeberang
+    #        ke paruh KANAN frame malah melempar target ke KIRI secara ekstrem, dan
+    #        sebaliknya untuk bola merah).
+    #   Perbaikannya: pakai posisi BERTANDA relatif terhadap garis aman bola itu
+    #   (lihat _compute_single_ball_avoid_steer di file ini, dan
+    #   gate_convention.virtual_gate_center_x untuk fallback visual gate_x di
+    #   vision/tracker.py) — kontinu dan monoton, tanpa percabangan
+    #   paruh-kiri/paruh-kanan sama sekali.
 
-    # Jarak lateral (piksel) dari tengah frame yang dianggap "aman" dari bola
-    # tunggal. Di bawah jarak ini, koreksi menjauh mulai diterapkan (maksimum saat
-    # bola tepat di tengah frame). 384px @ 1920px (~20% lebar frame) — BELUM
-    # diverifikasi di lapangan sebagai jarak clearance yang optimal.
+    # Jarak lateral (piksel) yang harus dijaga antara bola tunggal dan haluan kapal.
+    # Dipakai untuk DUA hal yang saling konsisten: (a) garis aman bola tunggal, dan
+    # (b) perkiraan SETENGAH lebar gerbang saat memproyeksikan titik tengah semu dari
+    # satu bola. 384px @ 1920px (~20% lebar frame) — BELUM diverifikasi di lapangan
+    # sebagai jarak clearance yang optimal.
     SEQ_SINGLE_BALL_CLEARANCE_PX = 384
 
     # Steer maksimum (0..1) untuk koreksi menjaga-jarak dari bola tunggal, dicapai
@@ -383,8 +398,11 @@ class MissionEngine:
         # Posisi bola yang dikunci saat state LOCKED: (cx, cy)
         self._locked_red_pos: Optional[Tuple[int, int]] = None
         self._locked_green_pos: Optional[Tuple[int, int]] = None
-        # Sisi bola mana yang hilang duluan saat TRANSITIONING ("left"=merah, "right"=hijau)
-        self._missing_side: Optional[str] = None
+        # WARNA bola yang hilang duluan saat TRANSITIONING ("red"/"green").
+        # Sengaja menyimpan WARNA, bukan sisi kiri/kanan: sisi diturunkan dari warna
+        # lewat vision/gate_convention.py, sehingga membalik konvensi arena tidak
+        # membuat state machine ini salah menunggu bola yang keliru.
+        self._missing_color: Optional[str] = None
         # Steer fallback yang dipertahankan selama TRANSITIONING jika bola tersisa tidak terdeteksi
         self._transition_steer: float = 0.0
         # Timestamp saat masuk ke state LOCKED / TRANSITIONING (untuk timeout guard)
@@ -415,7 +433,8 @@ class MissionEngine:
         # di atas yang di-update tiap frame untuk validasi identitas). Dipakai
         # GATE_LOCKED_TIMEOUT_AREA_GROWTH_MIN_RATIO yang sama dengan TRACKING_BUOY.
         self._seq_locked_entry_area: Optional[float] = None
-        self._seq_missing_side: Optional[str] = None
+        # WARNA bola yang hilang duluan (lihat _missing_color di atas).
+        self._seq_missing_color: Optional[str] = None
         self._seq_transition_steer: float = 0.0
         self._seq_gate_state_entered_at: float = 0.0
         self._seq_gate_pause_start: float = 0.0
@@ -953,29 +972,35 @@ class MissionEngine:
                 return steer, throttle, label
 
             elif not red_visible_locked and green_visible_locked:
-                # ★ Bola MERAH (kiri) hilang duluan → condong ke KIRI
-                self._missing_side     = "left"
+                # ★ Bola MERAH hilang duluan → condong ke SISI MERAH (lihat konvensi)
+                self._missing_color    = "red"
                 self._gate_lock_state  = self.GATE_TRANSITIONING
                 self._gate_state_entered_at = time.time()
                 # Update posisi terakhir bola hijau yang terlihat
                 self._locked_green_pos = (nearest_green[0], nearest_green[1])
-                # Steer PAKSA konstan ke KIRI — pertahankan sampai bola hijau juga hilang.
-                self._transition_steer = -self.TRANSITION_LEAN_MAGNITUDE
-                print(f"[GATE] LOCKED → TRANSITIONING (missing=LEFT/red, lean={self._transition_steer:+.2f})")
-                label = f"GATE:TRANSITIONING(←) | TRACKING_BUOY ({pass_label} pass)"
+                # Steer PAKSA konstan — pertahankan sampai bola hijau juga hilang.
+                self._transition_steer = self._lean_steer_for_missing(
+                    "red", self.TRANSITION_LEAN_MAGNITUDE)
+                print(f"[GATE] LOCKED → TRANSITIONING (missing=red/{side_of('red').upper()}, "
+                      f"lean={self._transition_steer:+.2f})")
+                label = (f"GATE:TRANSITIONING({self._lean_arrow('red')}) "
+                         f"| TRACKING_BUOY ({pass_label} pass)")
                 return self._transition_steer, throttle, label
 
             elif red_visible_locked and not green_visible_locked:
-                # ★ Bola HIJAU (kanan) hilang duluan → condong ke KANAN
-                self._missing_side     = "right"
+                # ★ Bola HIJAU hilang duluan → condong ke SISI HIJAU (lihat konvensi)
+                self._missing_color    = "green"
                 self._gate_lock_state  = self.GATE_TRANSITIONING
                 self._gate_state_entered_at = time.time()
                 # Update posisi terakhir bola merah yang terlihat
                 self._locked_red_pos   = (nearest_red[0], nearest_red[1])
-                # Steer PAKSA konstan ke KANAN — pertahankan sampai bola merah juga hilang.
-                self._transition_steer = self.TRANSITION_LEAN_MAGNITUDE
-                print(f"[GATE] LOCKED → TRANSITIONING (missing=RIGHT/green, lean={self._transition_steer:+.2f})")
-                label = f"GATE:TRANSITIONING(→) | TRACKING_BUOY ({pass_label} pass)"
+                # Steer PAKSA konstan — pertahankan sampai bola merah juga hilang.
+                self._transition_steer = self._lean_steer_for_missing(
+                    "green", self.TRANSITION_LEAN_MAGNITUDE)
+                print(f"[GATE] LOCKED → TRANSITIONING (missing=green/{side_of('green').upper()}, "
+                      f"lean={self._transition_steer:+.2f})")
+                label = (f"GATE:TRANSITIONING({self._lean_arrow('green')}) "
+                         f"| TRACKING_BUOY ({pass_label} pass)")
                 return self._transition_steer, throttle, label
 
             else:
@@ -990,23 +1015,25 @@ class MissionEngine:
             # DILARANG KERAS memperhitungkan bola dari gerbang berikutnya.
             remaining_visible = False
             
-            if self._missing_side == "left":
+            if self._missing_color == "red":
                 # Bola merah sudah hilang, tinggal tunggu bola hijau juga hilang.
                 nearest_green = self._find_nearest_ball(detected_balls.get("green", []), self._locked_green_pos)
                 if nearest_green:
                     remaining_visible = True
                     self._locked_green_pos = (nearest_green[0], nearest_green[1])
-                    # Steer tetap PAKSA konstan ke KIRI selama bola hijau masih terlihat —
-                    # TIDAK mengikuti posisi bola hijau di layar (lihat TRANSITION_LEAN_MAGNITUDE).
-                    self._transition_steer = -self.TRANSITION_LEAN_MAGNITUDE
-            elif self._missing_side == "right":
+                    # Steer tetap PAKSA konstan selama bola hijau masih terlihat — TIDAK
+                    # mengikuti posisi bola hijau di layar (lihat TRANSITION_LEAN_MAGNITUDE).
+                    self._transition_steer = self._lean_steer_for_missing(
+                        "red", self.TRANSITION_LEAN_MAGNITUDE)
+            elif self._missing_color == "green":
                 # Bola hijau sudah hilang, tinggal tunggu bola merah juga hilang.
                 nearest_red = self._find_nearest_ball(detected_balls.get("red", []), self._locked_red_pos)
                 if nearest_red:
                     remaining_visible = True
                     self._locked_red_pos = (nearest_red[0], nearest_red[1])
-                    # Steer tetap PAKSA konstan ke KANAN selama bola merah masih terlihat.
-                    self._transition_steer = self.TRANSITION_LEAN_MAGNITUDE
+                    # Steer tetap PAKSA konstan selama bola merah masih terlihat.
+                    self._transition_steer = self._lean_steer_for_missing(
+                        "green", self.TRANSITION_LEAN_MAGNITUDE)
 
             # ── Timeout guard TRANSITIONING ───────────────────
             # Jika terlalu lama di TRANSITIONING (bola tersisa terus terlihat), paksa CLEARED.
@@ -1019,7 +1046,7 @@ class MissionEngine:
 
             if remaining_visible:
                 # Bola tersisa masih ada di frame → pertahankan manuver condong adaptif
-                lean_dir = "←" if self._missing_side == "left" else "→"
+                lean_dir = self._lean_arrow(self._missing_color)
                 label = f"GATE:TRANSITIONING({lean_dir}) steer={self._transition_steer:+.2f} | TRACKING_BUOY ({pass_label} pass)"
                 return self._transition_steer, throttle, label
             else:
@@ -1455,20 +1482,22 @@ class MissionEngine:
           henti (false-positive statis); nilainya sengaja besar agar TIDAK pernah memaksa
           CLEARED saat kapal masih benar-benar melintasi pasangan aktif.
 
-        Aturan transisi lean:
-          - Bola kiri (merah) hilang duluan → kapal condong ke KIRI  (steer negatif)
-          - Bola kanan (hijau) hilang duluan → kapal condong ke KANAN (steer positif)
-          - Kedua bola hilang                → pasangan CLEARED, lanjut ke pasangan berikutnya
+        Aturan transisi lean (arah diambil dari vision/gate_convention.py, BUKAN
+        literal kiri/kanan di sini — lihat _lean_steer_for_missing()):
+          - Satu bola hilang duluan → kapal condong KE ARAH SISI bola tersebut
+          - Kedua bola hilang       → pasangan CLEARED, lanjut ke pasangan berikutnya
 
         Aturan bola tunggal saat SEARCHING (TIDAK ADA pasangan valid terbentuk —
         entah cuma 1 warna terdeteksi, ATAU dua warna ada tapi gagal lolos safeguard
         rasio-area/lebar-maksimum di sort_ball_pairs, lihat _pick_single_ball_candidate):
-        kapal TIDAK mengejar/menyejajarkan diri ke bola terbesar yang ada, melainkan
-        MENJAGA JARAK-nya terhadap titik tengah kamera (lihat
-        _compute_single_ball_avoid_steer()) — koreksi MENJAUH dari sisi bola,
-        sebanding dengan seberapa dekat bola ke tengah frame:
-          - Bola hijau (kanan) jadi target hindar → kapal condong ke KIRI
-          - Bola merah (kiri)  jadi target hindar → kapal condong ke KANAN
+        kapal MENJAGA JARAK dari bola itu dengan arah yang ditentukan MURNI oleh
+        warna bola (lihat _compute_single_ball_avoid_steer()):
+          - Bola penanda tepi KIRI  merangsek ke haluan → kapal didorong ke KANAN
+          - Bola penanda tepi KANAN merangsek ke haluan → kapal didorong ke KIRI
+          - Bola masih aman di sisinya sendiri            → tidak ada koreksi (0.0)
+        Posisi bola relatif terhadap garis tengah frame TIDAK ikut menentukan arah,
+        sehingga bola yang menyeberangi garis tengah tidak membalik/melonjakkan
+        koreksi — ia justru tetap didorong penuh sampai kembali ke sisinya.
 
         Format step:
           { "type": "SEQUENTIAL_BUOY", "throttle": 0.4, "ignore_area_px2": 4000,
@@ -1689,10 +1718,11 @@ class MissionEngine:
                 # gate_x/blind di bawah).
                 single = self._pick_single_ball_candidate(searchable_balls, ignore_area_px2)
                 if single is not None:
-                    ball, side = single
+                    ball, color = single
                     self._seq_blind_search_since = None
-                    steer = self._compute_single_ball_avoid_steer(ball, side, step)
-                    label = (f"SEQ_GATE:SEARCHING (single {side}, avoid) steer={steer:+.2f} "
+                    steer = self._compute_single_ball_avoid_steer(ball, color, step)
+                    label = (f"SEQ_GATE:SEARCHING (single {color} @{ball[0]}px "
+                             f"sisi-{side_of(color)}) steer={steer:+.2f} "
                              f"| SEQUENTIAL_BUOY (pair {pair_label})")
                     return steer, throttle, label
                 elif gate_x is not None:
@@ -1807,33 +1837,37 @@ class MissionEngine:
                 return steer, throttle, label
 
             elif not red_visible_locked and green_visible_locked:
-                # ★ Bola MERAH (kiri) hilang duluan → condong ke KIRI
-                self._seq_missing_side      = "left"
+                # ★ Bola MERAH hilang duluan → condong ke SISI MERAH (lihat konvensi)
+                self._seq_missing_color     = "red"
                 self._seq_gate_lock_state   = self.GATE_TRANSITIONING
                 self._seq_gate_state_entered_at = time.time()
                 self._seq_missing_lost_since = None  # bola hijau tersisa baru saja, belum "hilang"
                 self._seq_locked_green_pos  = (nearest_green[0], nearest_green[1])
                 self._seq_locked_green_area = self._bbox_area(nearest_green)
-                # Steer PAKSA konstan ke KIRI — pertahankan sampai bola hijau juga hilang.
-                self._seq_transition_steer = -lean_magnitude
+                # Steer PAKSA konstan — pertahankan sampai bola hijau juga hilang.
+                self._seq_transition_steer = self._lean_steer_for_missing("red", lean_magnitude)
                 print(f"[SEQ_GATE] LOCKED → TRANSITIONING "
-                      f"(pair {pair_label}, missing=LEFT/red, lean={self._seq_transition_steer:+.2f})")
-                label = f"SEQ_GATE:TRANSITIONING(←) | SEQUENTIAL_BUOY (pair {pair_label})"
+                      f"(pair {pair_label}, missing=red/{side_of('red').upper()}, "
+                      f"lean={self._seq_transition_steer:+.2f})")
+                label = (f"SEQ_GATE:TRANSITIONING({self._lean_arrow('red')}) "
+                         f"| SEQUENTIAL_BUOY (pair {pair_label})")
                 return self._seq_transition_steer, throttle, label
 
             elif red_visible_locked and not green_visible_locked:
-                # ★ Bola HIJAU (kanan) hilang duluan → condong ke KANAN
-                self._seq_missing_side      = "right"
+                # ★ Bola HIJAU hilang duluan → condong ke SISI HIJAU (lihat konvensi)
+                self._seq_missing_color     = "green"
                 self._seq_gate_lock_state   = self.GATE_TRANSITIONING
                 self._seq_gate_state_entered_at = time.time()
                 self._seq_missing_lost_since = None  # bola merah tersisa baru saja, belum "hilang"
                 self._seq_locked_red_pos    = (nearest_red[0], nearest_red[1])
                 self._seq_locked_red_area   = self._bbox_area(nearest_red)
-                # Steer PAKSA konstan ke KANAN — pertahankan sampai bola merah juga hilang.
-                self._seq_transition_steer = lean_magnitude
+                # Steer PAKSA konstan — pertahankan sampai bola merah juga hilang.
+                self._seq_transition_steer = self._lean_steer_for_missing("green", lean_magnitude)
                 print(f"[SEQ_GATE] LOCKED → TRANSITIONING "
-                      f"(pair {pair_label}, missing=RIGHT/green, lean={self._seq_transition_steer:+.2f})")
-                label = f"SEQ_GATE:TRANSITIONING(→) | SEQUENTIAL_BUOY (pair {pair_label})"
+                      f"(pair {pair_label}, missing=green/{side_of('green').upper()}, "
+                      f"lean={self._seq_transition_steer:+.2f})")
+                label = (f"SEQ_GATE:TRANSITIONING({self._lean_arrow('green')}) "
+                         f"| SEQUENTIAL_BUOY (pair {pair_label})")
                 return self._seq_transition_steer, throttle, label
 
             else:
@@ -1853,9 +1887,9 @@ class MissionEngine:
             now = time.time()
             remaining_found_this_frame = False
             remaining_ball = None   # bola sisa gerbang ini (untuk handoff & jaga jarak)
-            remaining_side = None
+            remaining_color = None  # "red"/"green" — sisinya diturunkan dari warna ini
 
-            if self._seq_missing_side == "left":
+            if self._seq_missing_color == "red":
                 # Bola merah sudah hilang → tunggu bola hijau juga hilang
                 nearest_green = self._find_nearest_ball(
                     detected_balls.get("green", []), self._seq_locked_green_pos,
@@ -1863,13 +1897,13 @@ class MissionEngine:
                     max_dist_px=self.SEQ_IDENTITY_MAX_DIST_PX)
                 if nearest_green:
                     remaining_found_this_frame = True
-                    remaining_ball, remaining_side = nearest_green, "green"
+                    remaining_ball, remaining_color = nearest_green, "green"
                     self._seq_locked_green_pos = (nearest_green[0], nearest_green[1])
                     self._seq_locked_green_area = self._bbox_area(nearest_green)
-                    # Steer tetap PAKSA konstan ke KIRI selama bola hijau masih terlihat.
-                    self._seq_transition_steer = -lean_magnitude
+                    # Steer tetap PAKSA konstan selama bola hijau masih terlihat.
+                    self._seq_transition_steer = self._lean_steer_for_missing("red", lean_magnitude)
 
-            elif self._seq_missing_side == "right":
+            elif self._seq_missing_color == "green":
                 # Bola hijau sudah hilang → tunggu bola merah juga hilang
                 nearest_red = self._find_nearest_ball(
                     detected_balls.get("red", []), self._seq_locked_red_pos,
@@ -1877,11 +1911,11 @@ class MissionEngine:
                     max_dist_px=self.SEQ_IDENTITY_MAX_DIST_PX)
                 if nearest_red:
                     remaining_found_this_frame = True
-                    remaining_ball, remaining_side = nearest_red, "red"
+                    remaining_ball, remaining_color = nearest_red, "red"
                     self._seq_locked_red_pos = (nearest_red[0], nearest_red[1])
                     self._seq_locked_red_area = self._bbox_area(nearest_red)
-                    # Steer tetap PAKSA konstan ke KANAN selama bola merah masih terlihat.
-                    self._seq_transition_steer = lean_magnitude
+                    # Steer tetap PAKSA konstan selama bola merah masih terlihat.
+                    self._seq_transition_steer = self._lean_steer_for_missing("green", lean_magnitude)
 
             # ── Debounce "confirmed hilang" ────────────────────────────
             if remaining_found_this_frame:
@@ -1941,13 +1975,13 @@ class MissionEngine:
             #      jadi tidak boleh membelok ke arahnya demi mengejar gerbang baru.
             if remaining_found_this_frame and remaining_ball is not None and use_next_pair:
                 next_pair = self._find_next_pair_excluding(
-                    detected_balls, remaining_side, remaining_ball, ignore_area_px2)
+                    detected_balls, remaining_color, remaining_ball, ignore_area_px2)
                 if next_pair is not None:
                     nxt_red, nxt_green = next_pair
                     nxt_mid_x = (nxt_red[0] + nxt_green[0]) // 2
                     steer = self.tracking_controller.compute_normalized_steering(nxt_mid_x)
                     steer += self._compute_gate_clearance_steer(nxt_red[0], nxt_green[0], step)
-                    avoid = self._compute_single_ball_avoid_steer(remaining_ball, remaining_side, step)
+                    avoid = self._compute_single_ball_avoid_steer(remaining_ball, remaining_color, step)
                     steer = max(-1.0, min(1.0, steer + avoid))
                     label = (f"SEQ_GATE:TRANSITIONING(→next gate) steer={steer:+.2f} "
                              f"avoid={avoid:+.2f} | SEQUENTIAL_BUOY (pair {pair_label})")
@@ -1955,7 +1989,7 @@ class MissionEngine:
 
             # Tidak ada gerbang berikutnya yang terlihat (atau handoff dimatikan) →
             # pertahankan manuver condong PAKSA / last-known trajectory seperti semula.
-            lean_dir = "←" if self._seq_missing_side == "left" else "→"
+            lean_dir = self._lean_arrow(self._seq_missing_color)
             label = (f"SEQ_GATE:TRANSITIONING({lean_dir}) "
                      f"steer={self._seq_transition_steer:+.2f} "
                      f"| SEQUENTIAL_BUOY (pair {pair_label})")
@@ -2065,7 +2099,7 @@ class MissionEngine:
         self._seq_locked_red_area       = None
         self._seq_locked_green_area     = None
         self._seq_locked_entry_area     = None
-        self._seq_missing_side          = None
+        self._seq_missing_color         = None
         self._seq_transition_steer      = 0.0
         self._seq_gate_state_entered_at = time.time()  # mulai timer SEARCHING timeout
         self._seq_gate_pause_start      = 0.0
@@ -2189,7 +2223,7 @@ class MissionEngine:
         self._locked_red_pos       = None
         self._locked_green_pos     = None
         self._locked_entry_area    = None
-        self._missing_side         = None
+        self._missing_color        = None
         self._transition_steer     = 0.0
         self._gate_state_entered_at = 0.0
         self._gate_pause_start     = 0.0
@@ -2223,9 +2257,10 @@ class MissionEngine:
         lama yang mengejar (chase) posisi bola, bukan menghindarinya. Itu bug yang
         sama persis dengan yang seharusnya sudah diperbaiki oleh manuver hindar ini.
 
-        Return (ball, side) — side "red" atau "green" — atau None kalau tidak ada
+        Return (ball, color) — color "red" atau "green" — atau None kalau tidak ada
         bola sama sekali atau semuanya di bawah min_area_px2 (caller jatuh ke
-        fallback gate_x / blind).
+        fallback gate_x / blind). Yang dikembalikan adalah WARNA bola, bukan sisi
+        kiri/kanan: sisinya diturunkan dari warna lewat vision/gate_convention.py.
         """
         red = balls.get("red", [])
         green = balls.get("green", [])
@@ -2236,39 +2271,98 @@ class MissionEngine:
             candidates.append((green[0], "green"))
         if not candidates:
             return None
-        best_ball, best_side = max(candidates, key=lambda c: self._bbox_area(c[0]))
+        best_ball, best_color = max(candidates, key=lambda c: self._bbox_area(c[0]))
         if self._bbox_area(best_ball) >= min_area_px2:
-            return best_ball, best_side
+            return best_ball, best_color
         return None
 
-    def _compute_single_ball_avoid_steer(self, ball: Tuple, side: str, step: Dict) -> float:
+    @staticmethod
+    def _lean_steer_for_missing(missing_color: str, magnitude: float) -> float:
         """
-        Hitung steer untuk MENJAGA JARAK dari satu-satunya bola yang terlihat
-        terhadap titik tengah kamera — bukan mengejar/menyejajarkan diri dengannya
-        (lihat catatan SEQ_SINGLE_BALL_CLEARANCE_PX).
+        Arah & besar steer condong saat TRANSITIONING, dari WARNA bola yang hilang
+        duluan. Kapal menahan haluan KE ARAH SISI bola yang hilang itu — bola tersebut
+        keluar lewat tepi frame di sisinya, artinya haluan sudah menjauh dari sisi itu
+        dan perlu ditarik balik agar kapal tetap melintas di tengah celah.
 
-        side="green" (marker kanan gerbang) terlihat sendirian → kapal harus lewat
-        di SEBELAH KIRI-nya → koreksi ke KIRI (steer negatif) saat bola terlalu
-        dekat ke tengah frame.
-        side="red" (marker kiri gerbang) terlihat sendirian → kebalikannya, koreksi
-        ke KANAN (steer positif).
-
-        Magnitude koreksi proporsional terhadap seberapa dekat bola ke tengah frame
-        saat ini (urgency 1.0 = bola tepat di tengah/paling bahaya, 0.0 = bola sudah
-        >= clearance_px dari tengah/aman, tidak perlu koreksi).
+        Sisi setiap warna HANYA berasal dari vision/gate_convention.py — jangan pernah
+        menuliskannya sebagai literal "left"/"right" di file ini.
         """
-        clearance_px = self._safe_float(step.get("single_ball_clearance_px"), self.SEQ_SINGLE_BALL_CLEARANCE_PX)
-        max_steer = self._safe_float(step.get("single_ball_max_steer"), self.SEQ_SINGLE_BALL_MAX_STEER)
+        return steer_sign_toward(side_of(missing_color)) * magnitude
 
-        center_x = self.tracking_controller.center_x
-        offset_from_center = abs(ball[0] - center_x)
+    @staticmethod
+    def _lean_arrow(missing_color: Optional[str]) -> str:
+        """Panah OSD (←/→) untuk arah condong TRANSITIONING; "?" kalau warna belum di-set."""
+        if missing_color is None:
+            return "?"
+        return "←" if side_of(missing_color) == LEFT else "→"
 
+    def _compute_single_ball_avoid_steer(self, ball: Tuple, color: str, step: Dict) -> float:
+        """
+        Koreksi TAMBAHAN (aditif) untuk menjaga jarak dari satu bola yang sedang
+        dilintasi, dipakai saat kapal sudah punya target lain — yaitu saat handoff
+        TRANSITIONING membidik gerbang BERIKUTNYA sementara bola sisa gerbang ini
+        masih fisik berada di samping kapal.
+
+        Dipakai di DUA tempat:
+          1. SEARCHING, saat tidak ada pasangan valid sama sekali — bola tunggal itu
+             satu-satunya acuan yang ada.
+          2. Handoff TRANSITIONING, sebagai tambahan di atas steer ke gerbang
+             BERIKUTNYA, karena bola sisa gerbang ini masih fisik di samping kapal.
+
+        Bentuknya sengaja REPULSIF (diam selama bola masih di sisinya yang wajar, baru
+        mendorong saat bola merangsek melewati garis amannya), BUKAN atraktif ("bidik
+        titik tengah semu = bola ± setengah lebar gerbang"). Bentuk atraktif sempat
+        dicoba dan TERBUKTI DI SIMULATOR (tools/buoy_sim.py) membuat kapal goyah lalu
+        menabrak: saat kedua bola satu gerbang terlihat tapi gagal dipasangkan (lebar
+        pasangan melebihi max_pair_width_px — sering terjadi TEPAT saat kapal berada di
+        mulut gerbang), _pick_single_ball_candidate() bergantian memilih bola merah lalu
+        bola hijau karena area keduanya nyaris sama. Dua tebakan titik tengah dari dua
+        bola yang berjauhan itu saling bertolak belakang, sehingga kemudi membanting
+        bolak-balik ±max_steer tiap frame (28 kali ganti arah per run, 5 tabrakan).
+        Bentuk repulsif ini kebal terhadap pergantian kandidat tersebut: selama kedua
+        bola masih di sisinya masing-masing, KEDUANYA menghasilkan 0.0 — kapal jalan
+        lurus melewati mulut gerbang, bukan menebak lebar gerbang yang sebenarnya tidak
+        ia ketahui.
+
+        Titik tengah semu tetap dihitung untuk fallback visual `gate_x` di
+        vision/tracker.py (nilai yang ditampilkan di OSD & dicatat blackbox) lewat
+        gate_convention.virtual_gate_center_x() — di sana yang dibutuhkan memang sebuah
+        KOORDINAT titik tengah, bukan koreksi kemudi.
+
+        Garis aman bola = clearance_px dari haluan, DI SISI bola itu seharusnya berada:
+
+            safe_x       = center_x - channel_sign(warna) * clearance_px
+            encroachment = channel_sign(warna) * (ball_x - safe_x)
+
+        encroachment > 0 berarti bola sudah lebih dekat ke haluan daripada garis
+        amannya (atau bahkan sudah menyeberang ke sisi yang salah) → dorong kapal ke
+        arah lintasan, yaitu channel_sign(warna), sebesar proporsi pelanggarannya.
+
+        PENTING — kenapa BUKAN abs(ball_x - center_x) seperti versi lama: ukuran
+        mutlak itu tidak bisa membedakan bola yang aman di sisinya dari bola yang
+        sudah menyeberang ke sisi yang salah (keduanya menghasilkan angka yang sama),
+        sehingga koreksinya memuncak tepat di garis tengah frame lalu MENGECIL lagi
+        justru ketika bola makin jauh menyeberang — dan arahnya tidak pernah ikut
+        membalik. Bentuk bertanda di sini kontinu, monoton, dan tetap penuh selama
+        bola berada di sisi yang salah.
+        """
+        clearance_px = self._safe_float(step.get("single_ball_clearance_px"),
+                                        self.SEQ_SINGLE_BALL_CLEARANCE_PX)
+        max_steer = abs(self._safe_float(step.get("single_ball_max_steer"),
+                                         self.SEQ_SINGLE_BALL_MAX_STEER))
         if clearance_px <= 0:
             return 0.0
-        urgency = max(0.0, min(1.0, (clearance_px - offset_from_center) / clearance_px))
 
-        away_direction = -1.0 if side == "green" else 1.0
-        return away_direction * urgency * max_steer
+        center_x = self.tracking_controller.center_x
+        sign = channel_sign(color)
+        safe_x = center_x - sign * clearance_px
+        encroachment = sign * (float(ball[0]) - safe_x)
+        if encroachment <= 0.0:
+            # Bola masih aman di sisinya sendiri → jangan ganggu steer target utama.
+            return 0.0
+
+        urgency = min(1.0, encroachment / clearance_px)
+        return sign * urgency * max_steer
 
     def _find_next_pair_excluding(
         self, detected_balls: Dict, exclude_side: Optional[str],
@@ -2321,9 +2415,9 @@ class MissionEngine:
         tergantung selebar apa gerbangnya tampak saat itu — dan midpoint TIDAK
         membedakan keduanya. Contoh nyata (tengah frame = 960):
 
-          merah=800, hijau=1000 → error midpoint = −60 px
-              celah kiri 160px, celah kanan HANYA 40px → hijau nyaris di haluan!
-          merah=700, hijau=1100 → error midpoint = −60 px  (SAMA PERSIS)
+          bola kiri=800, bola kanan=1000 → error midpoint = −60 px
+              celah kiri 160px, celah kanan HANYA 40px → bola kanan nyaris di haluan!
+          bola kiri=700, bola kanan=1100 → error midpoint = −60 px  (SAMA PERSIS)
               celah kiri 260px, celah kanan 140px → masih relatif aman
 
         Kedua kasus menghasilkan koreksi yang identik dari steer midpoint, padahal
@@ -2337,14 +2431,20 @@ class MissionEngine:
         kedua contoh di atas.
 
         ── Solusinya: normalisasi terhadap lebar gerbang ──
-          red_gap   = tengah_frame − merah_x   (celah di sisi kiri haluan)
-          green_gap = hijau_x − tengah_frame   (celah di sisi kanan haluan)
-          imbalance = (green_gap − red_gap) / (green_gap + red_gap)   → −1..+1
+          left_gap  = tengah_frame − bola_kiri_x   (celah di sisi kiri haluan)
+          right_gap = bola_kanan_x − tengah_frame  (celah di sisi kanan haluan)
+          imbalance = (right_gap − left_gap) / (right_gap + left_gap)   → −1..+1
 
         imbalance = 0  → haluan tepat di tengah celah (aman, tidak ada koreksi)
-        imbalance > 0  → celah kanan lebih lega, MERAH lebih dekat → dorong KANAN (+)
-        imbalance < 0  → celah kiri lebih lega, HIJAU lebih dekat → dorong KIRI (−)
+        imbalance > 0  → celah kanan lebih lega, bola KIRI lebih dekat → dorong KANAN (+)
+        imbalance < 0  → celah kiri lebih lega, bola KANAN lebih dekat → dorong KIRI (−)
         imbalance = ±1 → salah satu bola TEPAT di garis haluan (paling bahaya)
+
+        BOLA MANA YANG DI KIRI/KANAN diambil dari vision/gate_convention.py, TIDAK
+        diasumsikan di sini. Versi lama menganggap merah selalu di kiri; di arena yang
+        memakai konvensi sebaliknya (merah KANAN, hijau KIRI) kedua celah jadi negatif
+        sehingga total_gap <= 0 dan guard ini MATI TOTAL tanpa suara — kapal kehilangan
+        seluruh perlindungan anti-senggol ini tanpa satu pun log yang menandakannya.
 
         Karena dibagi lebar gerbang, error piksel yang sama otomatis menghasilkan
         koreksi LEBIH BESAR saat gerbang tampak sempit (jauh/sempit = berbahaya) dan
@@ -2361,9 +2461,15 @@ class MissionEngine:
         max_steer = self._safe_float(step.get("gate_max_avoid_steer"), self.SEQ_GATE_MAX_AVOID_STEER)
 
         center_x = self.tracking_controller.center_x
-        red_gap = center_x - red_x      # celah sisi kiri haluan
-        green_gap = green_x - center_x  # celah sisi kanan haluan
-        total_gap = red_gap + green_gap
+        # Petakan warna → tepi kiri/kanan lewat konvensi tunggal (lihat docstring).
+        if side_of("red") == LEFT:
+            left_x, right_x = red_x, green_x
+        else:
+            left_x, right_x = green_x, red_x
+
+        left_gap = center_x - left_x     # celah sisi kiri haluan
+        right_gap = right_x - center_x   # celah sisi kanan haluan
+        total_gap = left_gap + right_gap
 
         # Kapal sudah DI LUAR gerbang (kedua bola di sisi yang sama) atau lebar 0 —
         # tidak ada "celah" yang bermakna untuk dinormalisasi. Serahkan ke steer
@@ -2371,7 +2477,7 @@ class MissionEngine:
         if total_gap <= 0:
             return 0.0
 
-        imbalance = (green_gap - red_gap) / total_gap
+        imbalance = (right_gap - left_gap) / total_gap
         imbalance = max(-1.0, min(1.0, imbalance))
 
         deadband = max(0.0, min(0.99, deadband))

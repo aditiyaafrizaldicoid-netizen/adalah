@@ -42,6 +42,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 from control.pid_tracker import TrackingController
 from control.mission_engine import MissionEngine
+from vision.gate_convention import LEFT, side_of
 
 
 # ── Parameter fisik kapal (perkiraan; sesuaikan kalau tahu angka aslinya) ──────
@@ -104,14 +105,24 @@ class SimCamera:
 
 
 def build_course(n_gates=3, spacing=5.0, gate_width=2.0, curve=0.35):
-    """Rangkaian gerbang merah/hijau, sedikit melengkung seperti arena di foto."""
+    """
+    Rangkaian gerbang merah/hijau, sedikit melengkung seperti arena di foto.
+
+    Sisi setiap warna diambil dari vision/gate_convention.py — SUMBER YANG SAMA
+    dengan yang dipakai kode terbang. Ini disengaja: kalau course di sini ditulis
+    dengan sisi yang di-hardcode, simulator bisa memvalidasi arena yang BUKAN arena
+    sesungguhnya dan melaporkan "bersih" untuk logika yang di air justru menabrak
+    (persis yang terjadi sebelum konvensi ini dipusatkan).
+    """
     gates = []
     for i in range(n_gates):
         cy = 6.0 + i * spacing
         cx = curve * (i ** 2)          # melengkung pelan ke kanan
+        left_x  = cx - gate_width / 2.0
+        right_x = cx + gate_width / 2.0
         gates.append({
-            "red":   (cx - gate_width / 2.0, cy),   # merah = penanda KIRI
-            "green": (cx + gate_width / 2.0, cy),   # hijau = penanda KANAN
+            "red":   (left_x if side_of("red") == LEFT else right_x, cy),
+            "green": (left_x if side_of("green") == LEFT else right_x, cy),
         })
     return gates
 
