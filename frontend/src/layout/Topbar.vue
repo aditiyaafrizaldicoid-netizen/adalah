@@ -13,6 +13,7 @@ import { useVesselStore } from '@/stores/vesselStore';
 import { useThemeStore } from '@/stores/themeStore';
 import { useWebsocketStore } from '@/stores/websocketStore';
 import { useMissionStore } from '@/stores/missionStore';
+import { formatTime } from '@/utils/geotag';
 
 const vessel = useVesselStore();
 const themeStore = useThemeStore();
@@ -37,13 +38,16 @@ const killLabel = computed(() => {
   return 'KILL SWITCH';
 });
 
-const currentTime = ref(new Date().toLocaleTimeString());
+// 24 jam hh:mm:ss, bukan toLocaleTimeString() yang menghasilkan "10:45:49 PM" —
+// lembar ketentuan meminta format hh:mm:ss, dan jam 12-jam di sebelah panel geo-tag
+// yang 24-jam hanya membingungkan saat dinilai.
+const currentTime = ref(formatTime(new Date()));
 const isDark = computed(() => themeStore.theme === 'dark');
 
 let timer;
 onMounted(() => {
   timer = setInterval(() => {
-    currentTime.value = new Date().toLocaleTimeString();
+    currentTime.value = formatTime(new Date());
   }, 1000);
 });
 

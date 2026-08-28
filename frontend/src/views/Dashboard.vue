@@ -29,6 +29,7 @@ import StatusBadge from "../components/ui/StatusBadge.vue";
 import ProgressBar from "../components/ui/ProgressBar.vue";
 import ArmingControl from "../components/monitoring/ArmingControl.vue";
 import ControlSourceControl from "../components/monitoring/ControlSourceControl.vue";
+import GeotagPanel from "../components/monitoring/GeotagPanel.vue";
 import VideoCard from "../components/monitoring/VideoCard.vue";
 
 const vessel = useVesselStore();
@@ -197,6 +198,12 @@ const wsStore = useWebsocketStore();
             <ChevronRight class="w-4 h-4" />
           </router-link>
         </div>
+      </div>
+
+      <!-- Geo-tag: seluruh field "Position and Mission Imaging Infos" dalam satu
+           baris penuh, sengaja diberi lebar penuh agar mudah dibaca & di-screenshot. -->
+      <div class="col-span-12">
+        <GeotagPanel />
       </div>
 
       <!-- Map & Video Feed -->

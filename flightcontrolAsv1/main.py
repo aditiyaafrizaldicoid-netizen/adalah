@@ -97,7 +97,7 @@ def main():
     tracker = BallTracker(
         model_path=model_path,
         target_class=[0, 1],
-        conf_threshold=0.2
+        conf_threshold=0.45
     )
 
     controller = TrackingController(
@@ -168,6 +168,15 @@ def main():
     _osd: dict = {"last_label": None}
 
     def process_and_control(frame):
+        # ---- Foto misi ber-geo-tag (step TAKE_IMAGE) ----
+        # HARUS di sini, PALING AWAL: tracker.process_frame() di bawah menggambar
+        # bounding box & OSD ke frame secara IN-PLACE, sehingga setelah dipanggil
+        # pemandangan aslinya tidak bisa didapat lagi. Foto yang dinilai juri harus
+        # berisi pemandangan asli, bukan anotasi debug.
+        # MissionEngine hanya menentukan KAPAN memotret; frame bersihnya dari sini.
+        if mission_engine.status == "RUNNING" and mission_engine.capture_pending:
+            mission_engine.capture_now(frame)
+
         # Ambil gate_state dari mission_engine untuk OSD (agar tracker bisa menampilkan label)
         state_name  = _osd["last_label"]   # label dari frame sebelumnya (1-frame lag OK)
         gate_state  = mission_engine.gate_lock_state if mission_engine.status == "RUNNING" else None

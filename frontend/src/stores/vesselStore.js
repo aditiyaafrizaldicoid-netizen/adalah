@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
+import { KMH_PER_KNOT } from "@/utils/geotag";
 
 // Kapal mengirim kecepatan dalam METER/DETIK — itu satuan asli `ground_speed`
 // MAVLink, dan sengaja dibiarkan SI di jalur telemetri & blackbox.
@@ -77,6 +78,9 @@ export const useVesselStore = defineStore("vessel", () => {
   const rpmR = ref(0);
 
   // Computed Properties
+  // Lembar ketentuan meminta SOG ditampilkan dalam knot DAN km/jam. Diturunkan dari
+  // `sog` (knot) agar tidak ada dua sumber angka kecepatan yang bisa berbeda.
+  const sogKmh = computed(() => sog.value * KMH_PER_KNOT);
   const isGpsValid = computed(() => gpsFix.value >= 2);
   const batteryColor = computed(() => {
     if (batteryPct.value > 50) return "text-success";
@@ -181,7 +185,7 @@ export const useVesselStore = defineStore("vessel", () => {
     isStreaming,
     cameraConnected, asvConnected,
     warnings,
-    isGpsValid, batteryColor,
+    isGpsValid, batteryColor, sogKmh,
     updateTelemetry,
     addWarning, clearWarning, clearAllWarnings,
   };

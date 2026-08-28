@@ -5,6 +5,7 @@ import { useMissionStore } from '@/stores/missionStore';
 import { useArenaStore } from '@/stores/arenaStore';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
+import { formatDay, formatDate, formatTime, formatCoordA, formatCoordB } from '@/utils/geotag';
 
 const props = defineProps({
   width: { type: Number, default: 800 },
@@ -151,21 +152,22 @@ watch(() => [vessel.lat, vessel.lng, vessel.heading], ([lat, lng, heading]) => {
 const currentTime = ref(new Date());
 let timeInterval = null;
 
-const formatDDMMMM = (deg, isLat) => {
-  const absolute = Math.abs(deg);
-  const degrees = Math.floor(absolute);
-  // Format minutes to 4 decimal places and replace dot with comma as requested
-  const minutes = ((absolute - degrees) * 60).toFixed(4).replace('.', ',');
-  const dir = isLat ? (deg >= 0 ? 'N' : 'S') : (deg >= 0 ? 'E' : 'W');
-  return `[${degrees.toString().padStart(isLat ? 2 : 3, '0')} ${minutes} ${dir}]`;
-};
+// Format tanggal/jam/koordinat memakai util bersama (@/utils/geotag) yang merupakan
+// cerminan dari camera/geotag.py di kapal — supaya yang terbaca di peta ini persis
+// sama dengan geo-tag yang tercetak pada foto hasil TAKE_IMAGE.
+//
+// Formatter lokal sebelumnya menghasilkan '[07 55,2910 N]' (huruf arah di BELAKANG,
+// tanpa simbol ° dan '), dan tanggal 'MON, 25 AUG 2026' — keduanya tidak sesuai
+// contoh di lembar ketentuan.
+const formattedDate = computed(() =>
+  `${formatDay(currentTime.value)} ${formatDate(currentTime.value)}`);
+const formattedTime = computed(() => formatTime(currentTime.value));
 
-const formattedDate = computed(() => {
-  return currentTime.value.toLocaleDateString('en-GB', { weekday: 'short', year: 'numeric', month: 'short', day: '2-digit' }).toUpperCase();
-});
-const formattedTime = computed(() => {
-  return currentTime.value.toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-});
+// Tanpa fix GPS, lat/lng masih berisi koordinat default — jangan dipampang sebagai
+// posisi kapal di panel yang dipakai menilai.
+const hasFix = computed(() => vessel.isGpsValid && (vessel.lat !== 0 || vessel.lng !== 0));
+const coordA = computed(() => hasFix.value ? formatCoordA(vessel.lat, vessel.lng) : '—');
+const coordB = computed(() => hasFix.value ? formatCoordB(vessel.lat, vessel.lng) : '—');
 
 // Render Waypoints based on Mission Store
 const renderWaypoints = () => {
@@ -365,21 +367,22 @@ onUnmounted(() => {
 
       <!-- Advanced Coordinates Box -->
       <div class="bg-card/90 backdrop-blur-md border border-(--border-subtle) p-4 rounded-xl shadow-2xl flex flex-col gap-3">
-        <div class="flex justify-between gap-6 items-center border-b border-white/5 pb-2">
-          <span class="text-[10px] text-(--text-secondary) uppercase font-bold tracking-widest">ASV LAT</span>
-          <span class="text-[12px] font-mono text-primary font-bold">{{ formatDDMMMM(vessel.lat, true) }}</span>
+        <div class="flex flex-col gap-1 border-b border-white/5 pb-2">
+          <span class="text-[9px] text-(--text-secondary) uppercase font-bold tracking-widest">Koordinat — Format A</span>
+          <span class="text-[12px] font-mono text-primary font-bold">{{ coordA }}</span>
         </div>
-        <div class="flex justify-between gap-6 items-center">
-          <span class="text-[10px] text-(--text-secondary) uppercase font-bold tracking-widest">ASV LNG</span>
-          <span class="text-[12px] font-mono text-primary font-bold">{{ formatDDMMMM(vessel.lng, false) }}</span>
+        <div class="flex flex-col gap-1">
+          <span class="text-[9px] text-(--text-secondary) uppercase font-bold tracking-widest">Koordinat — Format B</span>
+          <span class="text-[12px] font-mono text-primary font-bold">{{ coordB }}</span>
         </div>
       </div>
 
       <!-- SOG & COG (Speed & Course) -->
       <div class="flex gap-3">
         <div class="flex-1 bg-card/90 backdrop-blur-md border border-(--border-subtle) p-3 rounded-xl shadow-2xl flex flex-col">
-          <span class="text-[9px] text-(--text-secondary) uppercase font-black tracking-widest mb-1">SOG (Knots)</span>
-          <span class="text-lg font-mono text-white font-bold leading-none">{{ vessel.sog.toFixed(1) }}</span>
+          <span class="text-[9px] text-(--text-secondary) uppercase font-black tracking-widest mb-1">SOG</span>
+          <span class="text-lg font-mono text-white font-bold leading-none">{{ vessel.sog.toFixed(2) }}<span class="text-[10px] text-white/50 font-normal"> kn</span></span>
+          <span class="text-[10px] font-mono text-white/60 font-bold leading-none mt-1">{{ vessel.sogKmh.toFixed(2) }} km/h</span>
         </div>
         <div class="flex-1 bg-card/90 backdrop-blur-md border border-(--border-subtle) p-3 rounded-xl shadow-2xl flex flex-col">
           <span class="text-[9px] text-(--text-secondary) uppercase font-black tracking-widest mb-1">COG (Deg)</span>

@@ -48,12 +48,14 @@ Aturan lean saat TRANSITIONING:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
+import os
 import time
 import math
 import threading
 from typing import Optional, List, Dict, Any, Tuple
 
 
+from camera.geotag import save_geotagged_image
 from control.speed_scheduler import SpeedScheduler
 from vision.ball_pairing import sort_ball_pairs
 from vision.gate_convention import (
@@ -464,6 +466,20 @@ class MissionEngine:
 
         # Waktu mulai step aktif & offset saat pause
         self._step_start_time: Optional[float] = None
+
+        # ── Foto misi ber-geo-tag (step TAKE_IMAGE) ─────────────────────────
+        # Engine hanya menentukan KAPAN memotret; PIKSELNYA disuplai main.py lewat
+        # capture_now(), dari frame kamera yang BELUM digambari anotasi YOLO/OSD.
+        # Pemisahan ini disengaja: tracker.process_frame() menggambar ke frame secara
+        # in-place, jadi begitu update_frame() dipanggil, frame bersihnya sudah tidak
+        # ada lagi — sementara foto yang dinilai juri harus berisi pemandangan asli,
+        # bukan kotak deteksi dan label debug.
+        self._capture_pending: bool = False
+        self._capture_label: str = ""
+        # Identitas step yang fotonya sudah diminta — pakai _step_start_time yang unik
+        # tiap kali sebuah step dimasuki, supaya TAKE_IMAGE memotret SEKALI saja dan
+        # tidak sekali per frame (~15x/detik selama durasi step).
+        self._capture_requested_at: Optional[float] = None
         self._paused_step_elapsed: float = 0.0
         self._last_goto_time: float = 0.0
 
@@ -1100,16 +1116,63 @@ class MissionEngine:
         return 0.0, 0.0, "GOTO_GPS"
 
     def _handle_take_image(self, step, frame, gate_x, detected_balls=None):
-        """Handle TAKE_IMAGE step."""
+        """
+        Handle TAKE_IMAGE step: kapal berhenti selama `duration_sec`, dan SEKALI
+        selama itu memotret satu frame ber-geo-tag.
+
+        Sebelumnya step ini sama sekali tidak menyimpan gambar apa pun — hanya diam
+        lalu lanjut — sehingga tidak ada berkas yang bisa diberi geo-tag maupun
+        dinilai.
+        """
         duration = self._safe_float(step.get("duration_sec"), 3.0)
         elapsed = time.time() - self._step_start_time
 
+        # Minta foto sekali per kunjungan ke step ini (identitas = _step_start_time).
+        if self._capture_requested_at != self._step_start_time:
+            self._capture_requested_at = self._step_start_time
+            self._capture_pending = True
+            self._capture_label = str(step.get("name") or f"step{step.get('id', '')}")
+            print(f"[MissionEngine] 📸 TAKE_IMAGE '{self._capture_label}' — "
+                  f"menunggu frame kamera bersih untuk difoto...")
+
         if elapsed >= duration:
+            if self._capture_pending:
+                # Durasi habis tapi frame bersih tidak pernah datang (mis. kamera mati).
+                # Jangan menggantung permintaan foto ke step berikutnya.
+                self._capture_pending = False
+                print("[MissionEngine] ⚠️ TAKE_IMAGE selesai TANPA foto tersimpan "
+                      "(tidak ada frame kamera).")
             print(f"[MissionEngine] ✅ TAKE_IMAGE selesai!")
             self._advance_step()
             return self.update_frame(frame, gate_x, detected_balls)
 
         return 0.0, 0.0, "TAKE_IMAGE"
+
+    # ── API foto misi untuk main.py ──────────────────────────────────────────
+    CAPTURE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               "captures")
+
+    @property
+    def capture_pending(self) -> bool:
+        """True kalau step TAKE_IMAGE sedang menunggu satu frame kamera untuk difoto."""
+        return self._capture_pending
+
+    def capture_now(self, frame) -> Optional[str]:
+        """
+        Simpan satu foto ber-geo-tag dari `frame`.
+
+        WAJIB dipanggil dengan frame yang BELUM dianotasi (lihat _capture_pending).
+        Dipanggil main.py di awal siklus frame, sebelum tracker menggambari frame.
+
+        Return path gambar, atau None kalau gagal. Kegagalan tidak pernah dilempar
+        ke pemanggil: satu foto yang gagal tidak boleh menjatuhkan misi yang berjalan.
+        """
+        if not self._capture_pending:
+            return None
+        self._capture_pending = False   # sekali percobaan per step, apa pun hasilnya
+        telemetry = self.asv.get_telemetry_dict() if self.asv else {}
+        return save_geotagged_image(frame, telemetry, self.CAPTURE_DIR,
+                                    label=self._capture_label)
 
     def _handle_hold(self, step, frame, gate_x, detected_balls=None):
         """Handle HOLD step."""

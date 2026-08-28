@@ -4,3 +4,4 @@ venv/
 .venv/
 recordings/
 logs/
+captures/
