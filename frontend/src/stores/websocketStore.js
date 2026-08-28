@@ -70,6 +70,19 @@ export const useWebsocketStore = defineStore("websocket", () => {
           import("./channelConfigStore").then(({ useChannelConfigStore }) => {
             useChannelConfigStore().updateFromPayload(data.payload);
           });
+        } else if (data.type === "MANUAL_SOURCE") {
+          // ACK dari Mini PC: sumber kendali manual yang BENAR-BENAR aktif sekarang.
+          // Selalu pakai nilai dari kapal, jangan yang kita kira sudah terkirim —
+          // perintahnya bisa saja ditolak (sumber tidak dikenal / FC putus).
+          if (data.payload && data.payload.source) {
+            vesselStore.manualSource = data.payload.source;
+            if (data.payload.ok === false) {
+              vesselStore.addWarning(
+                "warning", "MANUAL_SOURCE_REJECTED",
+                `Perpindahan sumber kendali ditolak kapal. Sumber aktif tetap: ${data.payload.source}.`
+              );
+            }
+          }
         } else if (data.type === "IMU_CALIBRATION_STATUS") {
           imuCalibrationStatus.value = data.payload;
         } else if (data.type === "WARNING") {
@@ -145,6 +158,20 @@ export const useWebsocketStore = defineStore("websocket", () => {
     } else {
       console.warn("[WS] Cannot send: not connected");
     }
+  }
+
+  /**
+   * Pindahkan sumber kendali manual kapal.
+   * @param {'minipc'|'remote'} source - 'remote' menyerahkan kemudi ke remote RC fisik
+   *   (Mini PC berhenti mengirim RC override dan misi yang sedang jalan di-ABORT).
+   */
+  function setManualSource(source) {
+    sendCommand({ action: "set_manual_source", source });
+  }
+
+  /** Minta kapal mengabarkan sumber kendali manual yang sedang aktif. */
+  function requestManualSource() {
+    sendCommand({ action: "get_manual_source" });
   }
 
   function saveCurrentWaypoint() {
@@ -236,6 +263,7 @@ export const useWebsocketStore = defineStore("websocket", () => {
     startRecording, stopRecording, toggleRecording,
     startStreaming, stopStreaming, toggleStreaming,
     saveCurrentWaypoint, uploadMission, loadMissionToASV, setRelativeWaypoints, updatePid,
+    setManualSource, requestManualSource,
   };
 });
 

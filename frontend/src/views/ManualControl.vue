@@ -1,6 +1,6 @@
 <script setup>
 import { computed, watch, ref, reactive, onMounted, onUnmounted } from 'vue';
-import { Gamepad2, Keyboard, AlertTriangle, Zap, ArrowUp, ArrowDown, ArrowLeft, ArrowRight } from 'lucide-vue-next';
+import { Gamepad2, Keyboard, AlertTriangle, Zap, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Cpu, Radio } from 'lucide-vue-next';
 import { useGamepad } from '@/composables/useGamepad';
 import { useWebsocketStore } from '@/stores/websocketStore';
 import { useVesselStore } from '@/stores/vesselStore';
@@ -13,6 +13,31 @@ const vessel = useVesselStore();
 // UI State
 const updateRateHz = ref(10); // How many times per second to send commands
 let sendInterval = null;
+
+// ── Sumber kendali manual: Mini PC vs Remote RC fisik ───────────────────────
+// Saat 'remote', Mini PC memblokir SEMUA perintah geraknya sendiri (termasuk netral
+// yang dikirim tiap frame saat idle) dan melepaskan RC override, sehingga stik remote
+// benar-benar memegang kemudi. Halaman ini ikut berhenti mengirim supaya tidak
+// mengganggu — meski kapal juga sudah menolaknya di sisi sana.
+const isRemoteControl = computed(() => vessel.manualSource === 'remote');
+
+// Menyerahkan ke remote SENGAJA tanpa dialog konfirmasi: ini arah darurat (kapal
+// ngaco, harus segera diambil alih), dan dialog di saat seperti itu cuma menambah
+// jeda. Arah sebaliknya yang dikonfirmasi — itu yang menyalakan kembali otonomi.
+const handoverToRemote = () => {
+  if (isRemoteControl.value) return;
+  wsStore.setManualSource('remote');
+};
+
+const takeBackToMinipc = () => {
+  if (!isRemoteControl.value) return;
+  const ok = window.confirm(
+    'Kembalikan kemudi ke MINI PC?\n\n' +
+    'Remote RC fisik tidak lagi memegang kendali setelah ini. ' +
+    'Pastikan kapal sudah aman dan operator remote sudah tahu.'
+  );
+  if (ok) wsStore.setManualSource('minipc');
+};
 
 // Keyboard State
 const keys = reactive({
@@ -99,6 +124,7 @@ const vectoredCmd = computed(() => {
 });
 
 const sendDriveCommand = () => {
+  if (isRemoteControl.value) return;   // kemudi dipegang remote RC — jangan diganggu
   const isUsingKeyboard = keys.w || keys.a || keys.s || keys.d;
   if ((isGamepadConnected.value || isUsingKeyboard) && vessel.isArmed) {
     wsStore.sendCommand({
@@ -113,6 +139,9 @@ const sendDriveCommand = () => {
 
 
 onMounted(() => {
+  // Sinkronkan tampilan dengan sumber kendali yang benar-benar aktif di kapal —
+  // halaman bisa saja dibuka setelah kendali dipindah dari sesi/tab lain.
+  wsStore.requestManualSource();
   // Start the control loop
   sendInterval = setInterval(sendDriveCommand, 1000 / updateRateHz.value);
   window.addEventListener('keydown', handleKeyDown);
@@ -145,6 +174,15 @@ onUnmounted(() => {
     <div v-if="error" class="p-4 bg-danger/10 border border-danger/30 rounded-xl text-danger flex items-center gap-3">
       <AlertTriangle class="w-5 h-5" />
       {{ error }}
+    </div>
+
+    <div v-if="isRemoteControl"
+      class="p-4 bg-warning/10 border border-warning/30 rounded-xl text-warning flex items-center gap-3">
+      <Radio class="w-5 h-5 shrink-0" />
+      <span>
+        <b>Kemudi dipegang REMOTE RC fisik.</b> Joystick, keyboard, dan misi otomatis
+        dinonaktifkan sampai kendali dikembalikan ke Mini PC.
+      </span>
     </div>
 
     <!-- Content Grid -->
@@ -241,8 +279,63 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- Right Column: Arming Control -->
+      <!-- Right Column: Sumber Kendali + Arming Control -->
       <div class="space-y-6">
+
+        <!-- Sumber Kendali Manual -->
+        <div class="bg-(--bg-card) border border-(--border-primary) rounded-xl p-6 shadow-xl">
+          <h3 class="font-bold text-(--text-primary) mb-1 flex items-center gap-2">
+            <Radio class="w-4 h-4 text-(--accent-primary)" /> Sumber Kendali Manual
+          </h3>
+          <p class="text-xs text-(--text-secondary) mb-4">
+            Pilih siapa yang memegang kemudi kapal saat ini.
+          </p>
+
+          <div class="space-y-3">
+            <button type="button" @click="takeBackToMinipc" :class="[
+              'w-full flex items-start gap-3 p-4 rounded-lg border text-left transition-colors',
+              !isRemoteControl
+                ? 'bg-success/10 border-success/40 text-success'
+                : 'bg-(--bg-secondary) border-(--border-subtle) text-(--text-secondary) hover:border-(--border-primary)'
+            ]">
+              <Cpu class="w-5 h-5 mt-0.5 shrink-0" />
+              <span>
+                <span class="block font-bold">Mini PC (di kapal)</span>
+                <span class="block text-xs opacity-80 mt-0.5">
+                  Misi otomatis, joystick, dan keyboard base station aktif.
+                </span>
+              </span>
+            </button>
+
+            <button type="button" @click="handoverToRemote" :class="[
+              'w-full flex items-start gap-3 p-4 rounded-lg border text-left transition-colors',
+              isRemoteControl
+                ? 'bg-warning/10 border-warning/40 text-warning'
+                : 'bg-(--bg-secondary) border-(--border-subtle) text-(--text-secondary) hover:border-(--border-primary)'
+            ]">
+              <Radio class="w-5 h-5 mt-0.5 shrink-0" />
+              <span>
+                <span class="block font-bold">Remote RC fisik</span>
+                <span class="block text-xs opacity-80 mt-0.5">
+                  Untuk menjemput kapal saat misi gagal. Misi yang berjalan di-abort,
+                  mode dipaksa MANUAL, dan Mini PC berhenti mengemudi.
+                </span>
+              </span>
+            </button>
+          </div>
+
+          <div class="mt-4 text-xs text-(--text-secondary) p-3 rounded-lg border border-(--border-subtle)">
+            Status di kapal:
+            <b :class="isRemoteControl ? 'text-warning' : 'text-success'">
+              {{ isRemoteControl ? 'REMOTE RC' : 'MINI PC' }}
+            </b>
+            <span class="block mt-1 opacity-80">
+              Kalau Mini PC mati atau link putus, Pixhawk otomatis mengembalikan kemudi
+              ke remote setelah ±3 detik (RC_OVERRIDE_TIME).
+            </span>
+          </div>
+        </div>
+
         <ArmingControl />
       </div>
 

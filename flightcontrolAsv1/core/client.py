@@ -1,3 +1,5 @@
+import threading
+import time
 from typing import Dict, Any, Optional
 from config import config, ASVConfig, ChannelConfig, channel_config
 from core.state import ASVState, ASVStateData
@@ -8,6 +10,7 @@ from control.navigation import NavigationControl
 from control.motion import MotionControl
 from control.manual_controller import ManualRCController
 from control.mission import MissionControl
+from control import manual_source
 
 
 class ASVController:
@@ -40,6 +43,13 @@ class ASVController:
         self._motion = MotionControl(self.connection, self.channel_config)
         self._manual_rc = ManualRCController(self.connection, ch_steering=1, ch_throttle=3)
         self._mission = MissionControl(self.connection)
+
+        # Sumber kendali manual aktif: mini PC (default) atau remote RC fisik.
+        # Saat REMOTE, SELURUH perintah gerak dari mini PC diblokir di facade ini —
+        # lihat set_manual_source() dan _blocked_by_remote().
+        self._manual_source = manual_source.MINIPC
+        self._manual_source_lock = threading.RLock()
+        self._remote_block_last_log = 0.0
 
     @property
     def nav(self) -> 'NavigationControl':
@@ -189,6 +199,8 @@ class ASVController:
         Bergerak maju dengan kecepatan tertentu (m/s).
         Wajib berada di mode GUIDED dan Armed.
         """
+        if self._blocked_by_remote("move_forward"):
+            return False
         return self._navigation.send_velocity(forward_speed=speed, turn_rate_deg=0.0)
 
     def turn(self, speed: float, turn_rate_deg: float) -> bool:
@@ -196,6 +208,8 @@ class ASVController:
         Bergerak maju sambil belok.
         turn_rate_deg positif = belok kanan, negatif = belok kiri.
         """
+        if self._blocked_by_remote("turn"):
+            return False
         return self._navigation.send_velocity(forward_speed=speed, turn_rate_deg=turn_rate_deg)
 
     def goto(self, lat: float, lon: float) -> bool:
@@ -203,12 +217,108 @@ class ASVController:
         Memerintahkan kapal berlayar menuju koordinat GPS target.
         Wajib berada di mode GUIDED dan Armed.
         """
+        if self._blocked_by_remote("goto"):
+            return False
         return self._navigation.goto_target(target_lat=lat, target_lon=lon)
 
     def stop_movement(self, silent: bool = False) -> bool:
-        """Menghentikan pergerakan kapal segera (Set kecepatan ke 0)."""
+        """
+        Menghentikan pergerakan kapal segera (Set kecepatan ke 0).
+
+        TIDAK ikut diblokir saat kendali di remote: perintah ini hanya bisa
+        menghentikan, tidak pernah menggerakkan — memblokirnya justru berbahaya.
+        """
         return self._navigation.stop(silent=silent)
 
+
+    # --- SUMBER KENDALI MANUAL (Mini PC vs Remote RC fisik) ---
+    # Berapa lama minimal antar log "perintah diabaikan". main.py memanggil
+    # send_manual_rc_drive() ~15x/detik walau misi tidak jalan, jadi tanpa throttle ini
+    # terminal akan penuh oleh pesan yang sama.
+    REMOTE_BLOCK_LOG_INTERVAL_SEC = 5.0
+
+    # Pelepasan override dikirim beberapa kali: satu paket MAVLink bisa hilang di
+    # serial, dan paket yang hilang di sini berarti kapal TIDAK bisa dikendalikan
+    # remote sama sekali — biaya mengirim ulang jauh lebih murah daripada risikonya.
+    RELEASE_REPEAT = 3
+    RELEASE_INTERVAL_SEC = 0.1
+
+    def get_manual_source(self) -> str:
+        """Sumber kendali manual yang sedang aktif: 'minipc' atau 'remote'."""
+        with self._manual_source_lock:
+            return self._manual_source
+
+    def minipc_has_control(self) -> bool:
+        """True kalau mini PC masih boleh mengirim perintah gerak ke kapal."""
+        return self.get_manual_source() == manual_source.MINIPC
+
+    def set_manual_source(self, source: str) -> bool:
+        """
+        Pindahkan sumber kendali manual antara mini PC dan remote RC fisik.
+
+        source = 'remote':
+            1. Gerbang blokir dinyalakan LEBIH DULU, supaya thread kamera/misi yang
+               berjalan paralel tidak sempat mengirim override baru di sela-sela
+               langkah berikutnya (main.py mengirim tiap frame, ~15x/detik).
+            2. Baru kemudian override yang sedang aktif dilepaskan (semua channel = 0).
+            Urutan ini WAJIB. Kebalikannya menghasilkan race: override terlepas sesaat,
+            lalu frame berikutnya langsung merebutnya kembali dan remote tetap mati.
+
+        source = 'minipc':
+            Gerbang dibuka lagi. Kapal TIDAK langsung bergerak — mini PC baru mengambil
+            alih saat misi di-start atau joystick base station digerakkan.
+
+        Return False kalau `source` tidak dikenal (lihat manual_source.normalize()).
+        """
+        target = manual_source.normalize(source)
+        if target is None:
+            print(f"[ASVController] ⚠️ Sumber kendali '{source}' tidak dikenal — "
+                  f"pilih 'minipc' atau 'remote'. Tidak ada yang diubah.")
+            return False
+
+        with self._manual_source_lock:
+            previous = self._manual_source
+            self._manual_source = target   # (1) tutup gerbang dulu
+
+        if target == manual_source.REMOTE:
+            released = self._release_to_remote()   # (2) baru lepaskan override
+            print(f"[ASVController] 🎮 Kendali manual → {manual_source.label(target)} "
+                  f"(override RC {'dilepaskan' if released else 'GAGAL dilepaskan'}).")
+            if not released:
+                print("[ASVController] ⚠️ Pelepasan eksplisit gagal — kendali tetap akan "
+                      "jatuh ke remote setelah RC_OVERRIDE_TIME ArduPilot (default 3 detik) "
+                      "karena mini PC sudah berhenti mengirim override.")
+        elif previous != target:
+            print(f"[ASVController] 🖥️ Kendali manual → {manual_source.label(target)}.")
+        return True
+
+    def _release_to_remote(self) -> bool:
+        """Kirim pelepasan override berulang kali. True kalau minimal satu berhasil."""
+        ok = False
+        for i in range(self.RELEASE_REPEAT):
+            if self._motion.release_all_rc(verbose=(i == 0)):
+                ok = True
+            if i < self.RELEASE_REPEAT - 1:
+                time.sleep(self.RELEASE_INTERVAL_SEC)
+        return ok
+
+    def _blocked_by_remote(self, what: str) -> bool:
+        """
+        True kalau perintah gerak `what` harus DIBLOKIR karena kendali ada di remote.
+
+        Gerbang ini sengaja dipasang di facade (bukan di tiap modul control/), supaya
+        satu pun jalur pengiriman tidak ada yang terlewat — termasuk main.py yang
+        mengirim netral (0,0) tiap frame saat misi idle. Netral pun tetap sebuah
+        override: kalau lolos, remote fisik ikut terkunci.
+        """
+        if self.minipc_has_control():
+            return False
+        now = time.time()
+        if now - self._remote_block_last_log >= self.REMOTE_BLOCK_LOG_INTERVAL_SEC:
+            self._remote_block_last_log = now
+            print(f"[ASVController] 🎮 Kendali di REMOTE RC — perintah '{what}' "
+                  f"dari mini PC diabaikan.")
+        return True
 
     # --- KENDALI MANUAL / JOYSTICK (TELEOPERATION) ---
     def send_rc_override(self, channels: list) -> bool:
@@ -216,6 +326,8 @@ class ASVController:
         Mengirim override PWM langsung ke motor/servo kapal (1000 - 2000 µs, 0/65535 = lepaskan).
         Contoh: send_rc_override([1500, 0, 1600]) -> Steering netral (1500), Throttle maju (1600)
         """
+        if self._blocked_by_remote("send_rc_override"):
+            return False
         return self._motion.send_rc_override(channels)
 
     def send_manual_control(self, x: int = 0, y: int = 0, z: int = 500, r: int = 0, buttons: int = 0) -> bool:
@@ -223,10 +335,20 @@ class ASVController:
         Mengirim pesan MANUAL_CONTROL MAVLink dari Joystick/Gamepad.
         x: Throttle (-1000..1000), y: Steering (-1000..1000), z: Thrust (0..1000), r: Yaw (-1000..1000)
         """
+        if self._blocked_by_remote("send_manual_control"):
+            return False
         return self._motion.send_manual_control(x, y, z, r, buttons)
 
     def release_rc(self) -> bool:
-        """Melepaskan semua override RC agar kontrol kembali ke remote atau mode otomatis autopilot."""
+        """
+        Melepaskan semua override RC (tingkat rendah) agar kendali kembali ke autopilot
+        atau remote RC fisik. Dipakai MissionEngine sebelum step GUIDED.
+
+        SENGAJA tidak mengubah sumber kendali manual: fungsi ini tidak pernah
+        menggerakkan kapal, dan MissionEngine memanggilnya di tengah misi yang sah.
+        Untuk menyerahkan kendali ke operator remote, pakai set_manual_source('remote')
+        yang juga memasang gerbang blokir.
+        """
         return self._motion.release_all_rc()
 
     def send_manual_rc_drive(self, steering_norm: float, throttle_norm: float) -> bool:
@@ -235,6 +357,8 @@ class ASVController:
         - steering_norm: -1.0 (Belok Kiri 1000us) s/d +1.0 (Belok Kanan 2000us), 0.0 = Netral (1500us)
         - throttle_norm: 0.0 (Stop 1000us) s/d 1.0 (Full Forward 2000us)
         """
+        if self._blocked_by_remote("send_manual_rc_drive"):
+            return False
         return self._manual_rc.send_drive_command(steering_norm, throttle_norm)
 
 

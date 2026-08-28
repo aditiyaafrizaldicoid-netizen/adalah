@@ -3,6 +3,7 @@ import time
 import threading
 import websocket
 from core.client import ASVController
+from control import manual_source
 
 
 
@@ -23,6 +24,7 @@ class ASVWebSocketClient:
     Format pesan yang dikirim ke base station:
     - Telemetry  : { "type": "TELEMETRY", "payload": { ... } }
     - Channel ACK: { "type": "CHANNEL_CONFIG", "payload": { ... } }
+    - Manual src : { "type": "MANUAL_SOURCE", "payload": { source, ok, requested } }
     - Warning    : { "type": "WARNING", "payload": { level, code, message, timestamp } }
     - FC Disc    : { "type": "FC_DISCONNECTED" }
     """
@@ -283,9 +285,19 @@ class ASVWebSocketClient:
             buttons = int(cmd.get("buttons", 0))
             self.asv.send_manual_control(x, y, z, r, buttons)
 
+        # --- SUMBER KENDALI MANUAL (Mini PC vs Remote RC fisik) ---
+        elif action == "set_manual_source":
+            self._handle_set_manual_source(cmd.get("source"))
+
+        elif action == "get_manual_source":
+            self._send_manual_source_ack(ok=True, requested=None)
+
         # --- RELEASE RC ---
         elif action == "release_rc":
-            self._rc_state = [65535] * 18
+            # Pelepasan tingkat rendah SAJA — tidak memindah sumber kendali, jadi frame
+            # berikutnya dari main.py akan merebut override kembali. Untuk menyerahkan
+            # kendali ke operator remote, pakai action 'set_manual_source'.
+            self._rc_state = [manual_source.RC_IGNORE] * 18
             self.asv.release_rc()
 
 
@@ -430,7 +442,23 @@ class ASVWebSocketClient:
 
         elif action == "start_mission":
             steps = cmd.get("steps", [])
-            if self.mission_engine:
+            if not self.asv.minipc_has_control():
+                # Menolak di sini, bukan membiarkan misi jalan lalu semua perintah
+                # geraknya diam-diam diblokir satu per satu: operator harus tahu kenapa
+                # kapalnya tidak bergerak, bukan menebak-nebak.
+                print("[WS] ⛔ start_mission DITOLAK — kendali sedang di REMOTE RC. "
+                      "Kembalikan ke mini PC dulu dari panel Manual Control.")
+                self._send_ws({
+                    "type": "WARNING",
+                    "payload": {
+                        "level": "warning",
+                        "code": "MISSION_BLOCKED_REMOTE",
+                        "message": "Misi tidak dijalankan: kendali sedang dipegang remote RC. "
+                                   "Kembalikan sumber kendali ke Mini PC dulu.",
+                        "timestamp": time.time(),
+                    }
+                })
+            elif self.mission_engine:
                 ok = self.mission_engine.start_mission(steps)
                 self.send_mission_status(self.mission_engine.get_status_dict())
                 print(f"[WS] Mission started (ok={ok}, steps={len(self.mission_engine._steps)})")
@@ -703,6 +731,46 @@ class ASVWebSocketClient:
         })
         print(f"[WS] WARNING sent → [{level.upper()}] {code}: {message}")
 
+    def _handle_set_manual_source(self, raw_source):
+        """
+        Pindahkan sumber kendali manual antara mini PC dan remote RC fisik.
+
+        URUTAN saat menyerahkan ke remote (jangan diubah):
+          1. Abort misi — dilakukan SEBELUM gerbang blokir dipasang, karena
+             abort_mission() memanggil stop_movement() yang butuh jalur perintah masih
+             terbuka untuk menghentikan kapal dengan rapi.
+          2. Paksa mode MANUAL — step misi bisa saja meninggalkan kapal di GUIDED, dan
+             di GUIDED stik remote tidak menggerakkan apa pun.
+          3. Baru pindahkan sumber kendali (memasang gerbang + melepas override RC).
+        """
+        target = manual_source.normalize(raw_source)
+        if target is None:
+            print(f"[WS] set_manual_source: sumber '{raw_source}' tidak dikenal "
+                  f"(pilih 'minipc' atau 'remote')")
+            self._send_manual_source_ack(ok=False, requested=raw_source)
+            return
+
+        if target == manual_source.REMOTE:
+            if self.mission_engine and self.mission_engine.status == "RUNNING":
+                self.mission_engine.abort_mission()
+                print("[WS] 🎮 Misi di-ABORT karena kendali diserahkan ke remote RC.")
+                self.send_mission_status(self.mission_engine.get_status_dict())
+            self.asv.set_mode("MANUAL")
+
+        ok = self.asv.set_manual_source(target)
+        self._send_manual_source_ack(ok=ok, requested=target)
+
+    def _send_manual_source_ack(self, ok: bool, requested):
+        """Beri tahu base station sumber kendali yang BENAR-BENAR aktif setelah perintah."""
+        self._send_ws({
+            "type": "MANUAL_SOURCE",
+            "payload": {
+                "source": self.asv.get_manual_source(),
+                "requested": requested,
+                "ok": bool(ok),
+            }
+        })
+
     def _send_channel_config_ack(self):
         """Kirim channel config saat ini ke base station (untuk sinkronisasi UI)."""
         self._send_ws({
@@ -738,6 +806,8 @@ class ASVWebSocketClient:
                         "recording_resolution": f"{self.video_streamer.record_width}x{self.video_streamer.record_height}" if (self.video_streamer and self.video_streamer.is_recording) else "",
                         # Streaming toggle state — base station bisa sync tombol ON/OFF
                         "is_streaming": self.video_streamer.is_streaming if self.video_streamer else False,
+                        # Sumber kendali manual aktif: "minipc" | "remote"
+                        "manual_source": self.asv.get_manual_source(),
                     }
 
                     self.ws.send(json.dumps({

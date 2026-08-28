@@ -8,6 +8,7 @@ Channel Mapping Sesuai Spesifikasi User:
 
 import inspect
 from connection.manager import ConnectionManager
+from control.manual_source import RC_IGNORE, RC_RELEASE
 
 
 class ManualRCController:
@@ -72,11 +73,13 @@ class ManualRCController:
         pwm_thr = int(self.pwm_thr_min + (thr_norm * 1000.0))
         pwm_thr = max(self.pwm_thr_min, min(self.pwm_thr_max, pwm_thr))
 
-        # 3. Susun array 18 channel MAVLink (65535 = Abaikan / Lepaskan channel tersebut)
+        # 3. Susun array 18 channel MAVLink. RC_IGNORE (65535) = jangan sentuh channel
+        #    itu — BUKAN "lepaskan". Yang melepaskan ke remote fisik adalah RC_RELEASE (0),
+        #    lihat release_rc() & control/manual_source.py.
         sig = inspect.signature(self.connection.master.mav.rc_channels_override_send)
         max_channels = 18 if len(sig.parameters) >= 20 else 8
 
-        rc_values = [65535] * max_channels
+        rc_values = [RC_IGNORE] * max_channels
         rc_values[self.ch_steering - 1] = int(pwm_steer)
         rc_values[self.ch_throttle - 1] = int(pwm_thr)
 
@@ -95,14 +98,25 @@ class ManualRCController:
         """Failsafe / Emergency Stop: Set Throttle ke 0% (1000us) dan Steering ke Netral (1500us)."""
         return self.send_drive_command(steering_command=0.0, throttle_command=0.0)
 
-    def release_rc(self) -> bool:
-        """Melepaskan seluruh override RC agar kendali kembali ke remote RC fisik."""
+    def release_rc(self, verbose: bool = True) -> bool:
+        """
+        Melepaskan seluruh override RC agar kendali kembali ke remote RC fisik.
+
+        Mengirim RC_RELEASE (0) ke semua channel — BUKAN 65535. Versi lama file ini
+        mengirim 65535, yang di MAVLink berarti "abaikan field ini" sehingga override
+        yang sedang berjalan tetap dipertahankan dan remote tidak pernah dapat kendali.
+        Lihat control/manual_source.py untuk penjelasan lengkapnya.
+
+        Melepaskan override saja TIDAK cukup kalau mini PC masih mengirim override tiap
+        frame — pemanggil wajib menghentikan pengiriman itu lebih dulu (lihat
+        ASVController.set_manual_source()).
+        """
         if not self.connection.master or not self.connection.state.get_data().is_connected:
             return False
 
         sig = inspect.signature(self.connection.master.mav.rc_channels_override_send)
         max_channels = 18 if len(sig.parameters) >= 20 else 8
-        rc_values = [65535] * max_channels
+        rc_values = [RC_RELEASE] * max_channels
 
         try:
             self.connection.master.mav.rc_channels_override_send(
@@ -110,7 +124,8 @@ class ManualRCController:
                 self.connection.config.TARGET_COMPONENT,
                 *rc_values
             )
-            print("[ManualRCController] Override RC berhasil dilepaskan.")
+            if verbose:
+                print("[ManualRCController] Override RC dilepaskan (semua channel = 0).")
             return True
         except Exception as e:
             print(f"[ManualRCController] Error release RC: {e}")

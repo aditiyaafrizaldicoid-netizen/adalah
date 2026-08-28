@@ -25,6 +25,11 @@ export const useVesselStore = defineStore("vessel", () => {
   const isArmed = ref(false);      // Motor sudah ARM
   const mode = ref('UNKNOWN');     // Mode aktif: MANUAL, GUIDED, AUTO, dll
 
+  // Sumber kendali manual: 'minipc' (mini PC di kapal) atau 'remote' (remote RC fisik).
+  // Saat 'remote', Mini PC memblokir SEMUA perintah geraknya sendiri supaya stik remote
+  // benar-benar pegang kendali — jadi joystick/keyboard di halaman ini ikut nonaktif.
+  const manualSource = ref('minipc');
+
   // Video Recording State (Tanpa Object Detection)
   const isRecording = ref(false);
   const recordingFilename = ref('');
@@ -98,6 +103,7 @@ export const useVesselStore = defineStore("vessel", () => {
     if (data.is_connected !== undefined) isConnected.value = data.is_connected;
     if (data.is_armed !== undefined) isArmed.value = data.is_armed;
     if (data.mode !== undefined) mode.value = data.mode;
+    if (data.manual_source !== undefined) manualSource.value = data.manual_source;
     if (data.camera_connected !== undefined) cameraConnected.value = data.camera_connected;
     // Status Recording Video Mentah
     if (data.is_recording !== undefined) isRecording.value = data.is_recording;
@@ -150,7 +156,7 @@ export const useVesselStore = defineStore("vessel", () => {
     gpsFix, satellites, signalStrength,
     xte, dtw, nextWp,
     thrusterL, thrusterR, rpmL, rpmR,
-    isConnected, isArmed, mode,
+    isConnected, isArmed, mode, manualSource,
     isRecording, recordingFilename, recordingResolution,
     isStreaming,
     cameraConnected, asvConnected,

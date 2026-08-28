@@ -2,6 +2,7 @@ import inspect
 from pymavlink import mavutil
 from connection.manager import ConnectionManager
 from config import ChannelConfig
+from control.manual_source import RC_IGNORE, RC_RELEASE
 
 
 class MotionControl:
@@ -28,8 +29,16 @@ class MotionControl:
         * Untuk kapal Differential Skid Steer (2 motor kiri/kanan):
         - Channel 1: Motor Kiri, Channel 3: Motor Kanan (atau sebaliknya tergantung setup)
 
-        :param channels: List berisi nilai PWM hingga 18 channel (65535 atau 0 = lepaskan override / pasrahkan ke FC)
-        Contoh: send_rc_override([1500, 0, 1600, 0, 0, 0, 0, 0]) -> Steering netral (1500), Throttle maju (1600)
+        :param channels: List nilai PWM hingga 18 channel. Arti nilai khusus (sesuai
+            spesifikasi MAVLink RC_CHANNELS_OVERRIDE — JANGAN disamakan):
+              0     = LEPASKAN channel ini, kembalikan ke receiver RC / remote fisik
+              65535 = ABAIKAN field ini, override channel ini tetap seperti sebelumnya
+              None  = sama dengan 65535 (channel tidak disebut dalam perintah ini)
+        Contoh: send_rc_override([1500, None, 1600]) -> Steering netral (1500), Throttle maju (1600)
+
+        CATATAN: versi lama menerjemahkan 0 menjadi 65535 karena mengira keduanya sama-sama
+        berarti "lepas". Akibatnya release_all_rc() tidak pernah benar-benar melepaskan
+        apa pun dan remote RC fisik tidak bisa mengambil alih — lihat control/manual_source.py.
         """
         if not self.connection.master or not self.connection.state.get_data().is_connected:
             return False
@@ -38,12 +47,11 @@ class MotionControl:
         sig = inspect.signature(self.connection.master.mav.rc_channels_override_send)
         max_channels = 18 if len(sig.parameters) >= 20 else 8
 
-        rc_values = [65535] * max_channels
+        rc_values = [RC_IGNORE] * max_channels
         for i, pwm in enumerate(channels[:max_channels]):
-            if pwm is not None and pwm > 0:
-                rc_values[i] = int(pwm)
-            elif pwm == 0:
-                rc_values[i] = 65535  # 0 atau 65535 pada MAVLink berarti release override channel tersebut
+            if pwm is None:
+                continue                 # tidak disebut → biarkan channel apa adanya
+            rc_values[i] = int(pwm)      # termasuk 0, yang berarti LEPASKAN channel ini
 
         try:
             self.connection.master.mav.rc_channels_override_send(
@@ -79,9 +87,13 @@ class MotionControl:
             print(f"[MotionControl] Error mengirim MANUAL_CONTROL: {e}")
             return False
 
-    def release_all_rc(self) -> bool:
-        """Melepaskan semua override RC agar kontrol kembali sepenuhnya ke autopilot / remote fisik."""
-        print("[MotionControl] Melepaskan semua override RC ke autopilot...")
-        return self.send_rc_override([65535] * 18)
+    def release_all_rc(self, verbose: bool = True) -> bool:
+        """
+        Melepaskan semua override RC agar kontrol kembali sepenuhnya ke autopilot /
+        remote RC fisik. Mengirim RC_RELEASE (0) ke seluruh channel.
+        """
+        if verbose:
+            print("[MotionControl] Melepaskan semua override RC (semua channel = 0)...")
+        return self.send_rc_override([RC_RELEASE] * 18)
 
 
