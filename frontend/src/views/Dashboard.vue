@@ -27,6 +27,7 @@ import MetricCard from "../components/ui/MetricCard.vue";
 import StatusBadge from "../components/ui/StatusBadge.vue";
 import ProgressBar from "../components/ui/ProgressBar.vue";
 import ArmingControl from "../components/monitoring/ArmingControl.vue";
+import ControlSourceControl from "../components/monitoring/ControlSourceControl.vue";
 import VideoCard from "../components/monitoring/VideoCard.vue";
 
 const vessel = useVesselStore();
@@ -222,6 +223,11 @@ const wsStore = useWebsocketStore();
       <div class="col-span-12 lg:col-span-3 space-y-4">
         <!-- ARM / DISARM Control -->
         <ArmingControl />
+
+        <!-- Sumber kendali manual: Mini PC vs Remote RC fisik.
+             Ditaruh tepat di bawah FLIGHT CONTROLLER karena satu kelompok
+             pertanyaan dengan ARM/DISARM & mode: siapa yang memegang kapal. -->
+        <ControlSourceControl />
 
         <!-- 3-in-1 Waypoint Determination Panel -->
         <div class="glass-card p-4 space-y-3 border-t-4 border-t-primary">
