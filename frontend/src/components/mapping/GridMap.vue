@@ -383,7 +383,7 @@ onUnmounted(() => {
         </div>
         <div class="flex-1 bg-card/90 backdrop-blur-md border border-(--border-subtle) p-3 rounded-xl shadow-2xl flex flex-col">
           <span class="text-[9px] text-(--text-secondary) uppercase font-black tracking-widest mb-1">COG (Deg)</span>
-          <span class="text-lg font-mono text-white font-bold leading-none">{{ vessel.cog.toFixed(1) }}°</span>
+          <span class="text-lg font-mono text-white font-bold leading-none">{{ vessel.cogValid ? vessel.cog.toFixed(1) + '°' : '—' }}</span>
         </div>
         <div class="flex-1 bg-card/90 backdrop-blur-md border border-(--border-subtle) p-3 rounded-xl shadow-2xl flex flex-col">
           <span class="text-[9px] text-(--text-secondary) uppercase font-black tracking-widest mb-1">HDG (Deg)</span>

@@ -1,12 +1,23 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 
+// Kapal mengirim kecepatan dalam METER/DETIK — itu satuan asli `ground_speed`
+// MAVLink, dan sengaja dibiarkan SI di jalur telemetri & blackbox.
+// Seluruh tampilan di aplikasi ini berlabel KNOT (Dashboard, GridMap,
+// TelemetryChart, SpeedGauge), jadi konversinya dilakukan SEKALI di sini — di batas
+// masuk data — bukan diulang di tiap komponen.
+//
+// Sebelum ini nilai m/s ditampilkan apa adanya di bawah label "KNOTS", sehingga
+// setiap angka kecepatan di seluruh aplikasi terbaca ~1,94x lebih kecil dari yang
+// sebenarnya (2 m/s tampil "2.00 KNOTS", padahal 3,89 knot).
+const MS_TO_KNOTS = 1.94384;
+
 export const useVesselStore = defineStore("vessel", () => {
   // Telemetry State
   const lat = ref(-7.9215169);
   const lng = ref(112.5973649);
   const heading = ref(0);
-  const sog = ref(0); // Speed Over Ground (knots)
+  const sog = ref(0); // Speed Over Ground, KNOT (dikonversi dari m/s di updateTelemetry)
   // Course Over Ground: arah GERAK kapal sesungguhnya (dari vektor kecepatan GPS),
   // beda dari `heading` yang menunjukkan ke mana haluan menghadap. Selisih keduanya
   // memperlihatkan hanyutan arus/angin. Satuan 0-360° (konvensi maritim), TIDAK
@@ -86,7 +97,8 @@ export const useVesselStore = defineStore("vessel", () => {
         heading.value += 360;
       }
     }
-    if (data.sog !== undefined) sog.value = data.sog;
+    // data.sog dari kapal bersatuan m/s — lihat MS_TO_KNOTS di atas.
+    if (data.sog !== undefined) sog.value = data.sog * MS_TO_KNOTS;
     if (data.cog !== undefined && data.cog !== null) cog.value = data.cog;
     if (data.cog_valid !== undefined) cogValid.value = data.cog_valid;
     if (data.pitch !== undefined) pitch.value = data.pitch;
