@@ -27,8 +27,14 @@ def _fetch_camera_resolution(default_width: int, default_height: int):
     """
     import urllib.request
     import json
+    # URL diambil dari ASV_PID_CONFIG_URL di .env — JANGAN di-hardcode ke localhost.
+    # Di Mini PC kapal, backend TIDAK berjalan di localhost melainkan di base station,
+    # sehingga versi lama yang hardcode "http://localhost:3000" SELALU gagal di kapal
+    # dan diam-diam jatuh ke nilai default. Kegagalannya tidak terlihat sebagai error:
+    # kapal tetap jalan, hanya saja SELURUH konfigurasi dari DB (resolusi kamera,
+    # Kp/Ki/Kd, align_threshold_px, min_detection_area_px2) tidak pernah sampai.
     try:
-        url = "http://localhost:3000/api/v1/pid-config"
+        url = os.getenv("ASV_PID_CONFIG_URL", "http://localhost:3000/api/v1/pid-config")
         req = urllib.request.Request(url, headers={"User-Agent": "ASVFlightController"})
         with urllib.request.urlopen(req, timeout=3.0) as resp:
             if resp.status == 200:

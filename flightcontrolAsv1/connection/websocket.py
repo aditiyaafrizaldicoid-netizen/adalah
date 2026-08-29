@@ -82,8 +82,11 @@ class ASVWebSocketClient:
         """Fetch PID & Motion parameters from backend database on startup."""
         import urllib.request
         import json
+        import os
+        # Sama seperti main.py: WAJIB dari .env, bukan hardcode localhost — di kapal
+        # backend ada di base station. Lihat catatan panjang di main.py.
         try:
-            url = "http://localhost:3000/api/v1/pid-config"
+            url = os.getenv("ASV_PID_CONFIG_URL", "http://localhost:3000/api/v1/pid-config")
             req = urllib.request.Request(url, headers={"User-Agent": "ASVFlightController"})
             with urllib.request.urlopen(req, timeout=3.0) as resp:
                 if resp.status == 200:
