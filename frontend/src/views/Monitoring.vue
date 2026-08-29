@@ -16,7 +16,7 @@ const vessel = useVesselStore();
 </script>
 
 <template>
-  <div class="p-6 h-full overflow-y-auto space-y-6">
+  <div class="p-3 sm:p-6 h-full overflow-y-auto space-y-4 sm:space-y-6">
     <div class="flex justify-between items-center">
       <h1 class="text-2xl font-bold text-(--text-primary) tracking-tight flex items-center gap-3">
         <Activity class="text-primary w-6 h-6" />

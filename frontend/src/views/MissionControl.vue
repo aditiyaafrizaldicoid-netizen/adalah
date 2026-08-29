@@ -85,7 +85,7 @@ function getStepStatus(idx) {
 </script>
 
 <template>
-  <div class="p-4 h-full flex flex-col gap-4 overflow-hidden">
+  <div class="p-3 sm:p-4 h-full flex flex-col gap-3 sm:gap-4 overflow-hidden">
 
     <!-- ─── Header ───────────────────────────────────────────────────────── -->
     <div class="flex justify-between items-center flex-shrink-0">

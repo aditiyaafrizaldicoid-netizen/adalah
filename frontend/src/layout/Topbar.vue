@@ -10,7 +10,8 @@ import {
   ShieldOff,
   LogOut,
   LogIn,
-  User
+  User,
+  Menu
 } from "lucide-vue-next";
 import { useRouter } from 'vue-router';
 import { useVesselStore } from '@/stores/vesselStore';
@@ -18,9 +19,11 @@ import { useThemeStore } from '@/stores/themeStore';
 import { useWebsocketStore } from '@/stores/websocketStore';
 import { useMissionStore } from '@/stores/missionStore';
 import { useAuthStore } from '@/stores/authStore';
+import { useUiStore } from '@/stores/uiStore';
 import { formatTime } from '@/utils/geotag';
 
 const vessel = useVesselStore();
+const ui = useUiStore();
 const themeStore = useThemeStore();
 const wsStore = useWebsocketStore();
 const mission = useMissionStore();
@@ -72,32 +75,41 @@ async function handleLogout() {
 </script>
 
 <template>
-  <header class="h-16 bg-(--bg-topbar) border-b border-(--border-primary) flex items-center justify-between px-8 z-40 transition-colors duration-300">
-    <div class="flex items-center gap-6">
-      <div class="flex items-center gap-2">
+  <header class="h-16 bg-(--bg-topbar) border-b border-(--border-primary) flex items-center justify-between px-3 sm:px-8 z-40 transition-colors duration-300">
+    <div class="flex items-center gap-3 sm:gap-6 min-w-0">
+      <!-- Pembuka drawer sidebar — hanya muncul saat sidebar tidak tampil sendiri -->
+      <button
+        @click="ui.toggleSidebar()"
+        class="lg:hidden p-2 -ml-1 rounded-lg text-(--text-secondary) hover:text-(--text-primary) hover:bg-(--bg-hover) transition-colors shrink-0"
+        aria-label="Buka menu"
+      >
+        <Menu class="w-5 h-5" />
+      </button>
+
+      <div class="flex items-center gap-2 min-w-0">
         <div 
           :class="[
             'w-2 h-2 rounded-full animate-pulse',
             wsStore.status === 'CONNECTED' ? 'bg-success' : (wsStore.status === 'CONNECTING' ? 'bg-warning' : 'bg-danger')
           ]"
         ></div>
-        <span class="text-xs font-bold uppercase tracking-widest text-(--text-secondary)">
-          Vessel Status: 
+        <span class="text-[10px] sm:text-xs font-bold uppercase tracking-widest text-(--text-secondary) truncate">
+          <span class="hidden sm:inline">Vessel Status:&nbsp;</span>
           <span :class="wsStore.status === 'CONNECTED' ? 'text-success' : (wsStore.status === 'CONNECTING' ? 'text-warning' : 'text-danger')">
             {{ wsStore.status }}
           </span>
         </span>
       </div>
       
-      <div class="h-4 w-px bg-(--border-primary)"></div>
-      
-      <div class="flex items-center gap-3 bg-(--bg-secondary) px-3 py-1.5 rounded-full border border-(--border-subtle)">
+      <div class="h-4 w-px bg-(--border-primary) hidden md:block"></div>
+
+      <div class="hidden md:flex items-center gap-3 bg-(--bg-secondary) px-3 py-1.5 rounded-full border border-(--border-subtle)">
         <Radio class="w-4 h-4 text-primary" />
         <span class="text-xs font-mono text-(--text-primary)">ASV Backend WS</span>
       </div>
     </div>
 
-    <div class="flex items-center gap-6">
+    <div class="flex items-center gap-2 sm:gap-6 shrink-0">
       <!-- Theme Toggle -->
       <button @click="themeStore.toggleTheme()"
         class="p-2 rounded-lg transition-all duration-300 border border-(--border-primary)"
@@ -110,8 +122,8 @@ async function handleLogout() {
 
 
 
-      <div class="flex items-center gap-4 text-(--text-secondary)">
-        <div class="flex items-center gap-2">
+      <div class="flex items-center gap-2 sm:gap-4 text-(--text-secondary)">
+        <div class="hidden sm:flex items-center gap-2">
           <Battery class="w-5 h-5 text-success" />
           <span class="text-sm font-mono font-bold text-(--text-primary)">{{ vessel.batteryPct.toFixed(2) }}%</span>
         </div>
@@ -121,7 +133,7 @@ async function handleLogout() {
         </div>
       </div>
       
-      <div class="h-4 w-px bg-(--border-primary)"></div>
+      <div class="h-4 w-px bg-(--border-primary) hidden sm:block"></div>
 
       <!-- Sesi operator. Fallback "Masuk" tetap perlu: token bisa kedaluwarsa atau
            dibersihkan saat aplikasi terbuka, tanpa navigasi baru yang memicu guard. -->

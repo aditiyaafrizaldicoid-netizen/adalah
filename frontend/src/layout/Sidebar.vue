@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import {
   LayoutDashboard,
@@ -15,11 +15,40 @@ import {
   ChevronRight,
 } from "lucide-vue-next";
 import { useThemeStore } from '@/stores/themeStore';
+import { useUiStore } from '@/stores/uiStore';
 
 const router = useRouter();
 const route = useRoute();
 const themeStore = useThemeStore();
+const ui = useUiStore();
 const isCollapsed = ref(false);
+
+// Di layar sempit sidebar berubah jadi DRAWER yang menutupi konten, bukan kolom
+// tetap: dengan lebar 256px ia memakan lebih dari separuh layar ponsel.
+const DESKTOP_QUERY = '(min-width: 1024px)';   // = breakpoint `lg` Tailwind
+const isDesktop = ref(typeof window !== 'undefined'
+  ? window.matchMedia(DESKTOP_QUERY).matches : true);
+
+let mq = null;
+const onBreakpointChange = (e) => {
+  isDesktop.value = e.matches;
+  // Kembali ke layar lebar: pastikan drawer tidak tertinggal "terbuka", karena di
+  // sana sidebar memang selalu tampil dan backdrop-nya akan menghalangi konten.
+  if (e.matches) ui.closeSidebar();
+};
+
+onMounted(() => {
+  mq = window.matchMedia(DESKTOP_QUERY);
+  mq.addEventListener('change', onBreakpointChange);
+});
+onUnmounted(() => {
+  if (mq) mq.removeEventListener('change', onBreakpointChange);
+});
+
+// Mode ringkas (ikon saja) HANYA berlaku di layar lebar. Sebagai drawer, sidebar
+// selalu tampil penuh dengan label — di ponsel tidak ada hover untuk memunculkan
+// tooltip nama menu, jadi ikon tanpa label akan menjadi tebak-tebakan.
+const collapsed = computed(() => isCollapsed.value && isDesktop.value);
 
 const isDark = computed(() => themeStore.theme === 'dark');
 
@@ -37,19 +66,32 @@ const menuItems = [
 
 const navigate = (path) => {
   router.push(path);
+  ui.closeSidebar();   // di ponsel drawer harus menutup setelah memilih menu
 };
 </script>
 
 <template>
+  <!-- Backdrop drawer (hanya layar sempit) -->
+  <div
+    v-if="ui.sidebarOpen"
+    @click="ui.closeSidebar()"
+    class="fixed inset-0 bg-black/50 z-40 lg:hidden"
+    aria-hidden="true"
+  ></div>
+
   <aside
     :class="[
       'bg-(--bg-sidebar) border-r border-(--border-primary) transition-all duration-300 flex flex-col',
-      isCollapsed ? 'w-20' : 'w-64',
+      // Layar sempit: drawer melayang di atas konten, digeser keluar layar saat tutup.
+      // Layar lebar (lg+): kembali jadi kolom biasa dalam alur flex MainLayout.
+      'fixed inset-y-0 left-0 z-50 w-64 lg:static lg:z-auto lg:translate-x-0',
+      ui.sidebarOpen ? 'translate-x-0' : '-translate-x-full',
+      collapsed ? 'lg:w-20' : 'lg:w-64',
     ]"
   >
     <!-- Logo Section -->
     <div class="p-6 flex items-center justify-between border-b border-(--border-primary)">
-      <div v-if="!isCollapsed" class="flex items-center gap-3">
+      <div v-if="!collapsed" class="flex items-center gap-3">
         <div class="w-8 h-8 bg-(--accent-primary) rounded-lg flex items-center justify-center">
           <Activity class="text-white w-5 h-5" />
         </div>
@@ -76,11 +118,11 @@ const navigate = (path) => {
         ]"
       >
         <component :is="item.icon" :size="20" :stroke-width="2.5" />
-        <span v-if="!isCollapsed">{{ item.name }}</span>
+        <span v-if="!collapsed">{{ item.name }}</span>
         
         <!-- Tooltip for collapsed mode -->
         <div
-          v-if="isCollapsed"
+          v-if="collapsed"
           class="absolute left-full ml-4 px-3 py-1 bg-(--bg-card) text-(--text-primary) text-sm rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50 border border-(--border-primary) shadow-xl"
         >
           {{ item.name }}
@@ -89,12 +131,12 @@ const navigate = (path) => {
     </nav>
 
     <!-- Collapse Toggle -->
-    <div class="p-4 border-t border-(--border-primary)">
+    <div class="p-4 border-t border-(--border-primary) hidden lg:block">
       <button
         @click="isCollapsed = !isCollapsed"
         class="w-full flex items-center justify-center p-2 rounded-lg bg-(--bg-secondary) text-(--text-secondary) hover:text-(--text-primary) transition-colors border border-(--border-subtle)"
       >
-        <ChevronLeft v-if="!isCollapsed" />
+        <ChevronLeft v-if="!collapsed" />
         <ChevronRight v-else />
       </button>
     </div>

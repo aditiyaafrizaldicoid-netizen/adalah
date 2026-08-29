@@ -41,7 +41,7 @@ const wsStore = useWebsocketStore();
 
 
 <template>
-  <div class="p-6 h-full overflow-y-auto space-y-6">
+  <div class="p-3 sm:p-6 h-full overflow-y-auto space-y-4 sm:space-y-6">
     <!-- Header Section -->
     <div class="flex justify-between items-end">
       <div>

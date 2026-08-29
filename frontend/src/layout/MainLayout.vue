@@ -4,7 +4,7 @@ import Topbar from "./Topbar.vue";
 </script>
 
 <template>
-  <div class="flex h-screen w-screen bg-background text-slate-200 overflow-hidden">
+  <div class="flex h-screen w-full bg-background text-slate-200 overflow-hidden">
     <!-- Sidebar -->
     <Sidebar />
 
@@ -19,7 +19,7 @@ import Topbar from "./Topbar.vue";
       </main>
       
       <!-- System Notification Bar (Optional) -->
-      <div class="h-8 bg-slate-900 border-t border-slate-800 flex items-center px-6 justify-between text-[10px] uppercase tracking-widest font-bold text-slate-500">
+      <div class="h-8 bg-slate-900 border-t border-slate-800 hidden sm:flex items-center px-6 justify-between text-[10px] uppercase tracking-widest font-bold text-slate-500">
         <div class="flex gap-4">
           <span>CPU: 12%</span>
           <span>MEM: 240MB</span>

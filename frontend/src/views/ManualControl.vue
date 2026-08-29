@@ -143,7 +143,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="h-full flex flex-col p-6 space-y-6 overflow-y-auto">
+  <div class="h-full flex flex-col p-3 sm:p-6 space-y-4 sm:space-y-6 overflow-y-auto">
     <!-- Header -->
     <div class="flex items-center justify-between">
       <div>

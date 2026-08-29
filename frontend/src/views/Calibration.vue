@@ -40,7 +40,7 @@ watch(() => route.query.tab, (tab) => {
 </script>
 
 <template>
-  <div class="p-6 h-full flex flex-col gap-6 overflow-hidden">
+  <div class="p-3 sm:p-6 h-full flex flex-col gap-4 sm:gap-6 overflow-hidden">
     <div>
       <h1 class="text-2xl font-bold text-(--text-primary) tracking-tight flex items-center gap-3">
         <Settings2 class="text-primary w-6 h-6" />
