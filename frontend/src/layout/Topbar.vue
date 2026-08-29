@@ -7,18 +7,25 @@ import {
   Radio,
   Sun,
   Moon,
-  ShieldOff
+  ShieldOff,
+  LogOut,
+  LogIn,
+  User
 } from "lucide-vue-next";
+import { useRouter } from 'vue-router';
 import { useVesselStore } from '@/stores/vesselStore';
 import { useThemeStore } from '@/stores/themeStore';
 import { useWebsocketStore } from '@/stores/websocketStore';
 import { useMissionStore } from '@/stores/missionStore';
+import { useAuthStore } from '@/stores/authStore';
 import { formatTime } from '@/utils/geotag';
 
 const vessel = useVesselStore();
 const themeStore = useThemeStore();
 const wsStore = useWebsocketStore();
 const mission = useMissionStore();
+const auth = useAuthStore();
+const router = useRouter();
 
 const isKillActive = ref(false);
 
@@ -54,6 +61,14 @@ onMounted(() => {
 onUnmounted(() => {
   clearInterval(timer);
 });
+
+// Nama panggilan saja — Topbar sudah padat, nama lengkap bikin baris ini melar.
+const userLabel = computed(() => auth.user?.name?.split(' ')[0] || 'Operator');
+
+async function handleLogout() {
+  await auth.logout();
+  router.push({ name: 'Login' });
+}
 </script>
 
 <template>
@@ -106,6 +121,34 @@ onUnmounted(() => {
         </div>
       </div>
       
+      <div class="h-4 w-px bg-(--border-primary)"></div>
+
+      <!-- Sesi operator. Fallback "Masuk" tetap perlu: token bisa kedaluwarsa atau
+           dibersihkan saat aplikasi terbuka, tanpa navigasi baru yang memicu guard. -->
+      <div v-if="auth.isAuthenticated" class="flex items-center gap-2">
+        <div class="flex items-center gap-2 bg-(--bg-secondary) px-3 py-1.5 rounded-full border border-(--border-subtle)">
+          <User class="w-4 h-4 text-primary" />
+          <span class="text-xs font-bold text-(--text-primary)">{{ userLabel }}</span>
+          <span class="text-[10px] font-bold uppercase tracking-widest text-(--text-muted)">
+            {{ auth.user?.role }}
+          </span>
+        </div>
+        <button
+          @click="handleLogout"
+          title="Keluar"
+          class="p-2 rounded-lg border border-(--border-primary) bg-(--bg-card) text-(--text-secondary) hover:text-danger hover:border-danger transition-all active:scale-95">
+          <LogOut class="w-5 h-5" />
+        </button>
+      </div>
+
+      <router-link
+        v-else
+        :to="{ name: 'Login' }"
+        class="flex items-center gap-2 px-4 py-2 rounded-lg border border-(--border-primary) bg-(--bg-card) text-xs font-bold uppercase tracking-wider text-(--text-secondary) hover:text-(--accent-primary) hover:border-(--border-accent) transition-all active:scale-95">
+        <LogIn class="w-4 h-4" />
+        Masuk
+      </router-link>
+
       <button
         @click="handleKillSwitch"
         :disabled="isKillActive"
