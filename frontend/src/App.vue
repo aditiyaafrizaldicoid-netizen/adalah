@@ -1,9 +1,14 @@
 <script setup>
-import { onMounted } from "vue";
+import { computed, onMounted } from "vue";
+import { useRoute } from "vue-router";
 import MainLayout from "./layout/MainLayout.vue";
 import { useWebsocketStore } from "./stores/websocketStore";
 
 const wsStore = useWebsocketStore();
+const route = useRoute();
+
+// Route publik (login) tampil penuh layar, tanpa sidebar dan topbar.
+const layout = computed(() => (route.meta.public ? "div" : MainLayout));
 
 onMounted(() => {
   wsStore.connect();
@@ -11,7 +16,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <MainLayout>
+  <component :is="layout">
     <router-view v-slot="{ Component }">
       <transition
         enter-active-class="transition duration-200 ease-out"
@@ -25,7 +30,7 @@ onMounted(() => {
         <component :is="Component" />
       </transition>
     </router-view>
-  </MainLayout>
+  </component>
 </template>
 
 <style>
