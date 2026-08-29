@@ -193,7 +193,10 @@ const renderWaypoints = () => {
 
     const m = L.marker([wp.lat, wp.lng], { icon: wpIcon }).addTo(map);
     m.on('contextmenu', () => {
-      // Right click to remove waypoint
+      // Right click to remove waypoint — hanya di mode waypoint. Tanpa penjagaan
+      // ini, peta baca-saja (mapMode="none", dipakai Panel Juri) masih bisa
+      // menghapus waypoint lewat klik kanan.
+      if (props.mapMode !== 'waypoint') return;
       mission.removeWaypoint(index);
       renderWaypoints();
     });
