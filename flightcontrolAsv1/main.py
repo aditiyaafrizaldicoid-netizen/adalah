@@ -87,11 +87,25 @@ def main():
     # HARUS diambil SEBELUM tracker/controller/mission_engine/video_streamer dibuat —
     # beda dari PID gain dkk. yang bisa di-update live setelah objek dibuat, resolusi
     # capture kamera fisik (cv2.VideoCapture) tidak bisa diganti setelah kamera
-    # ter-inisialisasi tanpa re-init hardware penuh. Fallback ke 1920x1080 (Logitech
-    # MX Brio) kalau fetch gagal (mis. backend belum siap) — resolusi REFERENSI
-    # tempat semua threshold piksel MissionEngine dikalibrasi (lihat
-    # MissionEngine.REFERENCE_FRAME_WIDTH/HEIGHT & _apply_resolution_scaling()).
-    camera_width, camera_height = _fetch_camera_resolution(default_width=1920, default_height=1080)
+    # ter-inisialisasi tanpa re-init hardware penuh. Fallback ke 640x360 kalau fetch
+    # gagal (mis. backend belum siap) — resolusi kerja vision & tracking saat ini.
+    #
+    # CATATAN: 640x360 BUKAN resolusi referensi. Threshold piksel MissionEngine
+    # dikalibrasi di 1920x1080 (REFERENCE_FRAME_WIDTH/HEIGHT) dan diskalakan OTOMATIS
+    # ke resolusi aktual oleh _apply_resolution_scaling(). Yang TIDAK ikut otomatis
+    # adalah nilai yang datang dari DB — Kp/Ki/Kd, align_threshold_px, dan
+    # min_detection_area_px2 semuanya berbasis piksel, jadi harus disesuaikan sendiri
+    # tiap kali resolusi diubah (lihat log skala di bawah).
+    camera_width, camera_height = _fetch_camera_resolution(default_width=640, default_height=360)
+
+    # Cetak skala piksel aktif. Kp/Ki/Kd, align_threshold_px, dan min_detection_area_px2
+    # datang dari DB dalam satuan PIKSEL pada resolusi tempat mereka di-tuning — ketiganya
+    # TIDAK ikut diskalakan otomatis (beda dari konstanta MissionEngine). Angka di bawah
+    # adalah faktor konversinya, supaya salah-resolusi kelihatan saat boot, bukan di air.
+    _px = camera_width / 1920.0
+    _area = (camera_width * camera_height) / (1920.0 * 1080.0)
+    print(f"[Main] 🎥 Vision & tracking berjalan di {camera_width}x{camera_height} "
+          f"(skala vs 1920x1080 — jarak {_px:.3f}x, area {_area:.3f}x)")
 
     model_path = os.path.join(os.path.dirname(__file__), "models", "best.pt")
     tracker = BallTracker(
