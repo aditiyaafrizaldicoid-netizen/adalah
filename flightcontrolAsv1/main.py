@@ -285,7 +285,7 @@ def main():
         camera_index=0,
         width=camera_width,
         height=camera_height,
-        fps=15,  # Ditingkatkan ke 15 FPS agar pergerakan video lebih halus
+        fps=25,  # Ditingkatkan ke 15 FPS agar pergerakan video lebih halus
         backend_url=video_upload_url,
         frame_callback=process_and_control,
         flip_horizontal=flip_cam
