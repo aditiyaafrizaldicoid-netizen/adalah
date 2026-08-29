@@ -1,7 +1,6 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
-
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3000";
+import { API_BASE } from "@/config/api";
 
 // Kunci localStorage — dipakai juga oleh router guard saat auth diaktifkan.
 const TOKEN_KEY = "asv_access_token";

@@ -2,7 +2,7 @@
 import { ref, onMounted } from 'vue';
 import { Save, FolderOpen, Download, Trash2, Plus, RefreshCw } from 'lucide-vue-next';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+import { API_BASE } from '@/config/api';
 
 const profiles = ref([]);
 const loading = ref(false);

@@ -10,6 +10,7 @@ import EngineMonitor from "../components/monitoring/EngineMonitor.vue";
 import VideoCard from "../components/monitoring/VideoCard.vue";
 import TelemetryChart from "../components/monitoring/TelemetryChart.vue";
 import { Activity } from "lucide-vue-next";
+import { VIDEO_STREAM_URL } from "@/config/api";
 
 const vessel = useVesselStore();
 </script>
@@ -62,7 +63,7 @@ const vessel = useVesselStore();
       <!-- Camera Feed -->
       <div class="col-span-12">
         <VideoCard
-          src="http://localhost:3000/api/v1/video/stream"
+          :src="VIDEO_STREAM_URL"
           title="PRIMARY CAMERA"
           labelColor="teal"
           aspect="aspect-video"

@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 import { useVesselStore } from "./vesselStore";
 import { useMissionStore } from "./missionStore";
+import { WS_URL } from "@/config/api";
 
 export const useWebsocketStore = defineStore("websocket", () => {
   const vesselStore = useVesselStore();
@@ -18,7 +19,7 @@ export const useWebsocketStore = defineStore("websocket", () => {
   let pingInterval = null;
   let _url = null;
 
-  function connect(url = "ws://localhost:3000/api/v1/ws/client") {
+  function connect(url = WS_URL) {
     _url = url;
     status.value = "CONNECTING";
 

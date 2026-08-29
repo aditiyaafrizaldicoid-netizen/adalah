@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { ref, computed, onMounted } from "vue";
 import { useWebsocketStore } from "./websocketStore";
+import { apiUrl } from "@/config/api";
 
 // ─── Step Type Definitions ───────────────────────────────────────────────────
 export const STEP_TYPES = [
@@ -688,7 +689,7 @@ export const useMissionStore = defineStore("mission", () => {
 
   async function fetchPresets() {
     try {
-      const res = await fetch("http://localhost:3000/api/v1/mission-presets");
+      const res = await fetch(apiUrl("/api/v1/mission-presets"));
       if (res.ok) {
         const json = await res.json();
         if (json.status === "success" && Array.isArray(json.data)) {
@@ -718,7 +719,7 @@ export const useMissionStore = defineStore("mission", () => {
     if (!steps.value.length) return false;
     const name = presetName || `Mission ${new Date().toLocaleString('id-ID')}`;
     try {
-      const res = await fetch("http://localhost:3000/api/v1/mission-presets", {
+      const res = await fetch(apiUrl("/api/v1/mission-presets"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -738,7 +739,7 @@ export const useMissionStore = defineStore("mission", () => {
 
   async function deletePreset(dbId) {
     try {
-      const res = await fetch(`http://localhost:3000/api/v1/mission-presets/${dbId}`, {
+      const res = await fetch(apiUrl(`/api/v1/mission-presets/${dbId}`), {
         method: "DELETE",
       });
       if (res.ok) {

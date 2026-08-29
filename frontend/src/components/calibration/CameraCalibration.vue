@@ -2,6 +2,7 @@
 import { Camera, Sun, Contrast, Sliders, CheckCircle2, AlertTriangle, ScanEye, Save, RefreshCw, Maximize2 } from 'lucide-vue-next';
 import { ref, reactive, onMounted } from 'vue';
 import { useWebsocketStore } from '@/stores/websocketStore';
+import { apiUrl } from '@/config/api';
 
 const ws = useWebsocketStore();
 
@@ -33,7 +34,7 @@ const resolutionSaveStatus = ref(null); // null | 'ok' | 'err'
 
 const loadResolutionSettings = async () => {
   try {
-    const res = await fetch('http://localhost:3000/api/v1/pid-config');
+    const res = await fetch(apiUrl('/api/v1/pid-config'));
     if (res.ok) {
       const result = await res.json();
       if (result.data) {
@@ -48,7 +49,7 @@ const loadResolutionSettings = async () => {
 
 const applyResolutionSettings = async () => {
   try {
-    const res = await fetch('http://localhost:3000/api/v1/pid-config', {
+    const res = await fetch(apiUrl('/api/v1/pid-config'), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ camera_width: cameraWidth.value, camera_height: cameraHeight.value }),
@@ -87,7 +88,7 @@ const detectionSaveStatus = ref(null); // null | 'ok' | 'err'
 
 const loadDetectionSettings = async () => {
   try {
-    const res = await fetch('http://localhost:3000/api/v1/pid-config');
+    const res = await fetch(apiUrl('/api/v1/pid-config'));
     if (res.ok) {
       const result = await res.json();
       if (result.data && result.data.min_detection_area_px2 !== undefined) {
@@ -105,7 +106,7 @@ const applyDetectionSettings = async () => {
 
   // 2. Persist di Database via HTTP REST API
   try {
-    const res = await fetch('http://localhost:3000/api/v1/pid-config', {
+    const res = await fetch(apiUrl('/api/v1/pid-config'), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ min_detection_area_px2: minDetectionAreaPx2.value }),

@@ -5,7 +5,7 @@ import SessionList from "../components/data/SessionList.vue";
 import RunPlayback from "../components/data/RunPlayback.vue";
 import ExportPanel from "../components/data/ExportPanel.vue";
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+import { API_BASE } from "@/config/api";
 
 const sessions = ref([]);
 const loading = ref(false);

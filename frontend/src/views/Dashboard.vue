@@ -31,6 +31,7 @@ import ArmingControl from "../components/monitoring/ArmingControl.vue";
 import ControlSourceControl from "../components/monitoring/ControlSourceControl.vue";
 import GeotagPanel from "../components/monitoring/GeotagPanel.vue";
 import VideoCard from "../components/monitoring/VideoCard.vue";
+import { VIDEO_STREAM_URL } from "@/config/api";
 
 const vessel = useVesselStore();
 const mission = useMissionStore();
@@ -227,7 +228,7 @@ const wsStore = useWebsocketStore();
 
         <!-- Video Stream -->
         <VideoCard
-          src="http://localhost:3000/api/v1/video/stream"
+          :src="VIDEO_STREAM_URL"
           title="FPV CAM"
           labelColor="blue"
           aspect="aspect-video"

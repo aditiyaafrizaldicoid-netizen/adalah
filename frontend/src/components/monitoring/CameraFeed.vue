@@ -3,10 +3,11 @@ import { ref, computed } from 'vue';
 import { Camera, RefreshCw, Maximize2, Minimize2, Video, VideoOff, CircleDot } from 'lucide-vue-next';
 import { useVesselStore } from '@/stores/vesselStore';
 import { useWebsocketStore } from '@/stores/websocketStore';
+import { VIDEO_STREAM_URL } from '@/config/api';
 
 const props = defineProps({
   label: String,
-  streamUrl: { type: String, default: 'http://localhost:3000/api/v1/video/stream' },
+  streamUrl: { type: String, default: VIDEO_STREAM_URL },
   status: { type: String, default: 'CONNECTED' }
 });
 

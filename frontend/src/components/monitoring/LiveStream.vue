@@ -2,8 +2,9 @@
 import { computed } from 'vue';
 import { Maximize2, RefreshCw, AlertCircle } from 'lucide-vue-next';
 import { useMjpegStream } from '@/composables/useMjpegStream';
+import { VIDEO_STREAM_URL } from '@/config/api';
 
-const videoUrl = import.meta.env.VITE_VIDEO_FEED_URL;
+const videoUrl = VIDEO_STREAM_URL;
 const srcRef = computed(() => videoUrl || null);
 const { activeSrc, isError, onError, onLoad, reload, imgRef, BLANK } = useMjpegStream(srcRef);
 </script>

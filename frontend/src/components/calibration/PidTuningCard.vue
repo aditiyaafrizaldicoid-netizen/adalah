@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue';
 import { Sliders, Save, CheckCircle2, RefreshCw } from 'lucide-vue-next';
 import { useWebsocketStore } from '@/stores/websocketStore';
+import { apiUrl } from '@/config/api';
 
 const wsStore = useWebsocketStore();
 
@@ -18,7 +19,7 @@ const isSaved = ref(false);
 
 const loadFromDatabase = async () => {
   try {
-    const res = await fetch('http://localhost:3000/api/v1/pid-config');
+    const res = await fetch(apiUrl('/api/v1/pid-config'));
     if (res.ok) {
       const result = await res.json();
       if (result.data) {
@@ -52,7 +53,7 @@ const applyTuning = async () => {
 
   // 2. Persist in Database via HTTP REST API
   try {
-    await fetch('http://localhost:3000/api/v1/pid-config', {
+    await fetch(apiUrl('/api/v1/pid-config'), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

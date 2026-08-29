@@ -34,6 +34,7 @@ import { useScoringStore } from "@/stores/scoringStore";
 import { useWebsocketStore } from "@/stores/websocketStore";
 import { useThemeStore } from "@/stores/themeStore";
 import { formatTime } from "@/utils/geotag";
+import { VIDEO_STREAM_URL } from "@/config/api";
 
 import MetricCard from "@/components/ui/MetricCard.vue";
 import ProgressBar from "@/components/ui/ProgressBar.vue";
@@ -47,8 +48,7 @@ const scoring = useScoringStore();
 const wsStore = useWebsocketStore();
 const themeStore = useThemeStore();
 
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:3000";
-const streamUrl = `${API_BASE}/api/v1/video/stream`;
+const streamUrl = VIDEO_STREAM_URL;
 
 const isDark = computed(() => themeStore.theme === "dark");
 
