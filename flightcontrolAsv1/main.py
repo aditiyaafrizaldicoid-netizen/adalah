@@ -93,8 +93,12 @@ def main():
     # HARUS diambil SEBELUM tracker/controller/mission_engine/video_streamer dibuat —
     # beda dari PID gain dkk. yang bisa di-update live setelah objek dibuat, resolusi
     # capture kamera fisik (cv2.VideoCapture) tidak bisa diganti setelah kamera
-    # ter-inisialisasi tanpa re-init hardware penuh. Fallback ke 640x360 kalau fetch
+    # ter-inisialisasi tanpa re-init hardware penuh. Fallback ke 1280x720 kalau fetch
     # gagal (mis. backend belum siap) — resolusi kerja vision & tracking saat ini.
+    #
+    # NILAI FALLBACK INI PENTING, bukan sekadar jaring pengaman: sampai perbaikan
+    # ASV_PID_CONFIG_URL ter-deploy, kapal TIDAK pernah berhasil membaca DB, sehingga
+    # angka di sinilah yang benar-benar menentukan resolusi kerja di kapal.
     #
     # CATATAN: 640x360 BUKAN resolusi referensi. Threshold piksel MissionEngine
     # dikalibrasi di 1920x1080 (REFERENCE_FRAME_WIDTH/HEIGHT) dan diskalakan OTOMATIS
@@ -102,7 +106,7 @@ def main():
     # adalah nilai yang datang dari DB — Kp/Ki/Kd, align_threshold_px, dan
     # min_detection_area_px2 semuanya berbasis piksel, jadi harus disesuaikan sendiri
     # tiap kali resolusi diubah (lihat log skala di bawah).
-    camera_width, camera_height = _fetch_camera_resolution(default_width=640, default_height=360)
+    camera_width, camera_height = _fetch_camera_resolution(default_width=1280, default_height=720)
 
     # Cetak skala piksel aktif. Kp/Ki/Kd, align_threshold_px, dan min_detection_area_px2
     # datang dari DB dalam satuan PIKSEL pada resolusi tempat mereka di-tuning — ketiganya

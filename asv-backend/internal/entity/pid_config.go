@@ -13,12 +13,14 @@ type PidConfig struct {
 	PassDuration        float64 `gorm:"default:2.5" json:"pass_duration"`
 	CooldownDuration    float64 `gorm:"default:3.0" json:"cooldown_duration"`
 	MinDetectionAreaPx2 float64 `gorm:"default:4000" json:"min_detection_area_px2"`
-	// 640x360: resolusi kerja vision & tracking. Frame kecil = inferensi YOLO jauh
-	// lebih ringan = loop kontrol lebih cepat, yang lebih menentukan kualitas kemudi
-	// daripada detail gambar. Ingat: mengubah resolusi WAJIB diikuti penyesuaian
-	// Kp/Ki/Kd, AlignThresholdPx, dan MinDetectionAreaPx2 — semuanya berbasis PIKSEL,
-	// jadi artinya ikut berubah saat ukuran frame berubah.
-	CameraWidth  int       `gorm:"default:640" json:"camera_width"`
-	CameraHeight int       `gorm:"default:360" json:"camera_height"`
+	// 1280x720: resolusi kerja vision & tracking.
+	//
+	// Mengubah resolusi WAJIB diikuti penyesuaian Kp/Ki/Kd, AlignThresholdPx, dan
+	// MinDetectionAreaPx2 — semuanya berbasis PIKSEL, jadi ARTINYA ikut berubah saat
+	// ukuran frame berubah. Ini bukan teori: saat resolusi sempat diturunkan ke
+	// 640x360, MinDetectionAreaPx2 tertinggal di nilai lama dan seluruh bola berhenti
+	// terdeteksi — bola terdekat pun hanya 784px², jauh di bawah ambang 4000.
+	CameraWidth  int       `gorm:"default:1280" json:"camera_width"`
+	CameraHeight int       `gorm:"default:720" json:"camera_height"`
 	UpdatedAt    time.Time `gorm:"autoUpdateTime" json:"updated_at"`
 }
