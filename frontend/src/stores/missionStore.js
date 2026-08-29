@@ -199,6 +199,69 @@ export const STEP_TYPES = [
       },
     ],
   },
+  // ── Timed Steer yang berhenti saat GERBANG terlihat ────────────────────
+  // Sama persis dengan TIMED_STEER di atas (steer + throttle konstan lewat RC
+  // override di mode MANUAL, murni timer), dengan satu tambahan: step selesai
+  // lebih awal begitu bola MERAH dan HIJAU terdeteksi BERSAMAAN. Satu warna saja
+  // tidak cukup — satu bola tidak menentukan gerbang mana pun, dan menyerahkan
+  // kendali ke step berikutnya berdasarkan itu membuat step buoy-tracking mulai
+  // tanpa gerbang utuh untuk dibidik.
+  {
+    type: "STEER_UNTIL_GATE",
+    label: "Timed Steer Until Gate (Manual)",
+    icon: "🎯",
+    color: "text-fuchsia-400",
+    bg: "bg-fuchsia-500/10 border-fuchsia-500/30",
+    fields: [
+      {
+        key: "steer",
+        label: "Steering (-1 kiri, 0 lurus, +1 kanan)",
+        type: "number",
+        default: 0,
+      },
+      {
+        key: "throttle",
+        label: "Throttle (0-1)",
+        type: "number",
+        default: 0.3,
+      },
+      {
+        key: "duration_sec",
+        label: "Max Duration (s)",
+        type: "number",
+        default: 10,
+        // Batas waktu MAKSIMUM, bukan durasi tetap: step berhenti lebih awal begitu
+        // gerbang ketemu. Isi 0 = tanpa batas waktu — kapal hanya berhenti kalau
+        // gerbang terlihat. Hati-hati memakainya.
+      },
+      {
+        key: "min_runtime_sec",
+        label: "Min Runtime Before Gate-Stop (s)",
+        type: "number",
+        default: 1.5,
+        // Deteksi gerbang diabaikan sampai kapal sudah bergerak sekian detik.
+        // Tanpa ini, kalau gerbang kebetulan sudah terlihat saat step dimulai,
+        // step selesai dalam satu frame dan manuvernya tidak pernah terjadi.
+      },
+      {
+        key: "gate_confirm_sec",
+        label: "Gate Confirm Duration (s)",
+        type: "number",
+        default: 0.3,
+        // Gerbang harus terlihat TERUS-MENERUS selama ini sebelum step diakhiri —
+        // supaya satu frame false-positive YOLO tidak memotong manuver.
+      },
+      {
+        key: "ignore_area_px2",
+        label: "Ignore Below Area (px²)",
+        type: "number",
+        default: 4000,
+        // Bola dengan area bounding box di bawah nilai ini TIDAK dihitung sebagai
+        // bagian gerbang. Tanpa ambang ini, pantulan air sekecil apa pun yang lolos
+        // YOLO sudah cukup mengakhiri step lebih awal.
+      },
+    ],
+  },
   // ── Sequential Multi-Pair Buoy ─────────────────────────────────────────
   // Tidak ada field konfigurasi jumlah pasangan — engine berjalan otomatis
   // sampai tidak ada lagi pasangan buoy (merah+hijau) yang terdeteksi di frame.
