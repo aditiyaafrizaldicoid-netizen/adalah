@@ -8,7 +8,7 @@ import (
 // CORSMiddleware provides default CORS configuration.
 func (m *Middleware) CORSMiddleware() fiber.Handler {
 	return cors.New(cors.Config{
-		AllowOrigins:     "http://localhost:5173",
+		AllowOrigins:     m.cfg.App.Cors,
 		AllowMethods:     "GET,POST,PUT,DELETE,PATCH,OPTIONS",
 		AllowCredentials: true,
 		AllowHeaders:     "Origin, Content-Type, Accept, Authorization,X-Requested-With,X-CSRF-Token",

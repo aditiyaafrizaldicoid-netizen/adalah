@@ -19,6 +19,7 @@ type AppConfig struct {
 	Port       int    `mapstructure:"APP_PORT"`
 	Name       string `mapstructure:"APP_NAME"`
 	Showroutes bool   `mapstructure:"APP_SHOW_ROUTES"`
+	Cors       string `mapstructure:"APP_CORS_ORIGIN"`
 }
 
 type DatabaseConfig struct {
@@ -68,6 +69,7 @@ func NewConfig(v *viper.Viper) (*Config, error) {
 	v.BindEnv("APP_ENV")
 	v.BindEnv("APP_PORT")
 	v.BindEnv("APP_NAME")
+	v.BindEnv("APP_CORS_ORIGIN")
 	v.BindEnv("REDIS_HOST")
 	v.BindEnv("REDIS_PORT")
 	v.BindEnv("REDIS_PASSWORD")
