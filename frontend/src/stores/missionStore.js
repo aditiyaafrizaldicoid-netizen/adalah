@@ -309,9 +309,10 @@ export const STEP_TYPES = [
     ],
   },
   // ── Buoy Chase (Simple Tracking) ────────────────────────────────────────
-  // Versi permukaan-konfigurasi SEDERHANA dari SEQUENTIAL_BUOY di atas — cuma
-  // 2 field (throttle + filter jarak), TANPA target pass_count. Selesai
-  // OTOMATIS begitu buoy habis dari frame, sama seperti SEQUENTIAL_BUOY.
+  // Versi permukaan-konfigurasi SEDERHANA dari SEQUENTIAL_BUOY di atas — TANPA
+  // target pass_count. Selesai OTOMATIS begitu buoy habis dari frame, sama
+  // seperti SEQUENTIAL_BUOY, dan gerak penutupnya (durasi + miring kiri/kanan)
+  // bisa diatur di sini.
   // Delegasi penuh ke engine SEQUENTIAL_BUOY (safeguard pairing, TRANSITIONING,
   // safety timeout — semua sudah teruji lapangan lewat step itu).
   {
@@ -332,16 +333,41 @@ export const STEP_TYPES = [
         // Naikkan kalau kapal masih tertarik ke bola jauh, turunkan kalau
         // bola dekat yang sah malah ikut terbuang.
       },
+      // ── Perilaku saat buoy HABIS dari pandangan ────────────────────────
+      // Menggantikan field "Max Lean Duration Before Auto-Clear (s)" yang dulu
+      // ada di sini. Field itu SEBENARNYA mengatur hal lain — batas waktu
+      // condong paksa saat SATU bola dari gerbang yang sudah dikunci hilang —
+      // bukan perilaku "buoy sudah habis" seperti yang diduga. Ia tetap ada di
+      // panel Sequential Buoy; di sini dihapus dan jatuh ke default engine (20s).
       {
-        key: "transitioning_lean_timeout_sec",
-        label: "Max Lean Duration Before Auto-Clear (s)",
+        key: "blind_search_timeout_sec",
+        label: "Move Duration When No Buoy (s)",
         type: "number",
-        default: 20,
-        // Kalau salah satu bola hilang, kapal condong PAKSA ke arah bola yang
-        // hilang (kiri/kanan konstan) sampai bola tersisa JUGA hilang. Field
-        // ini batas waktu MAKSIMUM menahan condong itu sebelum dipaksa
-        // dianggap lewat — jaring pengaman kalau bola tersisa terus terdeteksi
-        // tanpa henti (false-positive statis).
+        default: 5,
+        // Lama kapal tetap BERGERAK saat tidak ada buoy sama sekali di frame.
+        // Dulu HARDCODED 5 detik dan tidak bisa diubah dari panel. Lewat durasi
+        // ini kapal BERHENTI (throttle 0) — jangan dibuat besar tanpa alasan,
+        // batas ini yang mencegah kapal melaju buta sampai keluar arena.
+      },
+      {
+        key: "blind_lean_percent",
+        label: "Move Lean % (-100 left .. +100 right)",
+        type: "number",
+        default: 0,
+        // Arah & besar miring selama bergerak buta itu: negatif = KIRI,
+        // positif = KANAN, 0 = maju lurus (perilaku lama). Kecepatannya ikut
+        // field Throttle di atas. Berguna untuk menyusul lintasan yang membelok
+        // setelah buoy terakhir lepas dari pandangan.
+      },
+      {
+        key: "no_detection_finish_sec",
+        label: "Finish Step After No Buoy (s)",
+        type: "number",
+        default: 15,
+        // Setelah sekian lama tanpa buoy, step dianggap SELESAI dan misi lanjut.
+        // WAJIB lebih besar dari "Move Duration" di atas — kalau tidak, step
+        // keburu selesai sebelum durasi geraknya habis dan miringnya tidak
+        // pernah terlihat penuh.
       },
       {
         key: "gate_balance_deadband",

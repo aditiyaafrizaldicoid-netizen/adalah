@@ -1475,6 +1475,13 @@ class MissionEngine:
                                     nilai ini ("terlalu jauh") diabaikan total, tidak
                                     dikejar maupun dikunci. Opsional, fallback ke
                                     SEQ_IGNORE_AREA_PX2.
+          step['blind_search_timeout_sec'] (float) — Lama kapal tetap BERGERAK saat tidak
+                                    ada buoy sama sekali di frame. Lewat durasi ini kapal
+                                    BERHENTI (throttle 0), tidak terus melaju buta.
+                                    Opsional, fallback ke SEQ_BLIND_SEARCH_TIMEOUT_SEC.
+          step['blind_lean_percent'] (float, -100..+100) — Arah & besar miring selama
+                                    bergerak buta itu: negatif KIRI, positif KANAN,
+                                    0 = lurus (perilaku lama). Lihat _blind_lean_steer().
 
         Selesai OTOMATIS begitu tidak ada buoy terdeteksi lagi di frame (tidak perlu
         target jumlah pasangan) — sama seperti perilaku default SEQUENTIAL_BUOY saat
@@ -1825,12 +1832,22 @@ class MissionEngine:
                         self._advance_step()
                         return 0.0, 0.0, "SEQUENTIAL_BUOY"
 
-                    if blind_duration > self.SEQ_BLIND_SEARCH_TIMEOUT_SEC:
+                    # Lama & arah gerak saat "buta" kini bisa diatur per-step.
+                    # Sebelumnya durasinya HARDCODED 5 detik dan arahnya selalu lurus,
+                    # sehingga operator tidak punya cara menyusul lintasan yang membelok
+                    # setelah buoy habis dari pandangan.
+                    blind_timeout = self._safe_float(
+                        step.get("blind_search_timeout_sec"), self.SEQ_BLIND_SEARCH_TIMEOUT_SEC)
+                    blind_steer = self._blind_lean_steer(step)
+
+                    if blind_duration > blind_timeout:
                         label = (f"SEQ_GATE:SEARCHING (blind {blind_duration:.1f}s, HOLD) "
                                  f"| SEQUENTIAL_BUOY (pair {pair_label})")
                         return 0.0, 0.0, label
-                    label = f"SEQ_GATE:SEARCHING (no target) | SEQUENTIAL_BUOY (pair {pair_label})"
-                    return 0.0, throttle, label
+                    lean_tag = f", miring {blind_steer * 100:+.0f}%" if blind_steer else ""
+                    label = (f"SEQ_GATE:SEARCHING (no target{lean_tag}) "
+                             f"| SEQUENTIAL_BUOY (pair {pair_label})")
+                    return blind_steer, throttle, label
 
         elif self._seq_gate_lock_state == self.GATE_LOCKED:
             # ── LOCKED ─────────────────────────────────────────────────
@@ -2338,6 +2355,26 @@ class MissionEngine:
         if self._bbox_area(best_ball) >= min_area_px2:
             return best_ball, best_color
         return None
+
+    def _blind_lean_steer(self, step: Dict) -> float:
+        """
+        Kemudi saat kapal bergerak "buta" — tidak ada buoy sama sekali di frame.
+
+        step['blind_lean_percent'] (-100..+100): negatif = miring KIRI, positif = miring
+        KANAN, 0 = maju lurus (perilaku lama). Dipakai bersama step['throttle'] sebagai
+        kecepatannya dan step['blind_search_timeout_sec'] sebagai lamanya.
+
+        Kenapa persen dan bukan derajat: nilainya diteruskan langsung sebagai steer
+        ternormalisasi (-1..+1) ke RC override, satuan yang sama dengan seluruh kemudi
+        di file ini. Derajat akan menyiratkan yaw rate yang dijamin, padahal di mode
+        MANUAL tidak ada yang menutup loop-nya — sudut sesungguhnya bergantung throttle,
+        arus, dan angin.
+
+        Nilai di luar rentang di-clamp, BUKAN ditolak: field ini diketik operator di
+        panel misi, dan salah ketik tidak boleh berujung kemudi liar.
+        """
+        percent = self._safe_float(step.get("blind_lean_percent"), 0.0)
+        return max(-1.0, min(1.0, percent / 100.0))
 
     @staticmethod
     def _lean_steer_for_missing(missing_color: str, magnitude: float) -> float:
