@@ -1,4 +1,5 @@
 import json
+import os
 import time
 import threading
 import websocket
@@ -29,9 +30,18 @@ class ASVWebSocketClient:
     - FC Disc    : { "type": "FC_DISCONNECTED" }
     """
 
-    def __init__(self, asv: ASVController, ws_url: str = "ws://10.196.68.119:3000/api/v1/ws/asv", video_streamer=None):
+    def __init__(self, asv: ASVController, ws_url: str = None, video_streamer=None):
         self.asv = asv
-        self.ws_url = ws_url
+        # Default lama adalah IP mentah dari jaringan yang sudah tidak ada
+        # ("ws://10.196.68.119:3000"). Kalau pemanggil lupa mengoper ws_url,
+        # klien diam-diam menembak alamat asing dan gagal tanpa sebab yang jelas.
+        # Sekarang jatuhnya ke ASV_WS_URL — sumber yang sama dengan main.py.
+        self.ws_url = ws_url or os.getenv("ASV_WS_URL")
+        if not self.ws_url:
+            raise ValueError(
+                "Alamat WebSocket base station tidak diketahui: oper ws_url, "
+                "atau isi ASV_WS_URL di flightcontrolAsv1/.env"
+            )
         self.video_streamer = video_streamer
         self.ws = None
         self._is_running = False

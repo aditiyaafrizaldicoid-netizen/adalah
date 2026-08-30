@@ -6,12 +6,21 @@ import numpy as np
 import numpy as np
 import requests
 class VideoStreamer:
-    def __init__(self, camera_index=0, width=640, height=480, fps=15, backend_url="http://172.16.51.69:3000/api/v1/video/upload", frame_callback=None, flip_horizontal=False):
+    def __init__(self, camera_index=0, width=640, height=480, fps=15, backend_url=None, frame_callback=None, flip_horizontal=False):
         self.camera_index = camera_index
         self.width = width
         self.height = height
         self.fps = fps
-        self.backend_url = backend_url
+        # Default lama adalah IP mentah dari jaringan yang sudah tidak ada
+        # ("http://172.16.51.69:3000"). Frame lalu diunggah ke alamat asing dan
+        # log dipenuhi connection error yang menuding host yang salah.
+        # Sekarang jatuhnya ke ASV_VIDEO_URL — sumber yang sama dengan main.py.
+        self.backend_url = backend_url or os.getenv("ASV_VIDEO_URL")
+        if not self.backend_url:
+            raise ValueError(
+                "Alamat upload video tidak diketahui: oper backend_url, "
+                "atau isi ASV_VIDEO_URL di flightcontrolAsv1/.env"
+            )
         self.frame_callback = frame_callback
         self.flip_horizontal = flip_horizontal
         self._is_running = False
