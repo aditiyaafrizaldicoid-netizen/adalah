@@ -1,10 +1,10 @@
 <script setup>
-import { ref, computed } from 'vue';
+import { ref, computed, onUnmounted } from 'vue';
 import { useMissionStore, STEP_TYPES, getStepTypeDef } from '@/stores/missionStore';
 import { useVesselStore } from '@/stores/vesselStore';
 import { useWebsocketStore } from '@/stores/websocketStore';
 import {
-  Flag, Play, Square, RotateCcw, Plus, Trash2, ChevronUp, ChevronDown,
+  Flag, Play, Square, RotateCcw, Plus, Trash2,
   ListOrdered, Cpu, Zap, Navigation, Camera, Anchor, CheckCircle2, Clock,
   AlertTriangle, FolderOpen, GripVertical, CircleStop, PauseCircle, Save,
   WifiOff, Send
@@ -82,6 +82,88 @@ function getStepStatus(idx) {
   if (status === 'RUNNING' && idx === mIdx) return 'active';
   return 'pending';
 }
+
+// ── Urut ulang langkah dengan tahan-lalu-geser ─────────────────────────────
+// Memakai Pointer Events, bukan HTML5 drag-and-drop: drag-and-drop bawaan HTML
+// tidak pernah aktif di layar sentuh, sementara ground station ini juga dipakai
+// dari ponsel. Pointer Events menyatukan mouse, sentuh, dan stylus dalam satu
+// jalur kode.
+const draggingIdx = ref(null);
+const stepListEl = ref(null);
+
+let autoScrollTimer = null;
+let autoScrollDir = 0;
+
+function beginReorder(idx, ev) {
+  if (mission.missionStatus === 'RUNNING') return;
+  if (!ev.isPrimary || (ev.pointerType === 'mouse' && ev.button !== 0)) return;
+  draggingIdx.value = idx;
+  // Pointer capture menjaga pointermove tetap terkirim ke gagang ini walau jari
+  // sudah bergeser jauh melewati kartu lain. Bisa melempar kalau pointer-nya
+  // sudah tidak aktif lagi — geseran tetap boleh lanjut, jangan sampai satu
+  // exception di sini membatalkan drag yang sudah dimulai.
+  try {
+    ev.currentTarget.setPointerCapture(ev.pointerId);
+  } catch {
+    /* tanpa capture, drag masih jalan selama pointer di atas daftar */
+  }
+}
+
+function onReorderMove(ev) {
+  if (draggingIdx.value === null) return;
+  ev.preventDefault();
+  updateAutoScroll(ev.clientY);
+
+  // Hit-test dokumen, bukan event.target: karena pointer sedang di-capture,
+  // event.target selalu gagang yang ditahan, bukan kartu yang sedang dilewati.
+  const over = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('[data-step-idx]');
+  if (!over) return;
+
+  const to = Number(over.dataset.stepIdx);
+  if (Number.isNaN(to) || to === draggingIdx.value) return;
+
+  mission.moveStep(draggingIdx.value, to);
+  draggingIdx.value = to;
+}
+
+function endReorder() {
+  draggingIdx.value = null;
+  stopAutoScroll();
+}
+
+// Tanpa ini, langkah tidak bisa dipindah melewati batas layar: daftarnya
+// scrollable, jadi tujuan pindah sering berada di luar area yang terlihat.
+function updateAutoScroll(clientY) {
+  const el = stepListEl.value;
+  if (!el) return;
+  const rect = el.getBoundingClientRect();
+  const EDGE = 48;
+
+  autoScrollDir = clientY < rect.top + EDGE ? -1
+                : clientY > rect.bottom - EDGE ? 1
+                : 0;
+
+  if (autoScrollDir === 0) return stopAutoScroll();
+  if (!autoScrollTimer) {
+    autoScrollTimer = setInterval(() => { el.scrollTop += autoScrollDir * 12; }, 16);
+  }
+}
+
+function stopAutoScroll() {
+  if (autoScrollTimer) clearInterval(autoScrollTimer);
+  autoScrollTimer = null;
+  autoScrollDir = 0;
+}
+
+// Panah kiri/kanan sudah dihapus dari layar, tapi gagangnya tetap bisa difokus
+// dengan Tab dan digeser pakai panah keyboard — supaya urutan masih bisa diubah
+// tanpa mouse atau layar sentuh.
+function onReorderKey(idx, delta) {
+  if (mission.missionStatus === 'RUNNING') return;
+  mission.moveStep(idx, idx + delta);
+}
+
+onUnmounted(stopAutoScroll);
 </script>
 
 <template>
@@ -195,8 +277,13 @@ function getStepStatus(idx) {
             </button>
 
             <!-- Step Type Picker Dropdown -->
+            <!-- max-h + overflow-y-auto: ada 13 jenis step (~640px), sementara
+                 kolom induknya overflow-hidden. Tanpa batas tinggi dan scroll
+                 sendiri, daftarnya terpotong dan pilihan paling bawah — termasuk
+                 FINISH — tidak pernah bisa dijangkau. overscroll-contain menahan
+                 scroll agar tidak merembet ke daftar step di belakangnya. -->
             <div v-if="showStepPicker"
-              class="absolute top-full left-0 right-0 mt-2 glass-card border border-(--border-primary) rounded-xl p-2 z-30 shadow-2xl space-y-1">
+              class="absolute top-full left-0 right-0 mt-2 glass-card border border-(--border-primary) rounded-xl p-2 z-30 shadow-2xl space-y-1 max-h-80 overflow-y-auto overscroll-contain">
               <button v-for="def in STEP_TYPES" :key="def.type"
                 @click="() => { mission.addStep(def.type); showStepPicker = false; }"
                 class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-all hover:scale-[1.01] text-left"
@@ -238,7 +325,7 @@ function getStepStatus(idx) {
         </div>
 
         <!-- Pipeline Steps List -->
-        <div class="flex-1 overflow-y-auto space-y-2 pr-1 min-h-0"
+        <div ref="stepListEl" class="flex-1 overflow-y-auto space-y-2 pr-1 min-h-0"
           @click.self="showStepPicker = false">
 
           <div v-if="!mission.steps.length"
@@ -250,11 +337,13 @@ function getStepStatus(idx) {
 
           <template v-else>
             <div v-for="(step, idx) in mission.steps" :key="step.id"
+              :data-step-idx="idx"
               class="relative rounded-xl border transition-all"
               :class="{
                 'border-success/60 bg-success/5 shadow-lg shadow-success/10': getStepStatus(idx) === 'done',
                 'border-primary/60 bg-primary/5 shadow-lg shadow-primary/10 ring-1 ring-primary/30': getStepStatus(idx) === 'active',
-                'border-(--border-subtle) bg-card/30': getStepStatus(idx) === 'pending'
+                'border-(--border-subtle) bg-card/30': getStepStatus(idx) === 'pending',
+                'ring-2 ring-primary opacity-70 shadow-2xl': draggingIdx === idx
               }">
               <div class="flex items-start gap-3 p-3">
                 <!-- Step number & status icon -->
@@ -308,21 +397,26 @@ function getStepStatus(idx) {
                 </div>
 
                 <!-- Actions -->
-                <div class="flex flex-col gap-1 flex-shrink-0">
-                  <button @click="mission.moveStep(idx, idx - 1)"
-                    :disabled="idx === 0 || mission.missionStatus === 'RUNNING'"
-                    class="p-1 rounded text-(--text-muted) hover:text-(--text-primary) disabled:opacity-20 hover:bg-card transition-all">
-                    <ChevronUp class="w-3 h-3" />
-                  </button>
-                  <button @click="mission.moveStep(idx, idx + 1)"
-                    :disabled="idx === mission.steps.length - 1 || mission.missionStatus === 'RUNNING'"
-                    class="p-1 rounded text-(--text-muted) hover:text-(--text-primary) disabled:opacity-20 hover:bg-card transition-all">
-                    <ChevronDown class="w-3 h-3" />
+                <div class="flex flex-col items-center gap-1 flex-shrink-0">
+                  <!-- touch-none (touch-action: none) wajib: tanpa itu, layar
+                       sentuh menafsirkan geseran sebagai scroll halaman dan
+                       kartunya tidak pernah ikut berpindah. -->
+                  <button type="button"
+                    :disabled="mission.missionStatus === 'RUNNING'"
+                    @pointerdown="beginReorder(idx, $event)"
+                    @pointermove="onReorderMove"
+                    @pointerup="endReorder"
+                    @pointercancel="endReorder"
+                    @keydown.up.prevent="onReorderKey(idx, -1)"
+                    @keydown.down.prevent="onReorderKey(idx, 1)"
+                    title="Tahan lalu geser untuk memindahkan langkah (atau fokus dan tekan panah atas/bawah)"
+                    class="p-1.5 rounded touch-none cursor-grab active:cursor-grabbing text-(--text-muted) hover:text-primary hover:bg-primary/10 focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-20 disabled:cursor-not-allowed transition-colors">
+                    <GripVertical class="w-4 h-4" />
                   </button>
                   <button @click="mission.removeStep(idx)"
                     :disabled="mission.missionStatus === 'RUNNING'"
-                    class="p-1 rounded text-(--text-muted) hover:text-primary disabled:opacity-20 hover:bg-primary/10 transition-all">
-                    <Trash2 class="w-3 h-3" />
+                    class="p-1.5 rounded text-(--text-muted) hover:text-primary disabled:opacity-20 hover:bg-primary/10 transition-all">
+                    <Trash2 class="w-3.5 h-3.5" />
                   </button>
                 </div>
               </div>
