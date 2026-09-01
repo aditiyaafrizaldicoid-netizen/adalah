@@ -275,9 +275,22 @@ def main():
         else:
             # ---- Mission IDLE / PAUSED / FINISHED ----
             state = "IDLE"
-            _osd["last_label"] = None
-            # Netralkan kemudi & hentikan motor saat tidak ada mission aktif
-            asv.send_manual_rc_drive(0.0, 0.0)
+            # Netralkan kemudi & hentikan motor saat tidak ada mission aktif —
+            # KECUALI saat operator sedang mengemudikan kapal dari halaman Manual
+            # Control. MANUAL_CONTROL dan RC override menulis ke slot override yang
+            # SAMA di ArduPilot, jadi netral 25 Hz di sini akan menenggelamkan
+            # perintah joystick yang cuma 10 Hz: stik bergerak, kapal diam.
+            #
+            # Jendela teleop-nya pendek (lihat ASVController.TELEOP_ACTIVE_WINDOW_SEC),
+            # jadi begitu operator melepas stik — atau tab browsernya tertutup —
+            # netral di bawah ini langsung jalan lagi dan kapal berhenti.
+            if not asv.teleop_active():
+                asv.send_manual_rc_drive(0.0, 0.0)
+            else:
+                state = "TELEOP"
+                _throttled_print("teleop_active",
+                    "[MANUAL] 🎮 Base station memegang kemudi — netral RC ditahan.")
+            _osd["last_label"] = state if state == "TELEOP" else None
 
         # Catat log blackbox
         error_px = gate_x - camera_width // 2 if gate_x is not None else None

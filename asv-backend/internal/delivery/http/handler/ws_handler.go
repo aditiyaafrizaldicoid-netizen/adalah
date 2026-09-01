@@ -1,10 +1,15 @@
 package handler
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"log"
+	"strings"
+	"time"
 
+	"go-fiber-template/internal/config"
 	"go-fiber-template/internal/service"
+	"go-fiber-template/internal/utils"
 
 	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
@@ -12,25 +17,92 @@ import (
 
 type WSHandler struct {
 	hub              *WSHub
+	cfg              *config.Config
 	configService    service.AsvConfigService
 	pidConfigService service.PidConfigService
 }
 
-func NewWSHandler(hub *WSHub, configService service.AsvConfigService, pidConfigService service.PidConfigService) *WSHandler {
+func NewWSHandler(hub *WSHub, cfg *config.Config, configService service.AsvConfigService, pidConfigService service.PidConfigService) *WSHandler {
 	return &WSHandler{
 		hub:              hub,
+		cfg:              cfg,
 		configService:    configService,
 		pidConfigService: pidConfigService,
 	}
 }
 
-// Upgrade middleware
+// Upgrade memutuskan siapa yang boleh membuka WebSocket, dan — untuk klien web —
+// apakah koneksi itu boleh MENGIRIM PERINTAH atau hanya menerima telemetri.
+//
+// Dua jalur dengan aturan berbeda, karena kliennya memang beda sifat:
+//
+//   - /ws/asv    : Mini PC kapal. Tidak pernah login, jadi dipagari kunci bersama
+//     ASV_WS_TOKEN. Kalau kunci itu tidak diisi di server, jalur ini
+//     tetap terbuka seperti sebelumnya (lihat AppConfig.AsvToken).
+//   - /ws/client : Browser. Koneksi TANPA token tetap diterima supaya panel Juri
+//     yang baca-saja bisa dibuka tanpa login — tapi ditandai belum
+//     terautentikasi, dan HandleWeb menolak meneruskan perintahnya
+//     ke kapal.
+//
+// Token dikirim lewat query string karena browser tidak bisa menambahkan header
+// Authorization pada handshake WebSocket. Konsekuensinya token ikut tercatat di
+// access log reverse proxy — pastikan umur JWT tetap pendek.
 func (h *WSHandler) Upgrade(c *fiber.Ctx) error {
-	if websocket.IsWebSocketUpgrade(c) {
-		c.Locals("allowed", true)
+	if !websocket.IsWebSocketUpgrade(c) {
+		return fiber.ErrUpgradeRequired
+	}
+	c.Locals("allowed", true)
+
+	token := c.Query("token")
+
+	if strings.HasSuffix(c.Path(), "/asv") {
+		expected := h.cfg.App.AsvToken
+		if expected != "" && subtle.ConstantTimeCompare([]byte(token), []byte(expected)) != 1 {
+			log.Printf("[WSHandler] Koneksi /ws/asv ditolak: ASV_WS_TOKEN tidak cocok (ip=%s)", c.IP())
+			return fiber.NewError(fiber.StatusUnauthorized, "invalid ASV token")
+		}
 		return c.Next()
 	}
-	return fiber.ErrUpgradeRequired
+
+	if token != "" {
+		claims, err := utils.ValidateJWT(token, h.cfg.JWT.Secret)
+		if err == nil {
+			c.Locals("ws_authed", true)
+			c.Locals("ws_role", claims["role"])
+		} else {
+			log.Printf("[WSHandler] Token /ws/client tidak valid, koneksi jadi baca-saja: %v", err)
+		}
+	}
+
+	return c.Next()
+}
+
+// isPingMessage melaporkan apakah pesan ini sekadar keepalive PING dari browser.
+// Dipisah supaya gerbang perintah di HandleWeb tetap terbaca sebagai satu aturan
+// ("selain PING, butuh autentikasi") alih-alih memparsing JSON dua kali di sana.
+func isPingMessage(msg []byte) bool {
+	var probe struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(msg, &probe); err != nil {
+		return false
+	}
+	return probe.Type == "PING"
+}
+
+// sendToConn mengirim satu pesan JSON ke SATU koneksi — beda dari helper di
+// ws_hub.go yang selalu menyiarkan ke semua klien. Dipakai untuk memberi tahu
+// pengirim bahwa perintahnya ditolak, tanpa memunculkan peringatan itu di layar
+// operator lain yang tidak melakukan apa-apa.
+func sendToConn(c *websocket.Conn, payload map[string]interface{}) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("[WSHandler] Gagal marshal pesan: %v", err)
+		return
+	}
+	if err := c.WriteMessage(websocket.TextMessage, data); err != nil {
+		log.Printf("[WSHandler] Gagal mengirim pesan ke klien: %v", err)
+	}
 }
 
 // Handle ASV connection
@@ -162,6 +234,14 @@ func (h *WSHandler) HandleWeb(c *websocket.Conn) {
 	h.hub.Register(client)
 	defer h.hub.Unregister(client)
 
+	// Ditetapkan sekali saat handshake oleh Upgrade(). Koneksi tanpa token tetap
+	// menerima seluruh telemetri (panel Juri butuh itu) tapi perintahnya tidak
+	// pernah sampai ke kapal.
+	authed, _ := c.Locals("ws_authed").(bool)
+	if !authed {
+		log.Printf("[WSHandler] Klien web baca-saja terhubung (tanpa token yang valid)")
+	}
+
 	// Jika saat ini tidak ada ASV terhubung, beri tahu Web client ini
 	if !h.hub.HasASVClient() {
 		h.hub.BroadcastWarningToWeb(
@@ -178,6 +258,27 @@ func (h *WSHandler) HandleWeb(c *websocket.Conn) {
 			break
 		}
 		if mt == websocket.TextMessage {
+			// Gerbang perintah. PING dibiarkan lewat supaya indikator latency di
+			// panel Juri tetap hidup; selebihnya — COMMAND apa pun, termasuk arm,
+			// set_mode, dan start_mission — ditolak di sini.
+			//
+			// Penolakannya SENGAJA dibalas ke pengirim, bukan didiamkan: kalau
+			// access token operator kedaluwarsa di tengah lomba, tombol-tombol
+			// akan berhenti bekerja tanpa sebab yang terlihat. Lebih baik dia
+			// membaca "sesi habis, login ulang" daripada menebak kapalnya rusak.
+			if !authed && !isPingMessage(msg) {
+				sendToConn(c, map[string]interface{}{
+					"type": "WARNING",
+					"payload": map[string]interface{}{
+						"level":     "warning",
+						"code":      "COMMAND_REJECTED",
+						"message":   "Perintah ditolak: sesi tidak terautentikasi. Login ulang di base station untuk mengendalikan kapal.",
+						"timestamp": time.Now().UnixMilli(),
+					},
+				})
+				continue
+			}
+
 			// Intercept update_pid to persist in Database
 			var payload map[string]interface{}
 			if err := json.Unmarshal(msg, &payload); err == nil {

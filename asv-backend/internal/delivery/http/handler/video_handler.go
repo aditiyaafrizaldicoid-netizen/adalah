@@ -2,11 +2,14 @@ package handler
 
 import (
 	"bufio"
+	"crypto/subtle"
 	"io"
 	"log"
 	"strconv"
 	"sync"
 	"time"
+
+	"go-fiber-template/internal/config"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -15,10 +18,11 @@ type VideoHandler struct {
 	mu          sync.RWMutex
 	latestFrame []byte
 	cond        *sync.Cond
+	cfg         *config.Config
 }
 
-func NewVideoHandler() *VideoHandler {
-	vh := &VideoHandler{}
+func NewVideoHandler(cfg *config.Config) *VideoHandler {
+	vh := &VideoHandler{cfg: cfg}
 	vh.cond = sync.NewCond(&vh.mu)
 
 	// Optional: Broadcast periodically so clients don't hang if no frames
@@ -34,8 +38,22 @@ func NewVideoHandler() *VideoHandler {
 	return vh
 }
 
-// UploadFrame receives raw JPEG bytes from the Python ASV client
+// UploadFrame receives raw JPEG bytes from the Python ASV client.
+//
+// Dipagari kunci bersama yang sama dengan /ws/asv (ASV_WS_TOKEN): tanpa itu, siapa
+// pun yang bisa menjangkau backend dapat menyuntikkan gambar ke feed yang dilihat
+// operator dan juri. Kunci dikirim lewat header X-ASV-Token supaya tidak ikut
+// tercatat di access log seperti query string. Kalau ASV_WS_TOKEN tidak diisi di
+// server, endpoint ini tetap terbuka seperti sebelumnya — lihat AppConfig.AsvToken.
 func (h *VideoHandler) UploadFrame(c *fiber.Ctx) error {
+	if expected := h.cfg.App.AsvToken; expected != "" {
+		got := c.Get("X-ASV-Token")
+		if subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
+			log.Printf("Frame upload ditolak: X-ASV-Token tidak cocok (ip=%s)", c.IP())
+			return c.SendStatus(fiber.StatusUnauthorized)
+		}
+	}
+
 	var frame []byte
 	file, err := c.FormFile("frame")
 	if err == nil {

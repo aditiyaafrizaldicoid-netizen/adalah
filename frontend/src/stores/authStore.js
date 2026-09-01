@@ -1,11 +1,29 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
-import { API_BASE } from "@/config/api";
+import { API_BASE, TOKEN_KEY } from "@/config/api";
 
-// Kunci localStorage — dipakai juga oleh router guard saat auth diaktifkan.
-const TOKEN_KEY = "asv_access_token";
+// Kunci localStorage — TOKEN_KEY dipusatkan di config/api.js karena router guard
+// dan websocketStore ikut membacanya.
 const REFRESH_KEY = "asv_refresh_token";
 const USER_KEY = "asv_user";
+
+/**
+ * Sambung ulang WebSocket setelah hak akses berubah.
+ *
+ * Backend menetapkan boleh-tidaknya sebuah koneksi mengirim perintah SEKALI saat
+ * handshake, dari token di query string. Koneksi yang dibuka App.vue sebelum login
+ * karena itu bersifat baca-saja selamanya — tombol ARM dan misi akan diam saja
+ * sampai koneksinya dibuka ulang membawa token yang baru.
+ *
+ * Lazy import: authStore dimuat router guard saat aplikasi mulai, sedangkan
+ * websocketStore menarik vesselStore & missionStore. Impor statis di sini membuat
+ * rantai itu ikut dievaluasi lebih awal dari yang diperlukan.
+ */
+function refreshSocketAuth() {
+  import("./websocketStore")
+    .then(({ useWebsocketStore }) => useWebsocketStore().reconnect())
+    .catch((e) => console.warn("[auth] Gagal menyambung ulang WebSocket:", e));
+}
 
 function readUser() {
   try {
@@ -72,6 +90,7 @@ export const useAuthStore = defineStore("auth", () => {
       refreshToken.value = body.data.refresh_token;
       user.value = body.data.user;
       persist();
+      refreshSocketAuth();
       return true;
     } catch (e) {
       // fetch melempar TypeError kalau server tidak bisa dihubungi sama sekali —
@@ -90,6 +109,9 @@ export const useAuthStore = defineStore("auth", () => {
   async function logout() {
     const token = refreshToken.value;
     clearSession();
+    // Cabut juga hak kirim perintah pada koneksi yang sedang terbuka — tanpa ini
+    // tab yang sudah logout masih bisa meng-ARM kapal sampai socketnya putus.
+    refreshSocketAuth();
     if (!token) return;
     try {
       await fetch(`${API_BASE}/api/v1/auth/logout`, {
@@ -137,6 +159,7 @@ export const useAuthStore = defineStore("auth", () => {
       accessToken.value = body.data.access_token;
       refreshToken.value = body.data.refresh_token;
       persist();
+      refreshSocketAuth();
       return true;
     } catch {
       return false;

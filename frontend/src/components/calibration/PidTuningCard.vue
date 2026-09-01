@@ -2,7 +2,7 @@
 import { ref, onMounted } from 'vue';
 import { Sliders, Save, CheckCircle2, RefreshCw } from 'lucide-vue-next';
 import { useWebsocketStore } from '@/stores/websocketStore';
-import { apiUrl } from '@/config/api';
+import { apiUrl, authHeaders } from '@/config/api';
 
 const wsStore = useWebsocketStore();
 
@@ -55,7 +55,7 @@ const applyTuning = async () => {
   try {
     await fetch(apiUrl('/api/v1/pid-config'), {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({
         kp: kp.value,
         ki: ki.value,

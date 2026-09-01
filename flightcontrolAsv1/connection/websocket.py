@@ -7,6 +7,27 @@ from core.client import ASVController
 from control import manual_source
 
 
+def _with_asv_token(url: str) -> str:
+    """
+    Sisipkan ASV_WS_TOKEN ke query string kalau kunci itu diisi di .env.
+
+    Kunci ini memagari /ws/asv di backend: tanpa itu siapa pun yang bisa menjangkau
+    base station dapat menyamar sebagai kapal dan menyuntikkan telemetri palsu.
+    Dipakai lewat query string karena handshake WebSocket tidak membawa header
+    Authorization — sisi Go memeriksanya di WSHandler.Upgrade().
+
+    KOSONG = tidak disisipkan apa-apa, dan backend yang juga tidak menyetel
+    ASV_WS_TOKEN akan menerima koneksi seperti sebelumnya. Itu disengaja supaya
+    kapal yang belum di-deploy ulang tidak mendadak gagal konek; isi di KEDUA sisi
+    untuk mengaktifkan pemeriksaannya.
+    """
+    token = os.getenv("ASV_WS_TOKEN", "").strip()
+    if not token:
+        return url
+    from urllib.parse import quote
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}token={quote(token, safe='')}"
+
 
 class ASVWebSocketClient:
     """
@@ -42,6 +63,7 @@ class ASVWebSocketClient:
                 "Alamat WebSocket base station tidak diketahui: oper ws_url, "
                 "atau isi ASV_WS_URL di flightcontrolAsv1/.env"
             )
+        self.ws_url = _with_asv_token(self.ws_url)
         self.video_streamer = video_streamer
         self.ws = None
         self._is_running = False
@@ -575,21 +597,50 @@ class ASVWebSocketClient:
 
     def _execute_emergency_stop(self, reason: str = "unknown"):
         """
-        Hentikan kapal SEGERA: lepaskan semua RC override dan hentikan gerak.
-        Kemudian kirim WARNING ke base station.
+        Hentikan kapal SEGERA, lalu kabari base station.
+
+        URUTAN DI BAWAH INI PENTING — jangan dibalik:
+
+          1. ABORT MISI DULU. Ini bagian yang dulu hilang dan membuat seluruh fungsi
+             ini praktis tidak berefek: selama misi masih RUNNING, main.py mengirim
+             RC override baru ke thruster SETIAP FRAME (~25 Hz) dari
+             mission_engine.update_frame(). stop_movement() saja cuma mengirim
+             velocity 0 lewat jalur GUIDED, dan frame berikutnya langsung merebut
+             throttle kembali sebelum kapal sempat melambat. Begitu status bukan
+             RUNNING lagi, main.py pindah ke cabang idle yang menahan kemudi netral.
+          2. stop_movement() untuk step yang memang berjalan di GUIDED.
+          3. Netralkan RC secara eksplisit, supaya kapal berhenti pada paket ini juga
+             dan tidak menunggu frame kamera berikutnya. Sengaja TIDAK diblokir oleh
+             gerbang apa pun: perintah ini hanya bisa menghentikan, tidak pernah
+             menggerakkan (lihat ASVController.stop_movement).
+
+        CATATAN: kalau operator sedang mengemudikan kapal dari halaman Manual Control
+        saat ini dipanggil, perintah joystick berikutnya (dalam <100 ms) akan mengambil
+        kemudi kembali. Itu memang disengaja — misinya sudah dibatalkan, dan kapal yang
+        sedang dipegang manusia tidak boleh direbut paksa oleh kegagalan sensor.
         """
         try:
-            # Stop movement (set velocity = 0 via MAVLink)
+            # 1. Batalkan misi yang sedang berjalan — TANPA ini, langkah 2 & 3 di
+            #    bawah akan langsung ditimpa oleh frame misi berikutnya.
+            if self.mission_engine and self.mission_engine.status == "RUNNING":
+                self.mission_engine.abort_mission()
+                print(f"[WS] ⛔ Misi di-ABORT oleh emergency stop. Alasan: {reason}")
+                self.send_mission_status(self.mission_engine.get_status_dict())
+
+            # 2. Hentikan gerak lewat jalur GUIDED (velocity = 0).
             self.asv.stop_movement()
+
+            # 3. Netralkan kemudi & throttle lewat jalur MANUAL (RC override).
+            self.asv.send_manual_rc_drive(0.0, 0.0)
 
             print(f"[WS] ⛔ EMERGENCY STOP dieksekusi. Alasan: {reason}")
 
-
-            # 3. Kirim WARNING ke base station agar operator tahu
+            # 4. Kirim WARNING ke base station agar operator tahu
             self._send_warning(
                 level="critical",
                 code="EMERGENCY_STOP_EXECUTED",
-                message=f"⛔ EMERGENCY STOP dieksekusi di kapal! Alasan: {reason}. Semua thruster dimatikan."
+                message=f"⛔ EMERGENCY STOP dieksekusi di kapal! Alasan: {reason}. "
+                        f"Misi dibatalkan dan semua thruster dimatikan."
             )
         except Exception as e:
             print(f"[WS] Error saat emergency stop: {e}")

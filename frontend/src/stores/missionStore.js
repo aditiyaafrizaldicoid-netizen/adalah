@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { ref, computed, onMounted } from "vue";
 import { useWebsocketStore } from "./websocketStore";
-import { apiUrl } from "@/config/api";
+import { apiUrl, authHeaders } from "@/config/api";
 
 // ─── Step Type Definitions ───────────────────────────────────────────────────
 export const STEP_TYPES = [
@@ -784,7 +784,7 @@ export const useMissionStore = defineStore("mission", () => {
     try {
       const res = await fetch(apiUrl("/api/v1/mission-presets"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({
           name: name,
           steps: JSON.stringify(steps.value),
@@ -804,6 +804,7 @@ export const useMissionStore = defineStore("mission", () => {
     try {
       const res = await fetch(apiUrl(`/api/v1/mission-presets/${dbId}`), {
         method: "DELETE",
+        headers: authHeaders(),
       });
       if (res.ok) {
         await fetchPresets();

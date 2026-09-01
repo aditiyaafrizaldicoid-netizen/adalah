@@ -21,6 +21,11 @@ class VideoStreamer:
                 "Alamat upload video tidak diketahui: oper backend_url, "
                 "atau isi ASV_VIDEO_URL di flightcontrolAsv1/.env"
             )
+        # Kunci bersama untuk /video/upload. Kosong = tidak dikirim, dan backend yang
+        # juga tidak menyetel ASV_WS_TOKEN akan menerima frame seperti sebelumnya.
+        # Lihat _with_asv_token() di connection/websocket.py.
+        self._asv_token = os.getenv("ASV_WS_TOKEN", "").strip()
+
         self.frame_callback = frame_callback
         self.flip_horizontal = flip_horizontal
         self._is_running = False
@@ -355,6 +360,12 @@ class VideoStreamer:
                             files = {'frame': ('frame.jpg', encimg.tobytes(), 'image/jpeg')}
                             if not hasattr(self, 'session'):
                                 self.session = requests.Session()
+                                # Kunci bersama yang sama dengan /ws/asv, dipasang
+                                # sekali di session supaya tidak dirakit ulang tiap
+                                # frame. Lewat header, bukan query string, agar tidak
+                                # ikut tercatat di access log reverse proxy.
+                                if self._asv_token:
+                                    self.session.headers['X-ASV-Token'] = self._asv_token
                             response = self.session.post(self.backend_url, files=files, timeout=(1.0, 2.0))
                             if response.status_code != 200:
                                 print(f"[VideoStream] Backend error: {response.status_code} - {response.text}")

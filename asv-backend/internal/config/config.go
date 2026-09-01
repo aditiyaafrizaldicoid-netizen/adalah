@@ -20,6 +20,16 @@ type AppConfig struct {
 	Name       string `mapstructure:"APP_NAME"`
 	Showroutes bool   `mapstructure:"APP_SHOW_ROUTES"`
 	Cors       string `mapstructure:"APP_CORS_ORIGIN"`
+
+	// Kunci bersama untuk Mini PC kapal: dipakai /ws/asv dan /video/upload, yang
+	// tidak bisa memakai JWT karena klien Python-nya tidak pernah login.
+	//
+	// Kalau KOSONG, kedua endpoint itu tetap terbuka seperti sebelumnya. Ini
+	// disengaja: kapal adalah perangkat fisik terpisah yang harus di-deploy ulang,
+	// dan mewajibkan token sebelum flightcontrolAsv1/.env di kapal diperbarui akan
+	// membuat kapal tidak bisa konek sama sekali. Isi ASV_WS_TOKEN di kedua sisi
+	// untuk mengaktifkannya.
+	AsvToken string `mapstructure:"ASV_WS_TOKEN"`
 }
 
 type DatabaseConfig struct {
@@ -70,6 +80,7 @@ func NewConfig(v *viper.Viper) (*Config, error) {
 	v.BindEnv("APP_PORT")
 	v.BindEnv("APP_NAME")
 	v.BindEnv("APP_CORS_ORIGIN")
+	v.BindEnv("ASV_WS_TOKEN")
 	v.BindEnv("REDIS_HOST")
 	v.BindEnv("REDIS_PORT")
 	v.BindEnv("REDIS_PASSWORD")

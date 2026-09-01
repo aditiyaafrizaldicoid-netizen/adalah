@@ -138,14 +138,14 @@ export const useArenaStore = defineStore("arena", () => {
         // Update existing
         res = await fetch(`${API_BASE}/api/v1/arenas/${activeArena.value.id}`, {
           method: "PUT",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...authHeaders() },
           body: JSON.stringify(payload),
         });
       } else {
         // Create new
         res = await fetch(`${API_BASE}/api/v1/arenas`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...authHeaders() },
           body: JSON.stringify(payload),
         });
       }
@@ -166,7 +166,7 @@ export const useArenaStore = defineStore("arena", () => {
 
   async function deleteArena(id) {
     try {
-      const res = await fetch(`${API_BASE}/api/v1/arenas/${id}`, { method: "DELETE" });
+      const res = await fetch(`${API_BASE}/api/v1/arenas/${id}`, { method: "DELETE", headers: authHeaders() });
       const json = await res.json();
       if (json.status === "success") {
         await fetchArenas();

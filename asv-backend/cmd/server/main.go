@@ -100,8 +100,8 @@ func main() {
 	healthHandler := handler.NewHealthHandler(db, redisClient)
 
 	wsHub := handler.NewWSHub()
-	wsHandler := handler.NewWSHandler(wsHub, asvConfigService, pidConfigService)
-	videoHandler := handler.NewVideoHandler()
+	wsHandler := handler.NewWSHandler(wsHub, cfg, asvConfigService, pidConfigService)
+	videoHandler := handler.NewVideoHandler(cfg)
 	calibHandler := handler.NewCalibrationProfileHandler(calibService)
 	pidConfigHandler := handler.NewPidConfigHandler(pidConfigService)
 	missionPresetHandler := handler.NewMissionPresetHandler(missionPresetService)

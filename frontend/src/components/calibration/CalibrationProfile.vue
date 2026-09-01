@@ -2,7 +2,7 @@
 import { ref, onMounted } from 'vue';
 import { Save, FolderOpen, Download, Trash2, Plus, RefreshCw } from 'lucide-vue-next';
 
-import { API_BASE } from '@/config/api';
+import { API_BASE, authHeaders } from '@/config/api';
 
 const profiles = ref([]);
 const loading = ref(false);
@@ -28,7 +28,7 @@ async function saveProfile() {
   try {
     const res = await fetch(`${API_BASE}/api/v1/calibration/profiles`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ name: newProfileName.value.trim(), is_default: false })
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -64,7 +64,7 @@ async function importFromFile() {
       const data = JSON.parse(text);
       const res = await fetch(`${API_BASE}/api/v1/calibration/profiles`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ name: data.name || file.name, ...data })
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

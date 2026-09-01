@@ -39,7 +39,7 @@ async function handleDownload(filename) {
 async function handleDelete(filename) {
   if (!confirm(`Hapus sesi "${filename}"?`)) return;
   try {
-    const res = await fetch(`${API_BASE}/api/v1/sessions/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+    const res = await fetch(`${API_BASE}/api/v1/sessions/${encodeURIComponent(filename)}`, { method: 'DELETE', headers: authHeaders() });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     sessions.value = sessions.value.filter(s => s.filename !== filename);
   } catch (e) {

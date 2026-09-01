@@ -2,7 +2,7 @@
 import { Camera, Sun, Contrast, Sliders, CheckCircle2, AlertTriangle, ScanEye, Save, RefreshCw, Maximize2 } from 'lucide-vue-next';
 import { ref, reactive, onMounted } from 'vue';
 import { useWebsocketStore } from '@/stores/websocketStore';
-import { apiUrl } from '@/config/api';
+import { apiUrl, authHeaders } from '@/config/api';
 
 const ws = useWebsocketStore();
 
@@ -51,7 +51,7 @@ const applyResolutionSettings = async () => {
   try {
     const res = await fetch(apiUrl('/api/v1/pid-config'), {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ camera_width: cameraWidth.value, camera_height: cameraHeight.value }),
     });
     // fetch() only rejects on network failure -- an HTTP error status (4xx/5xx)
@@ -108,7 +108,7 @@ const applyDetectionSettings = async () => {
   try {
     const res = await fetch(apiUrl('/api/v1/pid-config'), {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ min_detection_area_px2: minDetectionAreaPx2.value }),
     });
     // fetch() only rejects on network failure -- an HTTP error status (4xx/5xx)

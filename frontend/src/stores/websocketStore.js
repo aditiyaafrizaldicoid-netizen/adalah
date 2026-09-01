@@ -2,7 +2,10 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 import { useVesselStore } from "./vesselStore";
 import { useMissionStore } from "./missionStore";
-import { WS_URL } from "@/config/api";
+// Token dibaca langsung dari localStorage, bukan lewat useAuthStore(): authStore
+// justru memanggil reconnect() di sini setelah login/logout, dan saling-impor di
+// antara keduanya akan melingkar.
+import { wsUrl, TOKEN_KEY } from "@/config/api";
 
 export const useWebsocketStore = defineStore("websocket", () => {
   const vesselStore = useVesselStore();
@@ -19,12 +22,37 @@ export const useWebsocketStore = defineStore("websocket", () => {
   let pingInterval = null;
   let _url = null;
 
-  function connect(url = WS_URL) {
-    _url = url;
+  /**
+   * Buka koneksi ke base station.
+   *
+   * @param {string} [url] - Alamat penuh, hanya untuk keperluan uji. Kalau tidak
+   *   diisi, alamatnya dibangun ulang SETIAP kali dari token yang berlaku saat itu
+   *   — bukan dipakai ulang dari koneksi sebelumnya. Itu yang membuat reconnect()
+   *   setelah login langsung membawa token baru, dan setelah logout membuang
+   *   token lama.
+   */
+  function connect(url = null) {
+    // Tutup koneksi lama dulu. Tanpa ini, connect() yang dipanggil dua kali
+    // (mis. login saat sudah tersambung sebagai baca-saja) meninggalkan socket
+    // menggantung yang masih memicu onclose dan menjadwalkan reconnect-nya sendiri.
+    if (socket.value) {
+      const stale = socket.value;
+      socket.value = null;
+      stale.onopen = stale.onmessage = stale.onerror = stale.onclose = null;
+      try { stale.close(); } catch { /* sudah tertutup */ }
+    }
+    stopPing();
+
+    _url = url || wsUrl(localStorage.getItem(TOKEN_KEY) || "");
+    if (!_url) {
+      status.value = "ERROR";
+      console.error("[WS] Alamat WebSocket kosong — VITE_API_URL belum diset.");
+      return;
+    }
     status.value = "CONNECTING";
 
     try {
-      socket.value = new WebSocket(url);
+      socket.value = new WebSocket(_url);
 
       socket.value.onopen = () => {
         status.value = "CONNECTED";
@@ -113,7 +141,9 @@ export const useWebsocketStore = defineStore("websocket", () => {
         status.value = "DISCONNECTED";
         stopPing();
         if (autoReconnect.value) {
-          setTimeout(() => connect(_url), 3000);
+          // connect() tanpa argumen: token dibaca ulang saat itu juga, sehingga
+          // sesi yang di-refresh saat koneksi putus tetap terbawa.
+          setTimeout(() => connect(), 3000);
         }
       };
 
@@ -257,10 +287,22 @@ export const useWebsocketStore = defineStore("websocket", () => {
     if (socket.value) socket.value.close();
   }
 
+  /**
+   * Sambung ulang dengan token yang berlaku sekarang.
+   *
+   * Dipanggil authStore setelah login dan logout: hak mengirim perintah ditetapkan
+   * backend SEKALI saat handshake, jadi koneksi yang dibuka sebelum login akan
+   * tetap baca-saja selamanya sampai dibuka ulang.
+   */
+  function reconnect() {
+    autoReconnect.value = true;
+    connect();
+  }
+
   return {
     socket, status, latency, lastMessage, autoReconnect,
     imuCalibrationStatus,
-    connect, disconnect, sendCommand,
+    connect, disconnect, reconnect, sendCommand,
     startRecording, stopRecording, toggleRecording,
     startStreaming, stopStreaming, toggleStreaming,
     saveCurrentWaypoint, uploadMission, loadMissionToASV, setRelativeWaypoints, updatePid,

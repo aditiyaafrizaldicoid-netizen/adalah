@@ -51,6 +51,11 @@ class ASVController:
         self._manual_source_lock = threading.RLock()
         self._remote_block_last_log = 0.0
 
+        # Kapan terakhir base station mengemudikan kapal lewat joystick/keyboard
+        # (MANUAL_CONTROL). Dipakai main.py untuk berhenti mengirim netral RC tiap
+        # frame selama operator sedang memegang kemudi — lihat teleop_active().
+        self._last_teleop_at = 0.0
+
     @property
     def nav(self) -> 'NavigationControl':
         """Alias publik ke NavigationControl — dipakai oleh MissionEngine untuk send_velocity."""
@@ -243,6 +248,13 @@ class ASVController:
     RELEASE_REPEAT = 3
     RELEASE_INTERVAL_SEC = 0.1
 
+    # Berapa lama sebuah perintah joystick/keyboard dari base station dianggap masih
+    # "sedang berlangsung". Harus LEBIH BESAR dari jeda kirim halaman Manual Control
+    # (10 Hz = 100 ms) supaya jendelanya tidak putus-nyambung di sela dua perintah,
+    # tapi tetap jauh di bawah RC_OVERRIDE_TIME ArduPilot (default 3 detik) supaya
+    # kapal kembali ditahan netral jauh sebelum override-nya kedaluwarsa sendiri.
+    TELEOP_ACTIVE_WINDOW_SEC = 1.0
+
     def get_manual_source(self) -> str:
         """Sumber kendali manual yang sedang aktif: 'minipc' atau 'remote'."""
         with self._manual_source_lock:
@@ -334,10 +346,37 @@ class ASVController:
         """
         Mengirim pesan MANUAL_CONTROL MAVLink dari Joystick/Gamepad.
         x: Throttle (-1000..1000), y: Steering (-1000..1000), z: Thrust (0..1000), r: Yaw (-1000..1000)
+
+        Setiap panggilan yang lolos gerbang remote menandai teleop sebagai AKTIF
+        (lihat teleop_active()), supaya main.py berhenti menimpa kemudi operator
+        dengan netral RC tiap frame.
         """
         if self._blocked_by_remote("send_manual_control"):
             return False
+        # Ditandai SEBELUM pengiriman, bukan sesudah: kalau paket gagal terkirim,
+        # operator TETAP sedang memegang kemudi, dan menimpanya dengan netral RC
+        # justru membuat gejalanya makin membingungkan (stik bergerak, kapal diam).
+        self._last_teleop_at = time.time()
         return self._motion.send_manual_control(x, y, z, r, buttons)
+
+    def teleop_active(self, window_sec: float = None) -> bool:
+        """
+        True kalau base station BARU SAJA mengirim perintah joystick/keyboard.
+
+        KENAPA ADA (bug nyata): main.py mengirim send_manual_rc_drive(0, 0) tiap
+        frame (~25 Hz) selama misi tidak RUNNING, sementara halaman Manual Control
+        mengirim MANUAL_CONTROL hanya 10 Hz. Keduanya berujung pada slot override RC
+        yang SAMA di ArduPilot, jadi netral yang lebih cepat itu praktis selalu
+        menang — stik bergerak di layar tapi kapal diam atau cuma tersentak.
+
+        Jendela waktunya sengaja pendek: begitu operator melepas stik atau tab
+        browsernya tertutup, teleop kembali tidak aktif dalam <1 detik dan main.py
+        langsung melanjutkan netral RC. Jadi ini BUKAN melepas pengaman — cuma
+        menunda selama ada yang benar-benar memegang kemudi.
+        """
+        if window_sec is None:
+            window_sec = self.TELEOP_ACTIVE_WINDOW_SEC
+        return (time.time() - self._last_teleop_at) < window_sec
 
     def release_rc(self) -> bool:
         """
