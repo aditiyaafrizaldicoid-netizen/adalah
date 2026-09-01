@@ -473,6 +473,7 @@ class ASVWebSocketClient:
         elif action == "load_mission":
             steps = cmd.get("steps", [])
             self._peringatkan_urutan_photo_box(steps)
+            self._peringatkan_celah_box(steps)
             if self.mission_engine and steps:
                 ok = self.mission_engine.load_mission(steps)
                 self.send_mission_status(self.mission_engine.get_status_dict())
@@ -500,6 +501,7 @@ class ASVWebSocketClient:
                 })
             elif self.mission_engine:
                 self._peringatkan_urutan_photo_box(steps or self.mission_engine._steps)
+                self._peringatkan_celah_box(steps or self.mission_engine._steps)
                 ok = self.mission_engine.start_mission(steps)
                 self.send_mission_status(self.mission_engine.get_status_dict())
                 print(f"[WS] Mission started (ok={ok}, steps={len(self.mission_engine._steps)})")
@@ -633,6 +635,56 @@ class ASVWebSocketClient:
                 )
                 print("[WS] ⚠️ Pipeline misi: PHOTO_BOX tanpa step buoy di depannya — "
                       "step foto akan dilewati.")
+                return
+
+    # Lebar kapal (meter) untuk memeriksa kelayakan celah BOX_CHANNEL. Bisa
+    # ditimpa per-step lewat field `boat_beam_m`.
+    LEBAR_KAPAL_M = 0.40
+    # Sisa ruang minimum per sisi antara lambung dan box. Di bawah ini, satu
+    # kesalahan kemudi kecil sudah cukup untuk menyenggol.
+    CELAH_AMAN_MIN_M = 0.20
+
+    def _peringatkan_celah_box(self, steps):
+        """
+        Periksa apakah setelan BOX_CHANNEL menyisakan ruang yang masuk akal.
+
+        Jarak lewat diisi dalam METER oleh operator, dan salah ketik satu digit
+        (0.3 alih-alih 1.0) tidak kelihatan salah di panel — tapi berarti kapal
+        membidik jalur yang lebih sempit dari lambungnya sendiri. Kesalahan seperti
+        itu baru ketahuan sebagai suara benturan.
+
+        Diperiksa saat misi DI-LOAD, bukan saat kapal sudah di depan box.
+        """
+        for step in (steps or []):
+            step = step or {}
+            if str(step.get("type", "")) != "BOX_CHANNEL":
+                continue
+            try:
+                offset_m = float(step.get("channel_offset_m") or 0)
+                lebar_box_m = float(step.get("box_width_m") or 0)
+            except (TypeError, ValueError):
+                continue
+            # Mode meter tidak aktif kalau salah satunya kosong — tidak ada yang
+            # bisa diperiksa dalam satuan meter.
+            if offset_m <= 0 or lebar_box_m <= 0:
+                continue
+            try:
+                lebar_kapal = float(step.get("boat_beam_m") or self.LEBAR_KAPAL_M)
+            except (TypeError, ValueError):
+                lebar_kapal = self.LEBAR_KAPAL_M
+
+            sisa = offset_m - (lebar_kapal / 2.0) - (lebar_box_m / 2.0)
+            if sisa < self.CELAH_AMAN_MIN_M:
+                self._send_warning(
+                    level="warning",
+                    code="BOX_CHANNEL_TERLALU_SEMPIT",
+                    message=(f"Setelan Box Channel menyisakan hanya {sisa*100:.0f} cm "
+                             f"antara lambung dan box (jarak lewat {offset_m:.2f} m, "
+                             f"lebar kapal {lebar_kapal:.2f} m, lebar box "
+                             f"{lebar_box_m:.2f} m). Perbesar 'Jarak Lewat dari Box' "
+                             f"atau kapal berisiko menyenggol."),
+                )
+                print(f"[WS] ⚠️ BOX_CHANNEL: sisa ruang cuma {sisa*100:.0f} cm per sisi.")
                 return
 
     def _execute_emergency_stop(self, reason: str = "unknown"):
