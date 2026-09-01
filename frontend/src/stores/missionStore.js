@@ -639,6 +639,104 @@ export const STEP_TYPES = [
       },
     ],
   },
+  // ── Lewat celah antar box + foto keduanya ──────────────────────────────
+  // Box TIDAK berdampingan seperti bola gerbang — letaknya BERSELANG di sepanjang
+  // lintasan (biru lebih dulu di kanan, hijau menyusul di kiri). Karena itu titik
+  // tengah dua objek tidak bisa dipakai: yang satu jauh lebih dekat dari yang lain,
+  // dan keduanya sering tidak terlihat bersamaan.
+  //
+  // Yang dipakai: KONVENSI SISI — biru menandai tepi KANAN, hijau menandai tepi
+  // KIRI, jadi SATU box yang terlihat sudah cukup untuk tahu di sebelah mana
+  // celahnya. Kapal berhenti dan memusatkan tiap box sebelum menjepret, lalu
+  // kembali menyusuri celah menuju box berikutnya.
+  {
+    type: "BOX_CHANNEL",
+    label: "Box Channel (Lewat Tengah + Foto)",
+    icon: "📦",
+    color: "text-cyan-400",
+    bg: "bg-cyan-500/10 border-cyan-500/30",
+    fields: [
+      {
+        key: "throttle",
+        label: "Transit Throttle (0-1)",
+        type: "number",
+        default: 0.3,
+        // Laju saat menyusuri celah di antara kedua box.
+      },
+      {
+        key: "aim_throttle",
+        label: "Aim Throttle (0-1)",
+        type: "number",
+        default: 0.08,
+        // Laju saat MEMBIDIK. SENGAJA tidak nol: kemudi kapal ini memakai servo
+        // GroundSteering yang butuh aliran air untuk menggigit — tanpa laju sama
+        // sekali kapal tidak berputar dan fase membidik hanya kehabisan waktu.
+        // Turunkan ke 0 kalau thruster diferensial ternyata sanggup memutar di tempat.
+      },
+      {
+        key: "channel_offset_px",
+        label: "Channel Offset dari Box (px)",
+        type: "number",
+        default: 420,
+        // Seberapa jauh titik lewat digeser dari SATU box yang terlihat. Inilah
+        // yang membuat celah bisa disusuri walau kedua box tidak pernah terlihat
+        // bersamaan. Perbesar kalau kapal lewat terlalu dekat ke box.
+      },
+      {
+        key: "align_threshold_px",
+        label: "Align Tolerance (px)",
+        type: "number",
+        default: 140,
+        // Seberapa dekat box harus ke tengah frame sebelum shutter ditekan.
+      },
+      {
+        key: "min_area_px2_blue",
+        label: "Stop & Foto — Box Biru (px²)",
+        type: "number",
+        default: 45000,
+        // Ambang "cukup dekat untuk dibidik". Dipisah per warna karena box biru
+        // sebagian terendam, jadi bagian yang terlihat kamera permukaan lebih
+        // kecil pada jarak yang sama.
+      },
+      {
+        key: "min_area_px2_green",
+        label: "Stop & Foto — Box Hijau (px²)",
+        type: "number",
+        default: 70000,
+      },
+      {
+        key: "settle_sec",
+        label: "Settle Sebelum Shutter (s)",
+        type: "number",
+        default: 1.0,
+        // Lama kapal harus DIAM sebelum memotret, supaya foto tidak buram/miring.
+      },
+      {
+        key: "aim_timeout_sec",
+        label: "Batas Membidik (s)",
+        type: "number",
+        default: 6,
+        // Lewat ini, box difoto dengan framing seadanya. Menjepret apa adanya jauh
+        // lebih baik daripada kapal merayap mendekat tanpa henti mengejar
+        // pemusatan sempurna — itu yang berujung menyenggol box.
+      },
+      {
+        key: "blind_stop_sec",
+        label: "Berhenti Setelah Tanpa Box (s)",
+        type: "number",
+        default: 8,
+        // Tidak ada box terlihat sama sekali: kapal maju lurus selama ini lalu
+        // BERHENTI. Batas inilah yang mencegah kapal melaju buta keluar arena.
+      },
+      {
+        key: "no_detection_finish_sec",
+        label: "Selesaikan Step Setelah (s)",
+        type: "number",
+        default: 20,
+        // WAJIB lebih besar dari "Berhenti Setelah Tanpa Box" di atas.
+      },
+    ],
+  },
   {
     type: "FINISH",
     label: "Mission Complete",

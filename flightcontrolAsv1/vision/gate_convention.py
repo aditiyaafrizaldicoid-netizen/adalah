@@ -38,6 +38,22 @@ BUOY_SIDE: Dict[str, str] = {
     "green": "left",
 }
 
+# Box misi mengikuti konvensi yang SAMA, dengan biru mengambil peran merah:
+# box biru menandai tepi KANAN lintasan, box hijau menandai tepi KIRI.
+#
+# Ini yang membuat step BOX_CHANNEL bisa menyusuri celah walau kedua box TIDAK
+# berdampingan seperti bola. Karena tiap box sendirian sudah cukup untuk menentukan
+# di sisi mana lintasannya, kapal tidak perlu melihat keduanya sekaligus — dan
+# memang jarang bisa, karena letaknya berselang di sepanjang lintasan.
+BOX_SIDE: Dict[str, str] = {
+    "blue_box":  "right",
+    "green_box": "left",
+}
+
+# Satu tabel gabungan supaya side_of()/channel_sign() melayani bola dan box tanpa
+# pemanggil perlu tahu sedang berurusan dengan yang mana.
+_MARKER_SIDE: Dict[str, str] = {**BUOY_SIDE, **BOX_SIDE}
+
 RED   = "red"
 GREEN = "green"
 
@@ -47,7 +63,8 @@ RIGHT = "right"
 
 def side_of(color: str) -> str:
     """
-    Tepi lintasan ("left"/"right") yang ditandai oleh bola berwarna `color`.
+    Tepi lintasan ("left"/"right") yang ditandai penanda `color` — bola gerbang
+    maupun box misi.
 
     Melempar KeyError untuk warna yang tidak dikenal — DISENGAJA. Warna bola hanya
     berasal dari class YOLO 0/1 yang sudah dipetakan di tracker.py; warna asing di
@@ -55,7 +72,7 @@ def side_of(color: str) -> str:
     akan menghasilkan kemudi yang diam-diam salah arah (persis kelas bug yang
     modul ini ada untuk mencegahnya).
     """
-    return BUOY_SIDE[color]
+    return _MARKER_SIDE[color]
 
 
 def channel_sign(color: str) -> float:
