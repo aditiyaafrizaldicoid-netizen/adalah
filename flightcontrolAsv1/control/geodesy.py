@@ -70,3 +70,39 @@ class LocalFrameConverter:
             coord["seq"] = seq
             gps_waypoints.append(coord)
         return gps_waypoints
+
+
+def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """
+    Jarak permukaan bumi antara dua koordinat, dalam METER.
+
+    Dipakai geofence (control/geofence.py) dan siapa pun yang butuh jarak nyata dari
+    sepasang lat/lon. MissionEngine punya salinan privatnya sendiri untuk GOTO_GPS;
+    yang di sini publik supaya modul baru tidak perlu menyentuh isi kelas itu.
+    """
+    import math
+    R = 6371000.0
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlam = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
+    return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def posisi_masuk_akal(lat, lon) -> bool:
+    """
+    Apakah sepasang koordinat ini layak dipakai untuk keputusan keselamatan?
+
+    Menolak 0,0 secara khusus — itu nilai yang dilaporkan kapal saat GPS BELUM
+    mengunci, dan letaknya di Teluk Guinea. Sebuah geofence yang mempercayainya akan
+    menyimpulkan kapal berada ribuan kilometer di luar batas dan membatalkan SETIAP
+    misi sebelum sempat berjalan.
+    """
+    try:
+        lat = float(lat); lon = float(lon)
+    except (TypeError, ValueError):
+        return False
+    if abs(lat) < 1e-7 and abs(lon) < 1e-7:
+        return False
+    return -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0

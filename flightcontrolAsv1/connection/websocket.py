@@ -90,6 +90,9 @@ class ASVWebSocketClient:
         # ikut telemetri supaya dashboard bisa menjelaskan kenapa tombol sumber
         # kendali di sana "membalik sendiri" — tanpa itu, terlihat seperti rusak.
         self.rc_source_switch = None
+        # Diisi main.py. Geofence perlu tahu kapan misi dimulai supaya bisa
+        # mengunci pusat batasnya di posisi kapal saat itu.
+        self.geofence = None
 
         # State kalibrasi IMU
         self._imu_calibrating = False
@@ -502,6 +505,20 @@ class ASVWebSocketClient:
             elif self.mission_engine:
                 self._peringatkan_urutan_photo_box(steps or self.mission_engine._steps)
                 self._peringatkan_celah_box(steps or self.mission_engine._steps)
+
+                # Geofence mengunci pusat batasnya di sini, dan berhak MENOLAK
+                # keberangkatan kalau kapal sudah di luar batas sebelum mulai —
+                # jauh lebih baik ketahuan sekarang daripada dibatalkan 2 detik
+                # setelah berangkat.
+                if self.geofence is not None:
+                    boleh, alasan = self.geofence.on_mission_started()
+                    if not boleh:
+                        print(f"[WS] ⛔ start_mission DITOLAK geofence: {alasan}")
+                        self._send_warning("warning", "GEOFENCE_TOLAK_START",
+                                           f"Misi tidak dijalankan. {alasan} "
+                                           f"Bawa kapal ke dalam batas dulu.")
+                        return
+
                 ok = self.mission_engine.start_mission(steps)
                 self.send_mission_status(self.mission_engine.get_status_dict())
                 print(f"[WS] Mission started (ok={ok}, steps={len(self.mission_engine._steps)})")

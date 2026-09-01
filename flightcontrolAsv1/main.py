@@ -192,6 +192,19 @@ def main():
     # Menyerahkan kemudi ke remote tidak lagi harus lewat tombol di dashboard —
     # tuasnya sekarang ada di tangan yang sama dengan stiknya. NONAKTIF sampai
     # ASV_RC_SOURCE_CHANNEL diisi di .env; lihat control/rc_source_switch.py.
+    # ------------------------------------------------------------------ #
+    #  Geofence: batalkan misi kalau kapal keluar batas                   #
+    # ------------------------------------------------------------------ #
+    # Lapis DALAM. Kalau Mini PC yang hang, ini ikut diam — pagar sesungguhnya
+    # tetap FENCE_ENABLE/FENCE_ACTION di ArduPilot yang jalan di Flight Controller.
+    # Yang di sini menghentikan MISI-nya, yang di sana menyelamatkan KAPAL-nya.
+    # NONAKTIF sampai ASV_GEOFENCE_RADIUS_M diisi; lihat control/geofence.py.
+    from control.geofence import GeofenceMonitor
+    geofence = GeofenceMonitor(asv, mission_engine=mission_engine,
+                               on_warning=ws_client.send_warning)
+    ws_client.geofence = geofence
+    geofence.start()
+
     from control.rc_source_switch import RCSourceSwitch
     rc_source_switch = RCSourceSwitch(
         asv,
@@ -358,6 +371,7 @@ def main():
         print("\n[Main] Dibatalkan oleh pengguna.")
     finally:
         video_streamer.stop()
+        geofence.stop()
         rc_source_switch.stop()
         capture_uploader.stop()
         ws_client.stop()
