@@ -147,6 +147,15 @@ class ASVWebSocketClient:
                         min_area = cfg.get("min_detection_area_px2")
                         if self.tracker and min_area is not None:
                             self.tracker.set_min_detection_area(min_area)
+                        # Geofence menumpang baris config yang sama, jadi ikut
+                        # terbawa tanpa permintaan HTTP tambahan.
+                        if self.geofence is not None and cfg.get("geofence_radius_m") is not None:
+                            self.geofence.configure(
+                                enabled=cfg.get("geofence_enabled"),
+                                lat=cfg.get("geofence_lat"),
+                                lon=cfg.get("geofence_lon"),
+                                radius_m=cfg.get("geofence_radius_m"),
+                            )
                         print(f"[WS] 📥 Synced initial PID config from DB -> Speed/Throttle: {f_speed}, MaxTurn: {cfg.get('max_turn_rate')}deg/s, MinDetectionArea: {min_area}px²")
         except Exception as e:
             print(f"[WS] Warning: Could not fetch initial PID config from DB ({e})")
@@ -563,6 +572,22 @@ class ASVWebSocketClient:
                 print(f"[WS] set_camera_params: {camera_key} → brightness={brightness}, contrast={contrast}")
             else:
                 print("[WS] set_camera_params: video_streamer tidak terhubung")
+
+        # --- GEOFENCE (digambar operator di peta base station) ---
+        elif action == "set_geofence":
+            if self.geofence is None:
+                print("[WS] set_geofence: geofence tidak terpasang di kapal ini")
+            else:
+                ringkas = self.geofence.configure(
+                    enabled=cmd.get("enabled"),
+                    lat=cmd.get("lat"),
+                    lon=cmd.get("lon"),
+                    radius_m=cmd.get("radius_m"),
+                )
+                # Dikonfirmasi balik supaya panel di peta menampilkan batas yang
+                # BENAR-BENAR berlaku di kapal, bukan yang dikira sudah terkirim.
+                self._send_warning("info", "GEOFENCE_DIPERBARUI",
+                                   f"Geofence diperbarui: {ringkas}")
 
         # --- GPS OFFSET ---
         elif action == "set_gps_offset":
@@ -1007,6 +1032,15 @@ class ASVWebSocketClient:
                             self.rc_source_switch and self.rc_source_switch.enabled),
                         "rc_source_channel": (
                             self.rc_source_switch.channel if self.rc_source_switch else 0),
+                        # Batas yang BENAR-BENAR berlaku di kapal — peta menggambar
+                        # dari sini, bukan dari yang tersimpan di DB, supaya
+                        # lingkaran di layar selalu mewakili keadaan sebenarnya.
+                        "geofence_enabled": bool(self.geofence and self.geofence.enabled),
+                        "geofence_radius_m": (self.geofence.radius_m if self.geofence else 0),
+                        "geofence_lat": (self.geofence.center[0]
+                                         if self.geofence and self.geofence.center else 0),
+                        "geofence_lon": (self.geofence.center[1]
+                                         if self.geofence and self.geofence.center else 0),
                     }
 
                     self.ws.send(json.dumps({

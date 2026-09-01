@@ -55,6 +55,14 @@ export const useVesselStore = defineStore("vessel", () => {
   const rcSourceSwitch = ref(false);
   const rcSourceChannel = ref(0);
 
+  // Geofence yang BENAR-BENAR berlaku di kapal (bukan yang tersimpan di DB).
+  // Peta menggambar lingkarannya dari sini supaya yang terlihat selalu mewakili
+  // keadaan sebenarnya, bukan yang dikira sudah terkirim.
+  const geofenceEnabled = ref(false);
+  const geofenceLat = ref(0);
+  const geofenceLon = ref(0);
+  const geofenceRadiusM = ref(0);
+
   // Video Recording State (Tanpa Object Detection)
   const isRecording = ref(false);
   const recordingFilename = ref('');
@@ -136,6 +144,10 @@ export const useVesselStore = defineStore("vessel", () => {
     if (data.manual_source !== undefined) manualSource.value = data.manual_source;
     if (data.rc_source_switch !== undefined) rcSourceSwitch.value = data.rc_source_switch;
     if (data.rc_source_channel !== undefined) rcSourceChannel.value = data.rc_source_channel;
+    if (data.geofence_enabled !== undefined) geofenceEnabled.value = data.geofence_enabled;
+    if (data.geofence_lat !== undefined) geofenceLat.value = data.geofence_lat;
+    if (data.geofence_lon !== undefined) geofenceLon.value = data.geofence_lon;
+    if (data.geofence_radius_m !== undefined) geofenceRadiusM.value = data.geofence_radius_m;
     if (data.camera_connected !== undefined) cameraConnected.value = data.camera_connected;
     // Status Recording Video Mentah
     if (data.is_recording !== undefined) isRecording.value = data.is_recording;
@@ -189,6 +201,7 @@ export const useVesselStore = defineStore("vessel", () => {
     xte, dtw, nextWp,
     thrusterL, thrusterR, rpmL, rpmR,
     isConnected, isArmed, mode, manualSource, rcSourceSwitch, rcSourceChannel,
+    geofenceEnabled, geofenceLat, geofenceLon, geofenceRadiusM,
     isRecording, recordingFilename, recordingResolution,
     isStreaming,
     cameraConnected, asvConnected,

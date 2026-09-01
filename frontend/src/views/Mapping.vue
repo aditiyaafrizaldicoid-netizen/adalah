@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router';
 import GridMap from '../components/mapping/GridMap.vue';
 import WaypointEditor from '../components/mapping/WaypointEditor.vue';
 import ArenaEditor from '../components/mapping/ArenaEditor.vue';
+import GeofenceEditor from '../components/mapping/GeofenceEditor.vue';
 import { useMissionStore } from '@/stores/missionStore';
 import { useArenaStore } from '@/stores/arenaStore';
 import {
@@ -13,13 +14,14 @@ import {
   CheckCircle2,
   Flag,
   Navigation2,
+  Shield,
 } from 'lucide-vue-next';
 
 const mission = useMissionStore();
 const arenaStore = useArenaStore();
 const router = useRouter();
 
-// 'live' | 'waypoint' | 'arena'
+// 'live' | 'waypoint' | 'arena' | 'geofence'
 const mapMode = ref('waypoint');
 
 const visibleLayers = ref(['grid', 'vessel', 'buoys', 'trail']);
@@ -34,6 +36,7 @@ const toggleLayer = (layer) => {
 const gridMapMode = computed(() => {
   if (mapMode.value === 'waypoint') return 'waypoint';
   if (mapMode.value === 'arena') return 'arena';
+  if (mapMode.value === 'geofence') return 'geofence';
   return 'none';
 });
 
@@ -145,6 +148,10 @@ function setMode(mode) {
           @upload="handleWaypointUpload"
         />
         <ArenaEditor v-else-if="mapMode === 'arena'" />
+        <div v-else-if="mapMode === 'geofence'"
+          class="glass-card p-4 max-h-[calc(100vh-12rem)] overflow-y-auto">
+          <GeofenceEditor />
+        </div>
       </div>
 
       <!-- Map Mode Switcher (bottom-left) -->
@@ -168,6 +175,19 @@ function setMode(mode) {
               mapMode === 'arena' ? 'bg-emerald-500 text-slate-900' : 'text-(--text-secondary) hover:text-(--text-primary)']">
             <Flag class="w-3 h-3" /> Arena
           </button>
+          <button
+            @click="setMode('geofence')"
+            :class="['px-4 py-2 rounded-lg text-[10px] font-black uppercase transition-all flex items-center gap-1.5',
+              mapMode === 'geofence' ? 'bg-warning text-slate-900' : 'text-(--text-secondary) hover:text-(--text-primary)']">
+            <Shield class="w-3 h-3" /> Geofence
+          </button>
+        </div>
+
+        <!-- Geofence: penanda mode menaruh pusat -->
+        <div v-if="mapMode === 'geofence'"
+          class="flex items-center gap-2 px-3 py-2 bg-warning/20 border border-warning/40 rounded-xl text-[10px] text-warning font-bold backdrop-blur-md">
+          <span class="w-2 h-2 rounded-full bg-warning animate-pulse"></span>
+          KLIK PETA UNTUK MENARUH PUSAT
         </div>
 
         <!-- Arena mode active indicator -->

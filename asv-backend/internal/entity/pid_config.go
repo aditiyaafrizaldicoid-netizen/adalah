@@ -22,5 +22,17 @@ type PidConfig struct {
 	// terdeteksi — bola terdekat pun hanya 784px², jauh di bawah ambang 4000.
 	CameraWidth  int       `gorm:"default:1280" json:"camera_width"`
 	CameraHeight int       `gorm:"default:720" json:"camera_height"`
+
+	// ── Geofence ────────────────────────────────────────────────────────────
+	// Menumpang baris ini, bukan tabel sendiri, karena kapal sudah menarik
+	// /api/v1/pid-config saat boot — geofence ikut terbawa tanpa permintaan baru.
+	//
+	// Radius 0 ATAU Enabled=false berarti batas tidak dijaga. Keduanya disimpan
+	// terpisah supaya operator bisa mematikan geofence sementara tanpa kehilangan
+	// titik pusat dan radius yang sudah susah payah diatur di peta.
+	GeofenceEnabled bool    `gorm:"default:false" json:"geofence_enabled"`
+	GeofenceLat     float64 `gorm:"default:0" json:"geofence_lat"`
+	GeofenceLon     float64 `gorm:"default:0" json:"geofence_lon"`
+	GeofenceRadiusM float64 `gorm:"default:0" json:"geofence_radius_m"`
 	UpdatedAt    time.Time `gorm:"autoUpdateTime" json:"updated_at"`
 }

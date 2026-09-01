@@ -140,6 +140,12 @@ func (r *Router) New() *fiber.App {
 	pidGroup.Get("", r.pidConfigHandler.GetConfig)
 	pidGroup.Put("", requireAuth, r.pidConfigHandler.SaveConfig)
 
+	// Geofence — dibaca publik (kapal mengambilnya saat boot lewat GET
+	// /pid-config yang sama), ditulis hanya oleh operator yang login.
+	geofenceGroup := api.Group("/geofence")
+	geofenceGroup.Get("", r.pidConfigHandler.GetGeofence)
+	geofenceGroup.Put("", requireAuth, r.pidConfigHandler.SaveGeofence)
+
 	// Mission Presets Routes
 	presetGroup := api.Group("/mission-presets")
 	presetGroup.Get("", r.missionPresetHandler.GetAll)

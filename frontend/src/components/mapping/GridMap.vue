@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted, watch, computed } from 'vue';
 import { useVesselStore } from '@/stores/vesselStore';
 import { useMissionStore } from '@/stores/missionStore';
+import { useGeofenceStore } from '@/stores/geofenceStore';
 import { useArenaStore } from '@/stores/arenaStore';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
@@ -11,13 +12,14 @@ const props = defineProps({
   width: { type: Number, default: 800 },
   height: { type: Number, default: 600 },
   visibleLayers: { type: Array, default: () => ['grid', 'vessel', 'trail', 'buoys'] },
-  // 'waypoint' | 'arena' | 'none'
+  // 'waypoint' | 'arena' | 'geofence' | 'none'
   mapMode: { type: String, default: 'waypoint' },
 });
 
 const vessel = useVesselStore();
 const mission = useMissionStore();
 const arenaStore = useArenaStore();
+const geofence = useGeofenceStore();
 
 const mapContainer = ref(null);
 let map = null;
@@ -115,6 +117,8 @@ onMounted(() => {
     } else if (props.mapMode === 'waypoint') {
       mission.addWaypoint(e.latlng.lat, e.latlng.lng);
       renderWaypoints();
+    } else if (props.mapMode === 'geofence') {
+      geofence.setCenter(e.latlng.lat, e.latlng.lng);
     }
   });
 });
@@ -293,6 +297,50 @@ watch(
   () => renderArena()
 );
 watch(() => arenaStore.activeArena.id, () => renderArena());
+
+// ── Geofence ────────────────────────────────────────────────────────────────
+// DUA lingkaran digambar sekaligus, dan itu disengaja:
+//   - garis TEBAL  = batas yang benar-benar berlaku di kapal (dari telemetri)
+//   - garis PUTUS  = batas yang sedang digambar operator tapi BELUM disimpan
+// Tanpa membedakan keduanya, operator tidak punya cara melihat bahwa lingkaran
+// yang baru dia geser belum sampai ke kapal — dan batas yang dikira aktif padahal
+// belum itu memberi rasa aman palsu.
+let geofenceAktifLayer = null;
+let geofenceDraftLayer = null;
+
+const renderGeofence = () => {
+  if (!map) return;
+  if (geofenceAktifLayer) { map.removeLayer(geofenceAktifLayer); geofenceAktifLayer = null; }
+  if (geofenceDraftLayer) { map.removeLayer(geofenceDraftLayer); geofenceDraftLayer = null; }
+
+  const aktif = geofence.aktifDiKapal;
+  if (aktif.enabled && aktif.radius_m > 0 && (aktif.lat || aktif.lon)) {
+    geofenceAktifLayer = L.circle([aktif.lat, aktif.lon], {
+      radius: aktif.radius_m,
+      color: '#f97316', weight: 2, fillColor: '#f97316', fillOpacity: 0.06,
+    }).addTo(map).bindTooltip(`Geofence aktif — ${aktif.radius_m.toFixed(0)} m`);
+  }
+
+  const d = geofence.draft;
+  if (geofence.punyaPusat && Number(d.radius_m) > 0 && geofence.belumTersimpan) {
+    geofenceDraftLayer = L.circle([d.lat, d.lon], {
+      radius: Number(d.radius_m),
+      color: '#38bdf8', weight: 2, dashArray: '6, 6',
+      fillColor: '#38bdf8', fillOpacity: 0.04,
+    }).addTo(map).bindTooltip(`Belum disimpan — ${Number(d.radius_m).toFixed(0)} m`);
+  }
+};
+
+watch(
+  () => [
+    geofence.draft.lat, geofence.draft.lon, geofence.draft.radius_m,
+    geofence.draft.enabled, geofence.belumTersimpan,
+    geofence.aktifDiKapal.enabled, geofence.aktifDiKapal.radius_m,
+    geofence.aktifDiKapal.lat, geofence.aktifDiKapal.lon,
+  ],
+  renderGeofence
+);
+onMounted(renderGeofence);
 
 onMounted(() => {
   timeInterval = setInterval(() => currentTime.value = new Date(), 1000);

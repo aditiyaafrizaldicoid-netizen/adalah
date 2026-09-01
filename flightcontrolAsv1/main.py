@@ -157,6 +157,24 @@ def main():
     # set_tracker() SEBELUM set_tracking_controller(): set_tracking_controller() memicu
     # fetch_and_apply_pid_config() (fetch sekali dari DB), yang butuh self.tracker sudah
     # ter-set agar min_detection_area_px2 ikut ter-apply pada fetch pertama itu juga.
+    # ------------------------------------------------------------------ #
+    #  Geofence: batalkan misi kalau kapal keluar batas                   #
+    # ------------------------------------------------------------------ #
+    # Lapis DALAM. Kalau Mini PC yang hang, ini ikut diam — pagar sesungguhnya
+    # tetap FENCE_ENABLE/FENCE_ACTION di ArduPilot yang jalan di Flight Controller.
+    # Yang di sini menghentikan MISI-nya, yang di sana menyelamatkan KAPAL-nya.
+    # NONAKTIF sampai ASV_GEOFENCE_RADIUS_M diisi ATAU digambar dari peta.
+    #
+    # HARUS dibuat & dipasang ke ws_client SEBELUM set_tracking_controller() di
+    # bawah: pemanggilan itu memicu fetch_and_apply_pid_config(), dan geofence
+    # menumpang baris config yang sama. Kalau dipasang belakangan, batas yang
+    # tersimpan di DB diam-diam terlewat setiap kali kapal boot.
+    from control.geofence import GeofenceMonitor
+    geofence = GeofenceMonitor(asv, mission_engine=mission_engine,
+                               on_warning=ws_client.send_warning)
+    ws_client.geofence = geofence
+    geofence.start()
+
     ws_client.set_tracker(tracker)
     ws_client.set_tracking_controller(controller)
     ws_client.set_speed_scheduler(speed_scheduler)
@@ -192,19 +210,6 @@ def main():
     # Menyerahkan kemudi ke remote tidak lagi harus lewat tombol di dashboard —
     # tuasnya sekarang ada di tangan yang sama dengan stiknya. NONAKTIF sampai
     # ASV_RC_SOURCE_CHANNEL diisi di .env; lihat control/rc_source_switch.py.
-    # ------------------------------------------------------------------ #
-    #  Geofence: batalkan misi kalau kapal keluar batas                   #
-    # ------------------------------------------------------------------ #
-    # Lapis DALAM. Kalau Mini PC yang hang, ini ikut diam — pagar sesungguhnya
-    # tetap FENCE_ENABLE/FENCE_ACTION di ArduPilot yang jalan di Flight Controller.
-    # Yang di sini menghentikan MISI-nya, yang di sana menyelamatkan KAPAL-nya.
-    # NONAKTIF sampai ASV_GEOFENCE_RADIUS_M diisi; lihat control/geofence.py.
-    from control.geofence import GeofenceMonitor
-    geofence = GeofenceMonitor(asv, mission_engine=mission_engine,
-                               on_warning=ws_client.send_warning)
-    ws_client.geofence = geofence
-    geofence.start()
-
     from control.rc_source_switch import RCSourceSwitch
     rc_source_switch = RCSourceSwitch(
         asv,

@@ -97,6 +97,8 @@ class GeofenceMonitor:
         self._melanggar_sejak = None
         self._sudah_membatalkan = False
         self._lapor_gps_buruk = False
+        # Dimatikan operator dari peta — beda dari radius 0. Lihat configure().
+        self._dimatikan_operator = False
 
     @staticmethod
     def _env_float(nama: str, default: float) -> float:
@@ -107,24 +109,75 @@ class GeofenceMonitor:
 
     @property
     def enabled(self) -> bool:
-        return self.radius_m > 0
+        return self.radius_m > 0 and not self._dimatikan_operator
 
     def set_mission_engine(self, mission_engine):
         self.mission_engine = mission_engine
 
+    def configure(self, enabled=None, lat=None, lon=None, radius_m=None) -> str:
+        """
+        Ubah batas saat kapal SEDANG BERJALAN — dipakai saat operator menggambarnya
+        di peta base station.
+
+        Nilai yang None dibiarkan apa adanya, sehingga perintah boleh mengirim
+        sebagian field saja (mis. cuma radius).
+
+        Mematikan geofence TIDAK menghapus pusat & radius yang sudah diatur: operator
+        sering menonaktifkannya sementara saat menguji sesuatu, dan kehilangan batas
+        yang sudah susah payah digambar di peta setiap kali itu terjadi bukan sesuatu
+        yang bisa dimaafkan di tengah lomba.
+
+        Return ringkasan untuk di-log/dikirim balik.
+        """
+        if radius_m is not None:
+            try:
+                nilai = float(radius_m)
+                self.radius_m = max(0.0, nilai)
+            except (TypeError, ValueError):
+                pass
+
+        if lat is not None and lon is not None and posisi_masuk_akal(lat, lon):
+            self.center = (float(lat), float(lon))
+            self._pusat_tetap = True
+
+        if enabled is not None:
+            aktif = bool(enabled)
+            if not aktif:
+                # Disimpan sebagai radius 0 hanya kalau memang diminta lewat radius_m;
+                # di sini cukup tandai lewat flag terpisah supaya pusat & radius tetap.
+                self._dimatikan_operator = True
+            else:
+                self._dimatikan_operator = False
+
+        # Pelanggaran yang sedang dihitung dilupakan: batas baru berarti penilaian baru.
+        self._melanggar_sejak = None
+        self._sudah_membatalkan = False
+
+        ringkas = (f"radius {self.radius_m:.0f} m"
+                   + (f", pusat {self.center[0]:.6f},{self.center[1]:.6f}" if self.center
+                      else ", pusat diambil saat misi mulai")
+                   + (" — DIMATIKAN operator" if self._dimatikan_operator else ""))
+        print(f"[Geofence] Diperbarui dari base station: {ringkas}")
+        return ringkas
+
     def start(self):
         if self._is_running:
             return
-        if not self.enabled:
-            print("[Geofence] NONAKTIF (ASV_GEOFENCE_RADIUS_M belum diisi).")
-            return
+        # Thread TETAP dijalankan walau saat boot geofence belum aktif: operator
+        # bisa menyalakannya dari peta kapan saja, dan memaksa restart kapal untuk
+        # itu adalah friksi yang tidak perlu di tengah lomba. _tick() sendiri yang
+        # tidak melakukan apa-apa selama enabled masih False.
         self._is_running = True
         self._thread = threading.Thread(target=self._loop, daemon=True,
                                         name="GeofenceThread")
         self._thread.start()
-        asal = (f"pusat tetap {self.center[0]:.6f},{self.center[1]:.6f}"
-                if self._pusat_tetap else "pusat diambil saat misi dimulai")
-        print(f"[Geofence] Aktif — jari-jari {self.radius_m:.0f} m, {asal}.")
+        if self.enabled:
+            asal = (f"pusat tetap {self.center[0]:.6f},{self.center[1]:.6f}"
+                    if self._pusat_tetap else "pusat diambil saat misi dimulai")
+            print(f"[Geofence] Aktif — jari-jari {self.radius_m:.0f} m, {asal}.")
+        else:
+            print("[Geofence] Belum aktif — bisa dinyalakan dari peta base station "
+                  "tanpa perlu restart kapal.")
 
     def stop(self):
         self._is_running = False
@@ -179,6 +232,8 @@ class GeofenceMonitor:
             time.sleep(self.POLL_SEC)
 
     def _tick(self):
+        if not self.enabled:
+            return
         me = self.mission_engine
         if me is None or me.status != "RUNNING":
             # Di luar misi, tidak ada yang perlu dibatalkan. Hitungan pelanggaran
