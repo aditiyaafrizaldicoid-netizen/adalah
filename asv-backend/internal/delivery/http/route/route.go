@@ -161,6 +161,8 @@ func (r *Router) New() *fiber.App {
 	captureGroup := api.Group("/captures")
 	captureGroup.Get("", r.captureHandler.GetAll)
 	captureGroup.Post("", r.captureHandler.Upload)
+	// Arsipkan sebelum :filename supaya "archive" tidak tertangkap sebagai nama berkas.
+	captureGroup.Post("/archive", requireAuth, r.captureHandler.Archive)
 	captureGroup.Get("/:filename", r.captureHandler.Download)
 	captureGroup.Delete("/:filename", requireAuth, r.captureHandler.Delete)
 

@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"go-fiber-template/internal/config"
 
@@ -155,6 +156,62 @@ func (h *CaptureHandler) GetAll(c *fiber.Ctx) error {
 	})
 
 	return c.JSON(fiber.Map{"status": "success", "data": captures})
+}
+
+// Archive memindahkan seluruh foto yang sedang tampil ke sub-folder arsip.
+//
+// Dipanggil frontend tepat sebelum misi dijalankan, supaya dashboard hanya
+// menampilkan foto RUN YANG SEDANG BERJALAN. Tanpa ini, foto percobaan sebelumnya
+// tetap terpampang di slot Underwater/Surface dan juri tidak punya cara membedakan
+// mana hasil run yang sedang dinilai.
+//
+// DIPINDAH, BUKAN DIHAPUS. Kalau ternyata run sebelumnya yang paling bagus,
+// berkasnya masih ada di server — tidak perlu mengambil ulang dari Mini PC di
+// tengah lomba. GetAll() melewati sub-folder, jadi yang terarsip otomatis hilang
+// dari daftar tanpa perlu penyaringan tambahan.
+func (h *CaptureHandler) Archive(c *fiber.Ctx) error {
+	entries, err := os.ReadDir(h.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return c.JSON(fiber.Map{"status": "success", "archived": 0})
+		}
+		return c.Status(500).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	// Kumpulkan dulu, baru buat folder — supaya tidak meninggalkan folder arsip
+	// kosong setiap kali misi dimulai tanpa ada foto sebelumnya.
+	var berkas []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		nama := entry.Name()
+		if strings.HasSuffix(nama, ".jpg") || strings.HasSuffix(nama, ".json") {
+			berkas = append(berkas, nama)
+		}
+	}
+	if len(berkas) == 0 {
+		return c.JSON(fiber.Map{"status": "success", "archived": 0})
+	}
+
+	tujuan := filepath.Join(h.dir, "archive", time.Now().Format("20060102_150405"))
+	if err := os.MkdirAll(tujuan, 0o755); err != nil {
+		return c.Status(500).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+
+	dipindah := 0
+	for _, nama := range berkas {
+		if err := os.Rename(filepath.Join(h.dir, nama), filepath.Join(tujuan, nama)); err != nil {
+			// Satu berkas yang gagal dipindah tidak boleh menggagalkan seluruh
+			// pengarsipan — sisanya tetap dibersihkan dari dashboard.
+			log.Printf("Gagal mengarsipkan %s: %v", nama, err)
+			continue
+		}
+		dipindah++
+	}
+
+	log.Printf("📦 %d berkas foto diarsipkan ke %s", dipindah, tujuan)
+	return c.JSON(fiber.Map{"status": "success", "archived": dipindah, "folder": tujuan})
 }
 
 // Download menyajikan satu berkas foto.

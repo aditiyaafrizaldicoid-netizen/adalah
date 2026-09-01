@@ -19,9 +19,12 @@
  * gagal (foto tidak pernah dimuat kalau deteksi viewport tidak terpicu). Foto yang
  * dinilai juri tidak boleh bergantung pada itu.
  */
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { Camera, RefreshCw, Download, ImageOff, MapPin } from "lucide-vue-next";
 import { API_BASE, apiUrl } from "@/config/api";
+import { useMissionStore } from "@/stores/missionStore";
+
+const mission = useMissionStore();
 
 const captures = ref([]);
 const loading = ref(false);
@@ -91,6 +94,17 @@ onMounted(() => {
 onUnmounted(() => {
   if (timer) clearInterval(timer);
 });
+
+// Muat ulang SEGERA saat misi mulai berjalan. Foto run sebelumnya sudah diarsipkan
+// di server tepat sebelum start (lihat missionStore._arsipkanFotoRunSebelumnya),
+// dan menunggu putaran berkala berikutnya berarti operator sempat melihat slot
+// yang masih terisi foto lama di detik-detik paling diperhatikan.
+watch(
+  () => mission.missionStatus,
+  (baru, lama) => {
+    if (baru === "RUNNING" && lama !== "RUNNING") muat();
+  }
+);
 
 function tutupPreview() {
   preview.value = null;

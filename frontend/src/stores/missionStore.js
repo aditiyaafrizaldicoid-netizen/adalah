@@ -833,21 +833,53 @@ export const useMissionStore = defineStore("mission", () => {
   }
 
   // ─── WebSocket Mission Commands ───────────────────────────────────────────
-  function loadAndStartMission() {
+
+  /**
+   * Arsipkan foto run SEBELUMNYA sebelum run baru dimulai.
+   *
+   * Tanpa ini, slot Underwater/Surface di dashboard masih memampang foto percobaan
+   * yang lalu, dan tidak ada cara membedakan mana hasil run yang sedang dinilai —
+   * foto lama bahkan terlihat seperti "sudah dapat" padahal run ini belum memotret
+   * apa pun.
+   *
+   * Di server foto lama DIPINDAH ke sub-folder, bukan dihapus, dan salinan aslinya
+   * tetap ada di Mini PC. Jadi tidak ada yang hilang; hanya berhenti ditampilkan.
+   *
+   * Kegagalannya SENGAJA tidak memblokir start misi: dashboard yang menampilkan foto
+   * basi jauh lebih ringan akibatnya daripada misi yang gagal dimulai karena satu
+   * permintaan housekeeping tidak terjawab.
+   */
+  async function _arsipkanFotoRunSebelumnya() {
+    try {
+      const res = await fetch(apiUrl("/api/v1/captures/archive"), {
+        method: "POST",
+        headers: authHeaders(),
+      });
+      if (!res.ok) {
+        console.warn(`[MissionStore] Pengarsipan foto gagal (HTTP ${res.status}) — misi tetap dimulai.`);
+      }
+    } catch (e) {
+      console.warn("[MissionStore] Pengarsipan foto gagal — misi tetap dimulai:", e);
+    }
+  }
+
+  async function loadAndStartMission() {
     if (!steps.value.length) return;
     const wsStore = useWebsocketStore();
     const stepsPayload = steps.value.map((s, i) => ({ ...s, id: i + 1 }));
 
+    await _arsipkanFotoRunSebelumnya();
     wsStore.sendCommand({ action: "arm" });
     wsStore.sendCommand({ action: "set_mode", mode: "GUIDED" });
     wsStore.sendCommand({ action: "start_mission", steps: stepsPayload });
   }
 
-  function startMission() {
+  async function startMission() {
     if (!steps.value.length) return;
     const wsStore = useWebsocketStore();
     const stepsPayload = steps.value.map((s, i) => ({ ...s, id: i + 1 }));
 
+    await _arsipkanFotoRunSebelumnya();
     wsStore.sendCommand({ action: "arm" });
     wsStore.sendCommand({ action: "set_mode", mode: "GUIDED" });
     wsStore.sendCommand({ action: "start_mission", steps: stepsPayload });
