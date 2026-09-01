@@ -95,6 +95,7 @@ class MissionEngine:
     STEP_TYPE_GYRO_FORWARD   = "GYRO_FORWARD"    # Maju lurus dgn koreksi yaw kompas/gyro, berhenti di waktu ATAU saat buoy terdeteksi
     STEP_TYPE_BUOY_CHASE     = "BUOY_CHASE"      # Versi sederhana SEQUENTIAL_BUOY: cuma throttle + filter jarak (px²), selesai saat buoy habis dari frame
     STEP_TYPE_PHOTO_BOX      = "PHOTO_BOX"       # Cari, dekati, dan foto box biru & hijau — WAJIB setelah step buoy selesai
+    STEP_TYPE_STEER_UNTIL_BOX = "STEER_UNTIL_BOX"  # TIMED_STEER yang berhenti saat BOX (biru/hijau) terlihat
 
     # Step yang dianggap "misi tracking buoy". Menyelesaikan salah satunya membuka
     # kunci PHOTO_BOX (lihat tracking_buoy_completed & _advance_step).
@@ -402,6 +403,13 @@ class MissionEngine:
     # berbeda dari GYRO_FORWARD.
     STEER_GATE_CONFIRM_SEC = 0.3
 
+    # Lama BOX harus terlihat TERUS-MENERUS sebelum STEER_UNTIL_BOX dianggap selesai.
+    # Perannya sama dengan STEER_GATE_CONFIRM_SEC, tapi dipisah karena syaratnya lebih
+    # longgar: di sana butuh DUA warna bola sekaligus (jarang terpenuhi secara
+    # kebetulan), di sini cukup satu box. Syarat yang lebih mudah terpenuhi lebih
+    # rentan dipicu satu frame false-positive, jadi ambangnya boleh disetel sendiri.
+    STEER_BOX_CONFIRM_SEC = 0.4
+
     # ── PHOTO_BOX ───────────────────────────────────────────────────────────
     # Semua ambang piksel di bawah dikalibrasi pada resolusi REFERENSI (1920x1080)
     # dan diskalakan otomatis ke resolusi kamera aktual oleh _apply_resolution_scaling().
@@ -621,6 +629,7 @@ class MissionEngine:
         # hitungan dari step GYRO_FORWARD sebelumnya bisa langsung menyelesaikan step
         # ini di frame pertama.
         self._steer_gate_seen_since: Optional[float] = None
+        self._steer_box_seen_since: Optional[float] = None
 
         # Callback → kirim status live ke Base Station via WebSocket
         self._status_callback = None
@@ -702,6 +711,7 @@ class MissionEngine:
             self._cruise_initial_heading = None
             self._cruise_ball_seen_since = None
             self._steer_gate_seen_since = None
+            self._steer_box_seen_since = None
             # Gerbang sekuensi PHOTO_BOX: run baru berarti step buoy-nya harus
             # diselesaikan lagi dari awal sebelum boleh memotret.
             self._tracking_buoy_completed = False
@@ -729,6 +739,7 @@ class MissionEngine:
             # langsung selesai di frame pertama setelah resume.
             self._cruise_ball_seen_since = None
             self._steer_gate_seen_since = None
+            self._steer_box_seen_since = None
             # Simpan timestamp pause gate timer agar timeout tidak salah tembak saat resume.
             # Tanpa ini, jika paused >8s saat LOCKED maka resume langsung timeout → SEARCHING.
             if (self._gate_lock_state in (self.GATE_LOCKED, self.GATE_TRANSITIONING)
@@ -797,6 +808,7 @@ class MissionEngine:
             self._cruise_initial_heading = None
             self._cruise_ball_seen_since = None
             self._steer_gate_seen_since = None
+            self._steer_box_seen_since = None
             # Gerbang sekuensi PHOTO_BOX: run baru berarti step buoy-nya harus
             # diselesaikan lagi dari awal sebelum boleh memotret.
             self._tracking_buoy_completed = False
@@ -905,7 +917,8 @@ class MissionEngine:
                     if self.asv and self.asv.is_connected() and self.asv.get_telemetry().mode != "MANUAL":
                         print("[MissionEngine] 🔄 Switch Flight Controller mode -> MANUAL for TRACKING_BUOY...")
                         self.asv.set_mode("MANUAL")
-                elif step_type in (self.STEP_TYPE_TIMED_STEER, self.STEP_TYPE_STEER_UNTIL_GATE):
+                elif step_type in (self.STEP_TYPE_TIMED_STEER, self.STEP_TYPE_STEER_UNTIL_GATE,
+                                   self.STEP_TYPE_STEER_UNTIL_BOX):
                     if self.asv and self.asv.is_connected() and self.asv.get_telemetry().mode != "MANUAL":
                         print(f"[MissionEngine] 🔄 Switch mode → MANUAL untuk {step_type}...")
                         self.asv.set_mode("MANUAL")
@@ -1004,6 +1017,10 @@ class MissionEngine:
             # ---- BUOY_CHASE ----
             elif step_type == self.STEP_TYPE_BUOY_CHASE:
                 return self._handle_buoy_chase(step, gate_x, detected_balls or {"red": [], "green": []})
+
+            # ---- STEER_UNTIL_BOX ----
+            elif step_type == self.STEP_TYPE_STEER_UNTIL_BOX:
+                return self._handle_steer_until_box(step, self._frame_boxes)
 
             # ---- PHOTO_BOX ----
             elif step_type == self.STEP_TYPE_PHOTO_BOX:
@@ -2043,6 +2060,129 @@ class MissionEngine:
             gate_label += f" (tunggu {min_runtime - elapsed:.1f}s)"
         label = (f"STEER_UNTIL_GATE {dir_label} | steer={steer:+.2f} thr={throttle:.2f} "
                  f"rem={rem_label} gate={gate_label}")
+        return steer, throttle, label
+
+    def _box_visible(self, detected_boxes: Dict, min_area_px2: float) -> Tuple[bool, bool]:
+        """
+        Apakah BOX terlihat: (biru_terlihat, hijau_terlihat), masing-masing hanya
+        dihitung kalau area bounding box-nya >= min_area_px2.
+
+        Dipisah per warna — bukan sekadar "ada box" — supaya label OSD bisa
+        menunjukkan warna mana yang sudah ketemu, dan supaya step bisa diminta
+        menunggu warna tertentu saja.
+
+        Ambang area WAJIB ada, alasannya sama seperti _gate_pair_visible(): tanpa itu
+        satu pantulan air yang lolos YOLO sudah cukup memotong manuver lebih awal.
+        """
+        def _ada(boxes) -> bool:
+            return any(self._bbox_area(b) >= min_area_px2 for b in (boxes or []))
+
+        return _ada(detected_boxes.get(ROLE_BLUE_BOX)), _ada(detected_boxes.get(ROLE_GREEN_BOX))
+
+    def _handle_steer_until_box(self, step: Dict, detected_boxes: Dict
+                                ) -> Tuple[float, float, str]:
+        """
+        Handle STEER_UNTIL_BOX step.
+
+        Kembarannya STEER_UNTIL_GATE, dengan satu perbedaan: yang mengakhiri manuver
+        adalah BOX (biru/hijau), bukan gerbang bola. Steer & throttle tetap konstan
+        lewat RC override di mode MANUAL, tanpa feedback GPS/kompas.
+
+        Gunanya: setelah lintasan buoy selesai, kapal perlu menyapu ke arah area box.
+        Manuver itu harus berhenti begitu box masuk pandangan — bukan setelah durasi
+        tetap habis — supaya PHOTO_BOX berikutnya mulai dengan target sudah di frame,
+        bukan masih harus mencari dari nol.
+
+        Step SELESAI kalau salah satu terjadi lebih dulu:
+          - `duration_sec` terlampaui (safety cap), ATAU
+          - box yang diminta terlihat TERUS-MENERUS selama `box_confirm_sec`, dan itu
+            HANYA dinilai setelah `min_runtime_sec` terlampaui.
+
+        `min_runtime_sec` sama pentingnya seperti di STEER_UNTIL_GATE: kalau box
+        KEBETULAN sudah terlihat tepat saat step dimulai, tanpa jeda ini step selesai
+        di frame pertama dan sapuannya tidak pernah terjadi.
+
+        Variabel step yang dipakai:
+          step['steer']           (float) — -1.0 (kiri penuh) .. +1.0 (kanan penuh). Default 0.0
+          step['throttle']        (float) — 0.0 .. 1.0. Default 0.3
+          step['duration_sec']    (float) — Batas waktu MAKSIMUM (detik). Default 10.0.
+                                   0 = tanpa batas — kapal hanya berhenti kalau box
+                                   ketemu. HATI-HATI memakainya.
+          step['target']          (str)   — "any" (default, box mana pun), "blue"/"biru",
+                                   "green"/"hijau", atau "both" (dua-duanya sekaligus).
+          step['min_runtime_sec'] (float) — Waktu minimum sebelum deteksi box boleh
+                                   mengakhiri step. Default 1.5
+          step['box_confirm_sec'] (float) — Lama box harus terlihat kontinu.
+                                   Default STEER_BOX_CONFIRM_SEC (0.4)
+          step['ignore_area_px2'] (float) — Area bbox minimum agar box dihitung, dalam
+                                   satuan referensi 1920x1080 (ikut skala resolusi).
+        """
+        steer        = max(-1.0, min(1.0, self._safe_float(step.get("steer"), 0.0)))
+        throttle     = max(0.0, min(1.0, self._safe_float(step.get("throttle"), 0.3)))
+        duration_sec = self._safe_float(step.get("duration_sec"), 10.0)
+        min_runtime  = max(0.0, self._safe_float(step.get("min_runtime_sec"), 1.5))
+        confirm_sec  = max(0.0, self._safe_float(step.get("box_confirm_sec"),
+                                                 self.STEER_BOX_CONFIRM_SEC))
+        min_area     = self._area_dari_step(step, "ignore_area_px2", self.SEQ_IGNORE_AREA_PX2)
+
+        # Pastikan FC benar-benar di MANUAL tiap frame, bukan cuma sekali saat step
+        # dimulai — sama seperti STEER_UNTIL_GATE. Di GUIDED, RC override tidak
+        # menggerakkan apa pun dan kapal diam sepanjang durasi tanpa gejala yang jelas.
+        if self.asv and self.asv.is_connected() and self.asv.get_telemetry().mode != "MANUAL":
+            print("[MissionEngine] 🔄 Automatic mode switch to MANUAL for STEER_UNTIL_BOX...")
+            self.asv.set_mode("MANUAL")
+
+        now = time.time()
+        elapsed = now - self._step_start_time
+
+        # --- Selesai karena waktu habis (safety cap) ---
+        if duration_sec > 0 and elapsed >= duration_sec:
+            print(f"[MissionEngine] ✅ STEER_UNTIL_BOX selesai! Durasi {duration_sec:.1f}s "
+                  f"terpenuhi (box tidak ketemu).")
+            self._steer_box_seen_since = None
+            self._advance_step()
+            return 0.0, 0.0, "STEER_UNTIL_BOX"
+
+        blue_seen, green_seen = self._box_visible(detected_boxes or {}, min_area)
+        pilihan = str(step.get("target") or "any").strip().lower()
+        if pilihan in ("blue", "biru", "blue_box"):
+            box_visible, target_label = blue_seen, "biru"
+        elif pilihan in ("green", "hijau", "ijo", "green_box"):
+            box_visible, target_label = green_seen, "hijau"
+        elif pilihan == "both":
+            box_visible, target_label = (blue_seen and green_seen), "biru+hijau"
+        else:
+            box_visible, target_label = (blue_seen or green_seen), "box apa pun"
+
+        # --- Selesai karena BOX terkonfirmasi terlihat ---
+        if elapsed >= min_runtime:
+            if box_visible:
+                if self._steer_box_seen_since is None:
+                    self._steer_box_seen_since = now
+                elif (now - self._steer_box_seen_since) >= confirm_sec:
+                    print(f"[MissionEngine] ✅ STEER_UNTIL_BOX selesai! Box ({target_label}) "
+                          f"terkonfirmasi setelah {elapsed:.1f}s → lanjut step berikutnya.")
+                    self._steer_box_seen_since = None
+                    self._advance_step()
+                    return 0.0, 0.0, "STEER_UNTIL_BOX"
+            else:
+                # Box hilang → hitungan debounce diulang dari nol.
+                self._steer_box_seen_since = None
+        else:
+            # Masih dalam masa min_runtime: jangan biarkan hitungan menumpuk diam-diam,
+            # supaya debounce benar-benar dimulai dari nol saat penilaian dibuka.
+            self._steer_box_seen_since = None
+
+        remaining = max(0.0, duration_sec - elapsed) if duration_sec > 0 else float("inf")
+        rem_label = "∞" if duration_sec <= 0 else f"{remaining:.1f}s"
+        dir_label = "←" if steer < -0.05 else ("→" if steer > 0.05 else "↑")
+        box_label = f"[B:{'✓' if blue_seen else '-'} H:{'✓' if green_seen else '-'}]"
+        if box_visible and self._steer_box_seen_since is not None:
+            box_label += f" {now - self._steer_box_seen_since:.1f}/{confirm_sec:.1f}s"
+        elif elapsed < min_runtime:
+            box_label += f" (tunggu {min_runtime - elapsed:.1f}s)"
+        label = (f"STEER_UNTIL_BOX {dir_label} | steer={steer:+.2f} thr={throttle:.2f} "
+                 f"rem={rem_label} box={box_label}")
         return steer, throttle, label
 
     # ------------------------------------------------------------------ #
@@ -3345,6 +3485,7 @@ class MissionEngine:
         self._cruise_initial_heading = None
         self._cruise_ball_seen_since = None
         self._steer_gate_seen_since = None
+        self._steer_box_seen_since = None
 
         if self._current_step_idx < len(self._steps):
             next_step = self._steps[self._current_step_idx]

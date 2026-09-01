@@ -263,6 +263,82 @@ export const STEP_TYPES = [
       },
     ],
   },
+  // ── Timed Steer yang berhenti saat BOX terlihat ────────────────────────
+  // Kembaran STEER_UNTIL_GATE di atas, tapi yang mengakhiri manuver adalah BOX
+  // (biru/hijau), bukan gerbang bola. Gunanya: setelah lintasan buoy selesai,
+  // kapal perlu menyapu ke arah area box — dan sapuan itu harus berhenti begitu
+  // box masuk pandangan, supaya Photo Box berikutnya mulai dengan target sudah
+  // di frame, bukan mencari dari nol.
+  //
+  // Box dideteksi kamera PERMUKAAN yang sama seperti buoy. Tidak ada kamera
+  // underwater di sistem ini.
+  {
+    type: "STEER_UNTIL_BOX",
+    label: "Timed Steer Until Box (Manual)",
+    icon: "📦",
+    color: "text-blue-400",
+    bg: "bg-blue-500/10 border-blue-500/30",
+    fields: [
+      {
+        key: "steer",
+        label: "Steering (-1 kiri, 0 lurus, +1 kanan)",
+        type: "number",
+        default: 0,
+      },
+      {
+        key: "throttle",
+        label: "Throttle (0-1)",
+        type: "number",
+        default: 0.3,
+      },
+      {
+        key: "duration_sec",
+        label: "Max Duration (s)",
+        type: "number",
+        default: 10,
+        // Batas waktu MAKSIMUM, bukan durasi tetap: step berhenti lebih awal begitu
+        // box ketemu. Isi 0 = tanpa batas waktu — kapal hanya berhenti kalau box
+        // terlihat. Hati-hati memakainya.
+      },
+      {
+        key: "target",
+        label: "Target (any / blue / green / both)",
+        type: "text",
+        default: "any",
+        // any  = box mana pun mengakhiri step (paling umum)
+        // blue / green = tunggu warna itu saja
+        // both = tunggu kedua box terlihat bersamaan
+      },
+      {
+        key: "min_runtime_sec",
+        label: "Min Runtime Before Box-Stop (s)",
+        type: "number",
+        default: 1.5,
+        // Deteksi box diabaikan sampai kapal sudah bergerak sekian detik. Tanpa ini,
+        // kalau box kebetulan sudah terlihat saat step dimulai, step selesai dalam
+        // satu frame dan sapuannya tidak pernah terjadi.
+      },
+      {
+        key: "box_confirm_sec",
+        label: "Box Confirm Duration (s)",
+        type: "number",
+        default: 0.4,
+        // Box harus terlihat TERUS-MENERUS selama ini sebelum step diakhiri.
+        // Sedikit lebih lama dari versi gerbang: syarat "satu box" lebih mudah
+        // terpenuhi daripada "dua warna bola sekaligus", jadi lebih rentan
+        // dipicu satu frame false-positive.
+      },
+      {
+        key: "ignore_area_px2",
+        label: "Ignore Below Area (px²)",
+        type: "number",
+        default: 4000,
+        // Box dengan area bounding box di bawah nilai ini TIDAK dihitung. Satuannya
+        // mengacu resolusi referensi 1920x1080 dan diskalakan otomatis ke resolusi
+        // kamera yang sedang dipakai.
+      },
+    ],
+  },
   // ── Sequential Multi-Pair Buoy ─────────────────────────────────────────
   // Tidak ada field konfigurasi jumlah pasangan — engine berjalan otomatis
   // sampai tidak ada lagi pasangan buoy (merah+hijau) yang terdeteksi di frame.
