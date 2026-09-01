@@ -2,7 +2,8 @@
 import { Camera, Sun, Contrast, Sliders, CheckCircle2, AlertTriangle, ScanEye, Save, RefreshCw, Maximize2 } from 'lucide-vue-next';
 import { ref, reactive, onMounted } from 'vue';
 import { useWebsocketStore } from '@/stores/websocketStore';
-import { apiUrl, authHeaders } from '@/config/api';
+import { apiUrl } from '@/config/api';
+import { authHeaders } from '@/utils/session';
 
 const ws = useWebsocketStore();
 

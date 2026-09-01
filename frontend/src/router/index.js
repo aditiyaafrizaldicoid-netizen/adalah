@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from "vue-router";
+import { useAuthStore } from "@/stores/authStore";
 import Dashboard from "../views/Dashboard.vue";
 
 const routes = [
@@ -78,10 +79,16 @@ const router = createRouter({
   routes,
 });
 
-router.beforeEach((to) => {
-
-
-  const isAuthenticated = !!localStorage.getItem("asv_access_token");
+router.beforeEach(async (to) => {
+  // Sesi disimpan di sessionStorage, jadi menutup browser sudah membuang tokennya
+  // (lihat utils/session.js). Yang diperiksa di sini adalah dua hal yang dulu tidak
+  // diperiksa sama sekali: apakah tokennya masih BERLAKU, dan kalau sudah habis
+  // apakah masih bisa ditukar dengan yang baru. Sebelumnya guard ini hanya melihat
+  // APAKAH ADA token, sehingga token yang sudah lewat 1 jam tetap meloloskan
+  // operator ke seluruh aplikasi — dan kegagalannya baru terasa saat perintah ke
+  // kapal mulai ditolak.
+  const auth = useAuthStore();
+  const isAuthenticated = await auth.ensureFreshSession();
 
   if (!to.meta.public && !isAuthenticated) {
     return { name: "Login", query: { redirect: to.fullPath } };

@@ -1,7 +1,8 @@
 import { defineStore } from "pinia";
 import { ref, computed, onMounted } from "vue";
 import { useWebsocketStore } from "./websocketStore";
-import { apiUrl, authHeaders } from "@/config/api";
+import { apiUrl } from "@/config/api";
+import { authHeaders } from "@/utils/session";
 
 // ─── Step Type Definitions ───────────────────────────────────────────────────
 export const STEP_TYPES = [

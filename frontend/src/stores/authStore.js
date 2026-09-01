@@ -1,11 +1,19 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
-import { API_BASE, TOKEN_KEY } from "@/config/api";
+import { API_BASE } from "@/config/api";
+import {
+  getRefreshToken,
+  getToken,
+  getUser,
+  isTokenExpired,
+  saveSession,
+  tokenExpiryMs,
+} from "@/utils/session";
 
-// Kunci localStorage — TOKEN_KEY dipusatkan di config/api.js karena router guard
-// dan websocketStore ikut membacanya.
-const REFRESH_KEY = "asv_refresh_token";
-const USER_KEY = "asv_user";
+// Seberapa awal sebelum kedaluwarsa access token disegarkan. Cukup longgar agar
+// satu kali kegagalan jaringan masih menyisakan waktu untuk mencoba lagi, dan agar
+// perintah ke kapal tidak pernah ditolak di tengah lomba hanya karena token habis.
+const REFRESH_LEAD_MS = 120_000;
 
 /**
  * Sambung ulang WebSocket setelah hak akses berubah.
@@ -25,19 +33,10 @@ function refreshSocketAuth() {
     .catch((e) => console.warn("[auth] Gagal menyambung ulang WebSocket:", e));
 }
 
-function readUser() {
-  try {
-    const raw = localStorage.getItem(USER_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
 export const useAuthStore = defineStore("auth", () => {
-  const user = ref(readUser());
-  const accessToken = ref(localStorage.getItem(TOKEN_KEY) || "");
-  const refreshToken = ref(localStorage.getItem(REFRESH_KEY) || "");
+  const user = ref(getUser());
+  const accessToken = ref(getToken());
+  const refreshToken = ref(getRefreshToken());
   const isLoading = ref(false);
   const error = ref("");
 
@@ -45,21 +44,61 @@ export const useAuthStore = defineStore("auth", () => {
   const isAdmin = computed(() => user.value?.role === "admin");
 
   function persist() {
-    if (accessToken.value) localStorage.setItem(TOKEN_KEY, accessToken.value);
-    else localStorage.removeItem(TOKEN_KEY);
-
-    if (refreshToken.value) localStorage.setItem(REFRESH_KEY, refreshToken.value);
-    else localStorage.removeItem(REFRESH_KEY);
-
-    if (user.value) localStorage.setItem(USER_KEY, JSON.stringify(user.value));
-    else localStorage.removeItem(USER_KEY);
+    saveSession({
+      accessToken: accessToken.value,
+      refreshToken: refreshToken.value,
+      user: user.value,
+    });
   }
 
   function clearSession() {
+    cancelScheduledRefresh();
     user.value = null;
     accessToken.value = "";
     refreshToken.value = "";
     persist();
+  }
+
+  // ── Perpanjangan sesi otomatis ────────────────────────────────────────
+  // Sesi berakhir saat browser ditutup (sessionStorage), TAPI selama tab masih
+  // terbuka ia tidak boleh mati sendiri: access token hanya berumur 1 jam, dan
+  // habisnya di tengah lomba berarti tombol KILL SWITCH ikut lumpuh sampai
+  // operator sempat login ulang. Jadi token disegarkan diam-diam sebelum habis.
+  let refreshTimer = null;
+
+  function cancelScheduledRefresh() {
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = null;
+  }
+
+  function scheduleRefresh() {
+    cancelScheduledRefresh();
+    const exp = tokenExpiryMs(accessToken.value);
+    if (!exp) return;   // klaim exp tidak terbaca — biarkan backend yang menolak
+    // Minimal 5 detik: token yang sudah nyaris mati saat halaman dibuka tetap
+    // dijadwalkan, bukan disegarkan berulang-ulang dalam satu putaran event loop.
+    const delay = Math.max(5_000, exp - Date.now() - REFRESH_LEAD_MS);
+    refreshTimer = setTimeout(() => { refreshSession(); }, delay);
+  }
+
+  /**
+   * Pastikan ada access token yang masih berlaku, menyegarkannya kalau perlu.
+   * Dipakai router guard sebelum mengizinkan masuk ke halaman terproteksi.
+   * @returns {Promise<boolean>} false berarti sesi harus dimulai dari login.
+   */
+  async function ensureFreshSession() {
+    if (!accessToken.value) return false;
+    if (!isTokenExpired(accessToken.value)) {
+      if (!refreshTimer) scheduleRefresh();
+      return true;
+    }
+    // Access token habis. Refresh token berumur jauh lebih panjang (168 jam),
+    // jadi biasanya masih bisa ditukar — kecuali memang sudah lewat juga.
+    if (!refreshToken.value || isTokenExpired(refreshToken.value)) {
+      clearSession();
+      return false;
+    }
+    return await refreshSession();
   }
 
   // Header Authorization untuk request lain yang butuh token.
@@ -90,6 +129,7 @@ export const useAuthStore = defineStore("auth", () => {
       refreshToken.value = body.data.refresh_token;
       user.value = body.data.user;
       persist();
+      scheduleRefresh();
       refreshSocketAuth();
       return true;
     } catch (e) {
@@ -159,6 +199,7 @@ export const useAuthStore = defineStore("auth", () => {
       accessToken.value = body.data.access_token;
       refreshToken.value = body.data.refresh_token;
       persist();
+      scheduleRefresh();
       refreshSocketAuth();
       return true;
     } catch {
@@ -179,6 +220,8 @@ export const useAuthStore = defineStore("auth", () => {
     logout,
     fetchProfile,
     refreshSession,
+    ensureFreshSession,
+    scheduleRefresh,
     clearSession,
   };
 });

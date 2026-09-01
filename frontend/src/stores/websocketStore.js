@@ -2,10 +2,11 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 import { useVesselStore } from "./vesselStore";
 import { useMissionStore } from "./missionStore";
-// Token dibaca langsung dari localStorage, bukan lewat useAuthStore(): authStore
-// justru memanggil reconnect() di sini setelah login/logout, dan saling-impor di
-// antara keduanya akan melingkar.
-import { wsUrl, TOKEN_KEY } from "@/config/api";
+// Token dibaca langsung dari penyimpanan sesi, bukan lewat useAuthStore():
+// authStore justru memanggil reconnect() di sini setelah login/logout, dan
+// saling-impor di antara keduanya akan melingkar.
+import { wsUrl } from "@/config/api";
+import { getToken } from "@/utils/session";
 
 export const useWebsocketStore = defineStore("websocket", () => {
   const vesselStore = useVesselStore();
@@ -43,7 +44,7 @@ export const useWebsocketStore = defineStore("websocket", () => {
     }
     stopPing();
 
-    _url = url || wsUrl(localStorage.getItem(TOKEN_KEY) || "");
+    _url = url || wsUrl(getToken());
     if (!_url) {
       status.value = "ERROR";
       console.error("[WS] Alamat WebSocket kosong — VITE_API_URL belum diset.");

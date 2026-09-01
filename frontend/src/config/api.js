@@ -30,28 +30,6 @@ export function apiUrl(path) {
 }
 
 /**
- * Kunci localStorage tempat access token disimpan.
- *
- * Ada di sini, bukan di authStore, karena tiga pemakai membacanya dan tidak semuanya
- * boleh bergantung pada authStore: websocketStore dipanggil BALIK oleh authStore
- * (impor statis akan melingkar), dan authHeaders() di bawah dipakai store lain yang
- * cuma butuh tokennya, bukan seluruh siklus hidup sesi.
- */
-export const TOKEN_KEY = "asv_access_token";
-
-/**
- * Header Authorization untuk permintaan yang MENGUBAH data.
- *
- * Backend mewajibkan JWT pada seluruh POST/PUT/DELETE; GET tetap terbuka karena
- * panel Juri dan Mini PC kapal membacanya tanpa bisa login. Mengembalikan objek
- * kosong kalau belum login, sehingga aman dipakai lewat spread di mana pun.
- */
-export function authHeaders() {
-  const token = localStorage.getItem(TOKEN_KEY);
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
-/**
  * Alamat WebSocket diturunkan dari API_BASE, bukan variabel .env tersendiri:
  * dua alamat yang harus diisi terpisah cepat atau lambat akan berbeda isi.
  * http:// menjadi ws://, https:// menjadi wss://.

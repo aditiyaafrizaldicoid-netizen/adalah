@@ -2,7 +2,8 @@
 import { ref, onMounted } from 'vue';
 import { Save, FolderOpen, Download, Trash2, Plus, RefreshCw } from 'lucide-vue-next';
 
-import { API_BASE, authHeaders } from '@/config/api';
+import { API_BASE } from '@/config/api';
+import { authHeaders } from '@/utils/session';
 
 const profiles = ref([]);
 const loading = ref(false);

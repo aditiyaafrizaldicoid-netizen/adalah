@@ -2,7 +2,8 @@
 import { ref, onMounted } from 'vue';
 import { Sliders, Save, CheckCircle2, RefreshCw } from 'lucide-vue-next';
 import { useWebsocketStore } from '@/stores/websocketStore';
-import { apiUrl, authHeaders } from '@/config/api';
+import { apiUrl } from '@/config/api';
+import { authHeaders } from '@/utils/session';
 
 const wsStore = useWebsocketStore();
 
