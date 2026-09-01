@@ -499,6 +499,25 @@ class MissionEngine:
     # box biru menandai tepi kanan, jadi titik lewat ada sejauh ini di kirinya.
     BOXCH_CHANNEL_OFFSET_PX = 420
 
+    # ── Offset dalam METER (cara yang disarankan) ───────────────────────────
+    # Offset piksel TETAP hanya benar pada SATU jarak. Pada kamera ini 280px
+    # (di 1280) berarti 0,71 m saat box berjarak 2 m, tapi 2,13 m saat 6 m —
+    # di celah selebar 2 m, kapal akan membidik jauh di luar alur selama masih
+    # jauh, lalu terlalu mepet begitu dekat.
+    #
+    # Kalau lebar box yang SEBENARNYA diketahui, offset dihitung ulang tiap frame
+    # dari lebar bbox-nya: bbox yang lebar berarti box dekat berarti satu meter
+    # memakan lebih banyak piksel. Perbandingannya mengkalibrasi dirinya sendiri —
+    # tidak perlu tahu FOV kamera maupun jarak ke box.
+    #
+    #     px_per_meter = lebar_bbox_px / lebar_box_m
+    #     offset_px    = px_per_meter * offset_m
+    #
+    # Aktif hanya kalau KEDUA field diisi (box_width_m & channel_offset_m > 0);
+    # kalau tidak, jatuh ke BOXCH_CHANNEL_OFFSET_PX di atas.
+    BOXCH_CHANNEL_OFFSET_M = 1.0    # setengah celah 2 m
+    BOXCH_BOX_WIDTH_M = 0.0         # 0 = belum diukur → pakai offset piksel
+
     # Laju jelajah saat menyusuri celah, dan laju kecil saat MEMBIDIK.
     #
     # AIM_THROTTLE SENGAJA TIDAK NOL. Kemudi kapal ini memakai servo GroundSteering
@@ -1815,7 +1834,7 @@ class MissionEngine:
         setengah = self.camera_width / 2.0
 
         # ── Arah menyusuri celah, dari box TERDEKAT ────────────────────────
-        offset = self._px_dari_step(step, "channel_offset_px", self.BOXCH_CHANNEL_OFFSET_PX)
+        offset = self._boxch_offset_px(step, box)
         titik_lewat = virtual_gate_center_x(cx, peran, offset)
         steer_alur = max(-1.0, min(1.0, (titik_lewat - setengah) / max(1.0, setengah)))
 
@@ -1895,6 +1914,28 @@ class MissionEngine:
         if self._current_step_idx != idx_sebelum:
             return self.update_frame(frame, gate_x, detected_balls)
         return hasil
+
+    def _boxch_offset_px(self, step: Dict, box) -> float:
+        """
+        Jarak (piksel) titik lewat dari box, untuk FRAME INI.
+
+        Kalau lebar box sebenarnya diketahui (field `box_width_m`), offset dihitung
+        dari lebar bbox-nya sehingga jaraknya tetap sekian METER berapa pun jarak
+        kapal ke box — lihat catatan di BOXCH_CHANNEL_OFFSET_M.
+
+        Hasil perhitungan ini TIDAK diskalakan lagi ke resolusi: ia sudah berasal
+        dari piksel frame yang sedang berjalan, jadi menskalakannya sekali lagi
+        justru salah.
+        """
+        lebar_box_m = self._safe_float(step.get("box_width_m"), self.BOXCH_BOX_WIDTH_M)
+        offset_m = self._safe_float(step.get("channel_offset_m"), self.BOXCH_CHANNEL_OFFSET_M)
+        lebar_bbox_px = float(box[4] - box[2])
+
+        if lebar_box_m > 0 and offset_m > 0 and lebar_bbox_px > 0:
+            return (lebar_bbox_px / lebar_box_m) * offset_m
+
+        # Belum diukur: pakai offset piksel tetap (diskalakan dari resolusi referensi).
+        return self._px_dari_step(step, "channel_offset_px", self.BOXCH_CHANNEL_OFFSET_PX)
 
     def _boxch_terbesar(self, detected_boxes: Dict):
         """(peran, box) dengan bbox TERBESAR = paling dekat, atau None."""

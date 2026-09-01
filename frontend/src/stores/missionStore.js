@@ -674,13 +674,35 @@ export const STEP_TYPES = [
         // Turunkan ke 0 kalau thruster diferensial ternyata sanggup memutar di tempat.
       },
       {
+        key: "box_width_m",
+        label: "Lebar Box Sebenarnya (m) — UKUR INI",
+        type: "number",
+        default: 0.5,
+        // Kunci dari cara offset yang benar. Kalau diisi, jarak lewat dihitung
+        // ulang tiap frame dari lebar box di layar, sehingga tetap sekian METER
+        // berapa pun jarak kapal ke box. Isi 0 untuk kembali memakai offset
+        // piksel tetap di bawah (tidak disarankan — lihat catatannya).
+      },
+      {
+        key: "channel_offset_m",
+        label: "Jarak Lewat dari Box (m)",
+        type: "number",
+        default: 1.0,
+        // Setengah lebar celah. Celah 2 m → 1.0. Perkecil kalau kapal terlalu
+        // melebar keluar alur, perbesar kalau lewat terlalu mepet ke box.
+        // Hanya dipakai kalau "Lebar Box Sebenarnya" juga diisi.
+      },
+      {
         key: "channel_offset_px",
-        label: "Channel Offset dari Box (px)",
+        label: "Channel Offset — mode piksel (cadangan)",
         type: "number",
         default: 420,
-        // Seberapa jauh titik lewat digeser dari SATU box yang terlihat. Inilah
-        // yang membuat celah bisa disusuri walau kedua box tidak pernah terlihat
-        // bersamaan. Perbesar kalau kapal lewat terlalu dekat ke box.
+        // HANYA dipakai kalau "Lebar Box Sebenarnya" dikosongkan/0.
+        //
+        // Offset piksel tetap cuma benar pada SATU jarak: 280px (di 1280) berarti
+        // 0,71 m saat box 2 m di depan, tapi 2,13 m saat 6 m. Di celah 2 m, kapal
+        // akan membidik jauh di luar alur selama masih jauh. Pakai mode meter di
+        // atas kalau lebar box sudah diukur.
       },
       {
         key: "align_threshold_px",
