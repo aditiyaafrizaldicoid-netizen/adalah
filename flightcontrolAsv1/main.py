@@ -118,9 +118,13 @@ def main():
           f"(skala vs 1920x1080 — jarak {_px:.3f}x, area {_area:.3f}x)")
 
     model_path = os.path.join(os.path.dirname(__file__), "models", "best.pt")
+    # Kelas yang dipakai TIDAK lagi disaring dengan indeks. Model terbaru menambah
+    # kelas box dan menomori ulang semuanya ({0: BOX_biru, 1: BOX_ijo, 2: B_GREEN,
+    # 3: B_RED}), sehingga `target_class=[0, 1]` yang dulu berarti "bola hijau &
+    # merah" berubah diam-diam menjadi "kedua box". BallTracker sekarang memetakan
+    # kelas lewat NAMA-nya — lihat vision/class_map.py.
     tracker = BallTracker(
         model_path=model_path,
-        target_class=[0, 1],
         conf_threshold=0.45
     )
 
@@ -206,11 +210,12 @@ def main():
         gate_state  = mission_engine.gate_lock_state if mission_engine.status == "RUNNING" else None
 
         # Deteksi bola, hitung midpoint fallback, dan dapatkan detected_balls per class
-        # tracker.process_frame() mengembalikan 4 nilai:
+        # tracker.process_frame() mengembalikan 5 nilai:
         #   processed_frame : frame dengan anotasi
         #   gate_x, gate_y  : midpoint fallback (digunakan saat SEARCHING)
         #   detected_balls  : {"red": [...], "green": [...]} — digunakan Gate State Machine
-        processed_frame, gate_x, gate_y, detected_balls = tracker.process_frame(
+        #   detected_boxes  : {"blue_box": [...], "green_box": [...]} — dipakai step PHOTO_BOX
+        processed_frame, gate_x, gate_y, detected_balls, detected_boxes = tracker.process_frame(
             frame,
             state_label=state_name,
             gate_state=gate_state
@@ -244,7 +249,9 @@ def main():
             # ----------------------------------------------------------------
             try:
                 steer_norm, thr_norm, step_label = mission_engine.update_frame(
-                    frame, gate_x, detected_balls=detected_balls
+                    frame, gate_x,
+                    detected_balls=detected_balls,
+                    detected_boxes=detected_boxes,
                 )
             except Exception as e:
                 print(f"[MISSION] ⚠️ update_frame() error — RC dinetralkan demi keamanan: {e}")

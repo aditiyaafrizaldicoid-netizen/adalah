@@ -1,6 +1,15 @@
 import cv2
 from ultralytics import YOLO
 
+from vision.class_map import (
+    BOX_ROLES,
+    ROLE_BLUE_BOX,
+    ROLE_GREEN_BOX,
+    ROLE_GREEN_BUOY,
+    ROLE_LABELS,
+    ROLE_RED_BUOY,
+    build_role_map,
+)
 from vision.gate_convention import virtual_gate_center_x
 
 
@@ -11,8 +20,10 @@ class BallTracker:
     """
 
     # Warna BGR untuk visualisasi
-    COLOR_GREEN_BALL  = (0, 220, 0)      # Bola hijau (class 0)
-    COLOR_RED_BALL    = (0, 0, 220)      # Bola merah (class 1)
+    COLOR_GREEN_BALL  = (0, 220, 0)      # Bola hijau gerbang
+    COLOR_RED_BALL    = (0, 0, 220)      # Bola merah gerbang
+    COLOR_BLUE_BOX    = (255, 120, 0)    # Box biru (target foto)
+    COLOR_GREEN_BOX   = (120, 220, 120)  # Box hijau (target foto)
     COLOR_GATE_LINE   = (0, 255, 255)    # Garis penghubung antar bola gate (kuning)
     COLOR_MIDPOINT    = (255, 0, 255)    # Titik tengah gate (magenta)
     COLOR_CENTER_LINE = (80, 80, 80)     # Garis tengah frame (abu-abu)
@@ -31,11 +42,16 @@ class BallTracker:
         "CLEARED":      (255, 80, 255),   # magenta
     }
 
-    def __init__(self, model_path="yolov8n.pt", target_class=32, conf_threshold=0.5,
+    def __init__(self, model_path="yolov8n.pt", target_class=None, conf_threshold=0.5,
                  min_detection_area_px2=4000, **kwargs):
         """
         :param model_path:    Path ke file bobot YOLO.
-        :param target_class:  Class ID target, atau list class ID (misal [0, 1] untuk gate hijau+merah).
+        :param target_class:  DIABAIKAN — dipertahankan hanya agar pemanggil lama tidak
+            error. Kelas yang dipakai sekarang ditentukan dari NAMA kelas di model lewat
+            vision/class_map.py, bukan dari indeks. Menyaring dengan indeks adalah
+            penyebab bug diam yang dijelaskan panjang di modul itu: model yang menambah
+            kelas box menomori ulang semuanya, sehingga `target_class=[0, 1]` berhenti
+            memilih bola dan mulai memilih box.
         :param conf_threshold: Confidence threshold deteksi minimum.
         :param min_detection_area_px2: Area bounding box (piksel²) minimum agar sebuah
             deteksi dianggap valid. Deteksi di bawah ini dibuang di SUMBER (sebelum masuk
@@ -48,10 +64,19 @@ class BallTracker:
         """
         print(f"[BallTracker] Loading YOLO model from {model_path}...")
         self.model = YOLO(model_path)
-        self.target_class = target_class
         self.conf_threshold = conf_threshold
         self.min_detection_area_px2 = float(min_detection_area_px2)
-        print("[BallTracker] Model loaded successfully.")
+
+        # {class_id: peran} dibangun dari model.names — lihat vision/class_map.py.
+        self._role_of_class = build_role_map(getattr(self.model, "names", {}))
+        if target_class is not None:
+            print("[BallTracker] ℹ️ Argumen target_class diabaikan; kelas ditentukan "
+                  "dari nama di model (vision/class_map.py).")
+
+        terdeteksi = ", ".join(
+            f"{cid}:{ROLE_LABELS[peran]}" for cid, peran in sorted(self._role_of_class.items())
+        ) or "(tidak ada kelas dikenali!)"
+        print(f"[BallTracker] Model loaded. Kelas aktif -> {terdeteksi}")
 
     def set_min_detection_area(self, px2: float):
         """Update noise-floor deteksi secara live (dipanggil dari WS/REST config fetch)."""
@@ -67,11 +92,16 @@ class BallTracker:
         koordinat midpoint gate serta dictionary bola yang terdeteksi.
 
         Returns:
-            (processed_frame, gate_center_x, gate_center_y, detected_balls)
+            (processed_frame, gate_center_x, gate_center_y, detected_balls, detected_boxes)
 
             detected_balls: dict dengan key "red" dan "green", masing-masing berisi
             list tuple (cx, cy, x1, y1, x2, y2) dari bola yang terdeteksi.
             Contoh: {"red": [(cx, cy, x1, y1, x2, y2), ...], "green": [...]}
+
+            detected_boxes: dict dengan key "blue_box" dan "green_box", format tuple
+            yang sama. Dipakai step PHOTO_BOX. Sengaja DIPISAH dari detected_balls
+            supaya seluruh logika gerbang buoy yang sudah ada tidak perlu tahu
+            bahwa model sekarang juga mendeteksi box.
 
         CATATAN: Kalkulasi gate_center_x/gate_center_y di sini hanya digunakan
         sebagai fallback visual. MissionEngine yang memegang Gate State Machine
@@ -86,9 +116,19 @@ class BallTracker:
 
         results = self.model(frame, stream=True, verbose=False)
 
-        # Kumpulkan deteksi per class
-        green_balls = []   # class 0
-        red_balls   = []   # class 1
+        # Kumpulkan deteksi per PERAN (bukan per indeks kelas — lihat class_map.py)
+        per_peran = {
+            ROLE_GREEN_BUOY: [],
+            ROLE_RED_BUOY: [],
+            ROLE_BLUE_BOX: [],
+            ROLE_GREEN_BOX: [],
+        }
+        warna_peran = {
+            ROLE_GREEN_BUOY: self.COLOR_GREEN_BALL,
+            ROLE_RED_BUOY: self.COLOR_RED_BALL,
+            ROLE_BLUE_BOX: self.COLOR_BLUE_BOX,
+            ROLE_GREEN_BOX: self.COLOR_GREEN_BOX,
+        }
         all_centers_x = []
         all_centers_y = []
 
@@ -97,49 +137,47 @@ class BallTracker:
                 cls  = int(box.cls[0])
                 conf = float(box.conf[0])
 
-                # Cek apakah class ini adalah target
-                is_target = False
-                if self.target_class is None:
-                    is_target = True
-                elif isinstance(self.target_class, (list, tuple)) and cls in self.target_class:
-                    is_target = True
-                elif cls == self.target_class:
-                    is_target = True
-
-                if not is_target or conf < self.conf_threshold:
+                peran = self._role_of_class.get(cls)
+                if peran is None or conf < self.conf_threshold:
                     continue
 
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
 
                 # Noise-floor: buang deteksi yang bounding box-nya lebih kecil dari
-                # min_detection_area_px2 SEBELUM masuk ke green_balls/red_balls atau
-                # gate_x fallback — berlaku di sumber untuk semua mission step.
+                # min_detection_area_px2 SEBELUM masuk ke detected_balls/detected_boxes
+                # atau gate_x fallback — berlaku di sumber untuk semua mission step.
+                # Ikut berlaku untuk box supaya pantulan air atau benda jauh tidak
+                # memicu step PHOTO_BOX; ambang "cukup dekat untuk difoto" jauh lebih
+                # besar dan diatur terpisah di mission_engine (min_area_px2).
                 if (x2 - x1) * (y2 - y1) < self.min_detection_area_px2:
                     continue
 
                 cx = (x1 + x2) // 2
                 cy = (y1 + y2) // 2
 
-                if cls == 0:   # hijau
-                    color = self.COLOR_GREEN_BALL
-                    green_balls.append((cx, cy, x1, y1, x2, y2))
-                else:          # merah
-                    color = self.COLOR_RED_BALL
-                    red_balls.append((cx, cy, x1, y1, x2, y2))
+                color = warna_peran[peran]
+                per_peran[peran].append((cx, cy, x1, y1, x2, y2))
 
-                all_centers_x.append(cx)
-                all_centers_y.append(cy)
+                # Hanya BOLA yang boleh menyumbang midpoint gerbang fallback. Box
+                # ikut di sini akan menarik gate_x ke arah target foto dan membelokkan
+                # kemudi saat kapal masih menyusuri gerbang buoy.
+                if peran not in BOX_ROLES:
+                    all_centers_x.append(cx)
+                    all_centers_y.append(cy)
 
                 class_name = self.model.names[cls] if hasattr(self.model, 'names') else str(cls)
                 label = f"{class_name} {conf:.2f}"
 
-                # Bounding box
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                # Center dot
+                # Box misi digambar lebih tebal supaya kebedaan dari bola gerbang
+                # langsung terlihat di rekaman saat ditinjau ulang.
+                tebal = 3 if peran in BOX_ROLES else 2
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, tebal)
                 cv2.circle(frame, (cx, cy), 6, color, -1)
-                # Label
                 cv2.putText(frame, label, (x1, max(y1 - 10, 0)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+        green_balls = per_peran[ROLE_GREEN_BUOY]
+        red_balls   = per_peran[ROLE_RED_BUOY]
 
         # ---- Hitung midpoint gate murni (hanya untuk fallback visual) ----
         gate_center_x = None
@@ -223,9 +261,16 @@ class BallTracker:
             cv2.putText(frame, f"GATE: {gate_state}", (12, osd_y + 22),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.65, gate_color, 2)
 
-        # ---- Return: frame, midpoint xy, detected balls per class ----
+        # ---- Return: frame, midpoint xy, bola per warna, box misi per warna ----
         detected_balls = {
             "red":   sorted_red,    # list (cx, cy, x1, y1, x2, y2), sorted foreground-first
             "green": sorted_green,  # list (cx, cy, x1, y1, x2, y2), sorted foreground-first
         }
-        return frame, gate_center_x, gate_center_y, detected_balls
+        # Box target step PHOTO_BOX. Diurutkan terbesar dulu dengan alasan yang sama
+        # seperti bola: bbox terbesar = paling dekat ke kamera = yang sedang dihadapi.
+        detected_boxes = {
+            peran: sorted(per_peran[peran],
+                          key=lambda b: (b[4] - b[2]) * (b[5] - b[3]), reverse=True)
+            for peran in BOX_ROLES
+        }
+        return frame, gate_center_x, gate_center_y, detected_balls, detected_boxes

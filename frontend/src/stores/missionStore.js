@@ -475,6 +475,93 @@ export const STEP_TYPES = [
       },
     ],
   },
+  // ── Misi foto box biru & hijau ─────────────────────────────────────────
+  // WAJIB diletakkan SETELAH salah satu step buoy (Tracking Buoy / Sequential
+  // Buoy / Buoy Chase). Kapal menolak menjalankannya lebih awal: engine menahan
+  // posisi lalu melewati step ini, dan mengirim peringatan ke panel ini.
+  //
+  // SATU KAMERA. Box biru konsepnya target bawah air dan box hijau target atas
+  // air, tapi di arena box biru masih menyembul di permukaan — keduanya dipotret
+  // dari kamera permukaan yang sama. Tidak ada kamera underwater di sistem ini.
+  {
+    type: "PHOTO_BOX",
+    label: "Photo Box (Biru & Hijau)",
+    icon: "📷",
+    color: "text-blue-400",
+    bg: "bg-blue-500/10 border-blue-500/30",
+    fields: [
+      {
+        key: "target",
+        label: "Target (both / blue / green)",
+        type: "text",
+        default: "both",
+        // Urutan default: biru dulu, karena bagiannya yang terlihat dari permukaan
+        // paling kecil sehingga paling butuh kapal mendekat.
+      },
+      {
+        key: "throttle",
+        label: "Approach Throttle (0-1)",
+        type: "number",
+        default: 0.25,
+        // Kecepatan meluncur mendekati box setelah lurus di depan haluan.
+      },
+      {
+        key: "search_throttle",
+        label: "Search Throttle (0-1)",
+        type: "number",
+        default: 0.15,
+        // Kecepatan saat menyapu mencari box yang belum terlihat.
+      },
+      {
+        key: "search_steer",
+        label: "Search Steer (-1 kiri .. +1 kanan)",
+        type: "number",
+        default: 0.25,
+        // Arah sapuan saat mencari. Ubah tandanya kalau box berada di sisi kiri
+        // lintasan setelah gerbang terakhir.
+      },
+      {
+        key: "align_threshold_px",
+        label: "Align Tolerance (px)",
+        type: "number",
+        default: 120,
+        // Seberapa dekat box harus ke garis tengah frame sebelum kapal mulai maju.
+        // Nilai default diskalakan otomatis ke resolusi kamera aktual oleh engine.
+      },
+      {
+        key: "min_area_px2_blue",
+        label: "Close Enough — Blue Box (px²)",
+        type: "number",
+        default: 60000,
+        // SENGAJA terpisah dari box hijau: box biru sebagian terendam, sehingga
+        // bagian yang terlihat kamera permukaan lebih kecil pada jarak yang sama.
+        // Satu ambang untuk keduanya membuat kapal menabrak box hijau atau tidak
+        // pernah merasa cukup dekat ke box biru.
+      },
+      {
+        key: "min_area_px2_green",
+        label: "Close Enough — Green Box (px²)",
+        type: "number",
+        default: 90000,
+      },
+      {
+        key: "settle_sec",
+        label: "Settle Before Shutter (s)",
+        type: "number",
+        default: 1.2,
+        // Lama kapal harus DIAM sebelum memotret. Foto dari kapal yang masih
+        // meluncur akan buram dan miring saat dinilai juri.
+      },
+      {
+        key: "search_timeout_sec",
+        label: "Give Up Searching After (s)",
+        type: "number",
+        default: 20,
+        // Batas mencari SATU box sebelum menyerah dan lanjut ke target berikutnya.
+        // Menyerah lebih baik daripada menahan seluruh misi demi satu foto.
+      },
+    ],
+  },
   {
     type: "FINISH",
     label: "Mission Complete",

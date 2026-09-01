@@ -58,6 +58,7 @@ from typing import Optional, List, Dict, Any, Tuple
 from camera.geotag import save_geotagged_image
 from control.speed_scheduler import SpeedScheduler
 from vision.ball_pairing import sort_ball_pairs
+from vision.class_map import ROLE_BLUE_BOX, ROLE_GREEN_BOX, ROLE_LABELS
 from vision.gate_convention import (
     LEFT,
     channel_sign,
@@ -93,6 +94,15 @@ class MissionEngine:
     STEP_TYPE_SEQUENTIAL_BUOY = "SEQUENTIAL_BUOY"  # Lewati N pasang buoy (hijau+merah) secara berurutan
     STEP_TYPE_GYRO_FORWARD   = "GYRO_FORWARD"    # Maju lurus dgn koreksi yaw kompas/gyro, berhenti di waktu ATAU saat buoy terdeteksi
     STEP_TYPE_BUOY_CHASE     = "BUOY_CHASE"      # Versi sederhana SEQUENTIAL_BUOY: cuma throttle + filter jarak (px²), selesai saat buoy habis dari frame
+    STEP_TYPE_PHOTO_BOX      = "PHOTO_BOX"       # Cari, dekati, dan foto box biru & hijau — WAJIB setelah step buoy selesai
+
+    # Step yang dianggap "misi tracking buoy". Menyelesaikan salah satunya membuka
+    # kunci PHOTO_BOX (lihat tracking_buoy_completed & _advance_step).
+    BUOY_STEP_TYPES = frozenset({
+        STEP_TYPE_TRACKING_BUOY,
+        STEP_TYPE_SEQUENTIAL_BUOY,
+        STEP_TYPE_BUOY_CHASE,
+    })
 
     # ── Resolusi Referensi ───────────────────────────────────────────────────
     # SEMUA konstanta berbasis piksel di bawah (GATE_IDENTITY_MAX_DIST_PX,
@@ -114,6 +124,18 @@ class MissionEngine:
 
     # Threshold heading error untuk PRECISION_TURN: dianggap selesai jika |error| <= X derajat
     TURN_ARRIVAL_THRESHOLD_DEG = 3.0
+
+    # ---- Fase step PHOTO_BOX ----
+    # SEARCH   : box target belum terlihat. Maju pelan sambil menyapu.
+    # ALIGN    : box terlihat tapi belum lurus di depan haluan. Putar untuk memusatkan.
+    # APPROACH : sudah lurus, belum cukup dekat. Maju sambil terus menjaga pusat.
+    # SETTLE   : cukup dekat. Berhenti dan tunggu kapal diam supaya foto tidak buram.
+    # SHOOT    : shutter diminta, menunggu frame kamera BERSIH dari main.py.
+    PHOTO_SEARCH   = "SEARCH"
+    PHOTO_ALIGN    = "ALIGN"
+    PHOTO_APPROACH = "APPROACH"
+    PHOTO_SETTLE   = "SETTLE"
+    PHOTO_SHOOT    = "SHOOT"
 
     # ---- Gate State Machine states ----
     GATE_SEARCHING    = "SEARCHING"
@@ -380,6 +402,72 @@ class MissionEngine:
     # berbeda dari GYRO_FORWARD.
     STEER_GATE_CONFIRM_SEC = 0.3
 
+    # ── PHOTO_BOX ───────────────────────────────────────────────────────────
+    # Semua ambang piksel di bawah dikalibrasi pada resolusi REFERENSI (1920x1080)
+    # dan diskalakan otomatis ke resolusi kamera aktual oleh _apply_resolution_scaling().
+    #
+    # SATU KAMERA SAJA. Box biru secara konsep adalah target bawah air dan box hijau
+    # target atas air, TAPI di arena box biru masih menyembul di atas permukaan —
+    # jadi keduanya dicari lewat kamera permukaan yang sama yang sudah dipakai untuk
+    # tracking buoy. Tidak ada kamera underwater di sistem ini dan tidak boleh ada:
+    # frame yang dipakai step ini adalah frame yang sama persis dari VideoStreamer.
+
+    # Toleransi pemusatan (piksel dari garis tengah frame) sebelum box dianggap
+    # "sudah lurus di depan haluan" dan kapal boleh mulai mendekat.
+    PHOTO_ALIGN_THRESHOLD_PX = 120
+
+    # Gain proporsional pemusatan: steer_norm penuh (±1.0) dicapai saat box berada
+    # di tepi frame. SENGAJA TIDAK memakai TrackingController: PID itu di-tune untuk
+    # mengejar midpoint gerbang yang bergerak cepat, dan gain-nya (lihat catatan
+    # saturasi di control/pid_tracker.py) membuat kemudi bang-bang untuk target diam
+    # sebesar box. Di sini yang dibutuhkan justru pendekatan yang halus dan pelan.
+    PHOTO_STEER_KP = 1.0
+
+    # Steer maksimum saat memusatkan box. Lebih kecil dari manuver gerbang: kapal
+    # sedang membidik target diam, bukan menghindari tabrakan.
+    PHOTO_MAX_STEER = 0.45
+
+    # Luas bbox (piksel²) yang menandakan box sudah cukup dekat untuk difoto.
+    # DIPISAH per warna dengan sengaja: box biru sebagian terendam, sehingga bagian
+    # yang terlihat kamera permukaan LEBIH KECIL daripada box hijau pada jarak yang
+    # sama. Memakai satu ambang untuk keduanya membuat kapal menabrak box hijau atau
+    # tidak pernah merasa cukup dekat ke box biru.
+    PHOTO_MIN_AREA_PX2_BLUE = 60000
+    PHOTO_MIN_AREA_PX2_GREEN = 90000
+
+    # Throttle saat meluncur mendekati box, dan saat memutar mencari box.
+    PHOTO_APPROACH_THROTTLE = 0.25
+    PHOTO_SEARCH_THROTTLE = 0.15
+
+    # Steer konstan saat menyapu mencari box yang belum terlihat. Positif = kanan.
+    # Arena menempatkan kedua box di sisi yang sama setelah gerbang terakhir, jadi
+    # menyapu satu arah sudah cukup; ubah lewat field step kalau arenanya berbeda.
+    PHOTO_SEARCH_STEER = 0.25
+
+    # Lama kapal harus DIAM sebelum shutter ditekan. Foto yang dinilai juri diambil
+    # dari kapal yang masih meluncur akan buram dan miring; jeda ini menunggu buritan
+    # berhenti bergoyang lebih dulu.
+    PHOTO_SETTLE_SEC = 1.2
+
+    # Berapa lama deteksi boleh hilang sebelum kapal berhenti menganggap dirinya
+    # sedang membidik. Satu-dua frame miss YOLO tidak boleh mengembalikan kapal ke
+    # fase mencari — pola yang sama dipakai SEQ_LOST_CONFIRM_SEC.
+    PHOTO_LOST_GRACE_SEC = 0.6
+
+    # Batas waktu mencari SATU box sebelum menyerah dan lanjut ke target berikutnya.
+    # Menyerah lebih baik daripada menahan seluruh misi demi satu foto.
+    PHOTO_SEARCH_TIMEOUT_SEC = 20.0
+
+    # Batas waktu menunggu frame kamera bersih setelah shutter diminta. Kalau kamera
+    # mati, permintaan foto tidak boleh menggantung selamanya (pola yang sama dengan
+    # TAKE_IMAGE).
+    PHOTO_SHOOT_TIMEOUT_SEC = 3.0
+
+    # Lama kapal menahan posisi saat PHOTO_BOX dijalankan sebelum waktunya, sebelum
+    # step-nya dilewati. Lihat photo_mission() untuk alasan "tahan lalu lewati"
+    # alih-alih langsung melewati atau menggantung selamanya.
+    PHOTO_BLOCKED_HOLD_SEC = 10.0
+
     def __init__(self, asv, tracker, tracking_controller, speed_scheduler: Optional[SpeedScheduler] = None,
                  camera_width: int = REFERENCE_FRAME_WIDTH, camera_height: int = REFERENCE_FRAME_HEIGHT):
         self.asv = asv
@@ -403,6 +491,21 @@ class MissionEngine:
 
         # Counter berapa gate PASSING sudah terjadi di step TRACKING saat ini
         self._buoy_pass_count: int = 0
+
+        # Gerbang sekuensi PHOTO_BOX: True setelah salah satu step buoy SELESAI
+        # dalam run ini. Lihat tracking_buoy_completed dan photo_mission().
+        self._tracking_buoy_completed: bool = False
+
+        # State step PHOTO_BOX (di-reset tiap kali step-nya dimulai)
+        self._photo_phase: str = self.PHOTO_SEARCH
+        self._photo_phase_since: float = 0.0
+        self._photo_target: Optional[str] = None
+        self._photo_done: List[str] = []
+        self._photo_last_seen_at: float = 0.0
+        self._photo_last_steer: float = 0.0
+        self._photo_blocked_since: Optional[float] = None
+        # Deteksi box milik frame yang sedang diproses — lihat catatan di update_frame().
+        self._frame_boxes: Dict[str, List] = {}
 
         # ---- Gate State Machine ----
         self._gate_lock_state: str = self.GATE_SEARCHING
@@ -551,6 +654,10 @@ class MissionEngine:
             self._reset_sequential_state()
             self._step_start_time = None
             self._paused_step_elapsed = 0.0
+            # Gerbang sekuensi PHOTO_BOX: run baru berarti step buoy-nya harus
+            # diselesaikan lagi dari awal sebelum boleh memotret.
+            self._tracking_buoy_completed = False
+            self._reset_photo_state()
             print(f"[MissionEngine] Mission loaded: {len(self._steps)} steps.")
             self._broadcast_status()
             return True
@@ -595,6 +702,10 @@ class MissionEngine:
             self._cruise_initial_heading = None
             self._cruise_ball_seen_since = None
             self._steer_gate_seen_since = None
+            # Gerbang sekuensi PHOTO_BOX: run baru berarti step buoy-nya harus
+            # diselesaikan lagi dari awal sebelum boleh memotret.
+            self._tracking_buoy_completed = False
+            self._reset_photo_state()
 
             if hasattr(self.tracking_controller, 'reset'):
                 self.tracking_controller.reset()
@@ -686,6 +797,10 @@ class MissionEngine:
             self._cruise_initial_heading = None
             self._cruise_ball_seen_since = None
             self._steer_gate_seen_since = None
+            # Gerbang sekuensi PHOTO_BOX: run baru berarti step buoy-nya harus
+            # diselesaikan lagi dari awal sebelum boleh memotret.
+            self._tracking_buoy_completed = False
+            self._reset_photo_state()
             self._stop_elapsed_timer()
             self.asv.stop_movement()
             if hasattr(self.tracking_controller, 'reset'):
@@ -733,13 +848,20 @@ class MissionEngine:
                 "seq_current_pair": self._seq_pairs_cleared + 1,
                 "seq_pairs_cleared": self._seq_pairs_cleared,
                 "seq_gate_lock_state": self._seq_gate_lock_state,
+                # PHOTO_BOX — supaya operator bisa melihat kenapa kapal diam
+                # (mencari? menunggu diam? diblokir gerbang sekuensi?)
+                "tracking_buoy_completed": self._tracking_buoy_completed,
+                "photo_phase": self._photo_phase,
+                "photo_target": self._photo_target,
+                "photo_done": list(self._photo_done),
             }
 
     # ------------------------------------------------------------------ #
     #  Frame Update Loop (dipanggil dari video_streamer callback ~30FPS)  #
     # ------------------------------------------------------------------ #
 
-    def update_frame(self, frame, gate_x: Optional[float], detected_balls: Optional[Dict] = None):
+    def update_frame(self, frame, gate_x: Optional[float], detected_balls: Optional[Dict] = None,
+                     detected_boxes: Optional[Dict] = None):
         """
         Dipanggil oleh process_and_control() setiap frame.
 
@@ -747,10 +869,22 @@ class MissionEngine:
         :param gate_x:         Koordinat X midpoint gate dari tracker (fallback/visual).
         :param detected_balls: Dict {"red": [...], "green": [...]} dari tracker.process_frame().
                                Masing-masing berisi list (cx, cy, x1, y1, x2, y2).
+        :param detected_boxes: Dict {"blue_box": [...], "green_box": [...]}, format sama.
+                               Hanya dipakai step PHOTO_BOX. Opsional agar pemanggil lama
+                               (mis. tools/buoy_sim.py) tetap jalan tanpa perubahan.
 
         Return: (steer_norm, thr_norm, step_type_label)
         """
         with self._lock:
+            # Simpan deteksi box milik FRAME INI. Beberapa handler menyelesaikan
+            # step-nya lalu memanggil update_frame() lagi secara rekursif dengan
+            # argumen lama (frame, gate_x, detected_balls) — tanpa simpanan ini,
+            # step PHOTO_BOX yang mulai lewat jalur rekursi itu akan melihat nol box
+            # padahal box-nya ada di frame. Hanya ditimpa saat pemanggil benar-benar
+            # memberi nilai, sehingga rekursi mewarisi milik frame yang sama.
+            if detected_boxes is not None:
+                self._frame_boxes = detected_boxes
+
             if self._status != self.STATUS_RUNNING:
                 return 0.0, 0.0, "IDLE"
 
@@ -785,6 +919,15 @@ class MissionEngine:
                     if self.asv and self.asv.is_connected() and self.asv.get_telemetry().mode != "MANUAL":
                         print(f"[MissionEngine] 🔄 Switch mode → MANUAL untuk {step_type}...")
                         self.asv.set_mode("MANUAL")
+                elif step_type == self.STEP_TYPE_PHOTO_BOX:
+                    # Mode MANUAL + RC override, sama seperti step berbasis kamera
+                    # lainnya: pemusatan box butuh kemudi yang merespons per frame,
+                    # bukan velocity GUIDED yang dihaluskan autopilot.
+                    self._reset_photo_state()
+                    if self.asv and self.asv.is_connected() and self.asv.get_telemetry().mode != "MANUAL":
+                        print("[MissionEngine] 🔄 Switch mode → MANUAL untuk PHOTO_BOX...")
+                        self.asv.set_mode("MANUAL")
+
                 elif step_type == self.STEP_TYPE_GYRO_FORWARD:
                     # SAMA seperti TRACKING_BUOY/SEQUENTIAL_BUOY/TIMED_STEER — mode MANUAL,
                     # gerak via RC Override (send_manual_rc_drive), BUKAN GUIDED/send_velocity.
@@ -861,6 +1004,11 @@ class MissionEngine:
             # ---- BUOY_CHASE ----
             elif step_type == self.STEP_TYPE_BUOY_CHASE:
                 return self._handle_buoy_chase(step, gate_x, detected_balls or {"red": [], "green": []})
+
+            # ---- PHOTO_BOX ----
+            elif step_type == self.STEP_TYPE_PHOTO_BOX:
+                return self._handle_photo_box(step, frame, gate_x, detected_balls,
+                                              self._frame_boxes)
 
             # ---- FINISH ----
             elif step_type == self.STEP_TYPE_FINISH:
@@ -1199,6 +1347,282 @@ class MissionEngine:
         telemetry = self.asv.get_telemetry_dict() if self.asv else {}
         return save_geotagged_image(frame, telemetry, self.CAPTURE_DIR,
                                     label=self._capture_label)
+
+    # ------------------------------------------------------------------ #
+    #  PHOTO_BOX — misi memotret box biru & box hijau                     #
+    # ------------------------------------------------------------------ #
+
+    @property
+    def tracking_buoy_completed(self) -> bool:
+        """
+        True kalau salah satu step buoy (TRACKING_BUOY / SEQUENTIAL_BUOY /
+        BUOY_CHASE) sudah SELESAI dalam run misi ini.
+
+        Ditetapkan di _advance_step() — satu tempat yang dilewati SEMUA jalur
+        penyelesaian step, termasuk yang selesai karena timeout atau karena buoy
+        habis dari frame. Mengandalkan tiap handler menyetel flag-nya sendiri akan
+        melewatkan jalur-jalur itu. Direset bersama state misi lain di
+        load_mission(), start_mission(), dan reset_mission().
+        """
+        return self._tracking_buoy_completed
+
+    def photo_mission(self, step: Dict, detected_boxes: Optional[Dict] = None
+                      ) -> Tuple[float, float, str]:
+        """
+        Jalankan misi memotret box biru & box hijau.
+
+        SATU KAMERA. Box biru konsepnya target bawah air dan box hijau target atas
+        air, tapi di arena box biru masih menyembul di permukaan — jadi keduanya
+        dicari lewat kamera permukaan yang sama yang dipakai tracking buoy. Method
+        ini tidak pernah membuka kamera: frame-nya sudah mengalir dari VideoStreamer
+        lewat main.py, dan foto bersihnya diambil capture_now(). Tidak ada
+        inisialisasi kamera underwater di mana pun di jalur ini.
+
+        SYARAT SEKUENSI: misi ini DILARANG berjalan sebelum step buoy selesai.
+        Penjaganya ada di awal method — lihat tracking_buoy_completed.
+
+        Untuk tiap target (default: biru lalu hijau) kapal melewati lima fase:
+
+            SEARCH → ALIGN → APPROACH → SETTLE → SHOOT → target berikutnya
+
+        Selesai (semua target sudah dicoba) → _advance_step().
+
+        :param step: dict step misi. Field opsional, semuanya di-parse aman:
+            target                (str)   "both" | "blue" | "green"  — urutan pemotretan
+            throttle              (float) kecepatan meluncur mendekati box
+            search_throttle       (float) kecepatan saat menyapu mencari box
+            search_steer          (float) arah & kuat sapuan, negatif = kiri
+            align_threshold_px    (float) toleransi pemusatan
+            min_area_px2_blue     (float) ambang "cukup dekat" untuk box biru
+            min_area_px2_green    (float) ambang "cukup dekat" untuk box hijau
+            settle_sec            (float) lama diam sebelum shutter
+            search_timeout_sec    (float) batas mencari satu box sebelum menyerah
+        :param detected_boxes: {"blue_box": [...], "green_box": [...]} dari
+            tracker.process_frame(). Tuple per deteksi: (cx, cy, x1, y1, x2, y2).
+        :return: (steer_norm, thr_norm, label) — sama seperti handler step lain.
+        """
+        detected_boxes = detected_boxes or {}
+        sekarang = time.time()
+
+        # ── 1. GERBANG SEKUENSI ────────────────────────────────────────────
+        # Kapal DITAHAN, bukan dibiarkan memotret. Kalau step ini sampai berjalan
+        # duluan, urutan pipeline-nya salah dan posisi kapal tidak bisa ditebak.
+        #
+        # Ditahan LALU dilewati, bukan langsung dilewati atau menggantung selamanya:
+        # menggantung mengunci misi sampai FINISH tidak pernah tercapai, sedangkan
+        # langsung melewati membuat kesalahan urutan lewat tanpa sempat terlihat
+        # operator. Menahan sebentar memberi jendela agar peringatannya terbaca di
+        # base station, lalu misi tetap bisa jalan terus.
+        if not self._tracking_buoy_completed:
+            if self._photo_blocked_since is None:
+                self._photo_blocked_since = sekarang
+                print("[MissionEngine] ⛔ PHOTO_BOX DITOLAK — misi tracking buoy belum "
+                      "selesai. Kapal ditahan; periksa urutan step di pipeline misi.")
+            tertahan = sekarang - self._photo_blocked_since
+            batas = self._safe_float(step.get("blocked_hold_sec"), self.PHOTO_BLOCKED_HOLD_SEC)
+            if tertahan >= batas:
+                print(f"[MissionEngine] ⏭️ PHOTO_BOX DILEWATI setelah ditahan "
+                      f"{tertahan:.0f}s — syarat sekuensi tidak pernah terpenuhi.")
+                self._advance_step()
+                return 0.0, 0.0, "PHOTO_BOX | DILEWATI"
+            if self.asv and self.asv.is_connected():
+                self.asv.stop_movement(silent=True)
+            return 0.0, 0.0, f"PHOTO_BOX | DIBLOKIR {tertahan:.0f}s"
+
+        # ── 2. Target berikutnya ───────────────────────────────────────────
+        target = self._next_photo_target(step)
+        if target is None:
+            jumlah = len(self._photo_done)
+            print(f"[MissionEngine] ✅ PHOTO_BOX selesai — {jumlah} target diproses.")
+            self._advance_step()
+            return 0.0, 0.0, "PHOTO_BOX | SELESAI"
+
+        if self._photo_target != target:
+            self._photo_target = target
+            self._set_photo_phase(self.PHOTO_SEARCH)
+            print(f"[MissionEngine] 📷 PHOTO_BOX — mencari {ROLE_LABELS[target]}...")
+
+        # ── 3. Kandidat terbesar = paling dekat ke kamera ──────────────────
+        kandidat = (detected_boxes.get(target) or [])
+        box = kandidat[0] if kandidat else None
+        if box is not None:
+            self._photo_last_seen_at = sekarang
+
+        label_target = ROLE_LABELS[target]
+
+        # ── 4. SHOOT: menunggu frame bersih dari main.py ───────────────────
+        # Ditangani lebih dulu supaya hilangnya deteksi sesaat tidak membatalkan
+        # foto yang shutter-nya sudah diminta.
+        if self._photo_phase == self.PHOTO_SHOOT:
+            return self._photo_wait_shutter(target, label_target, sekarang)
+
+        # ── 5. Deteksi hilang ──────────────────────────────────────────────
+        if box is None:
+            hilang = sekarang - self._photo_last_seen_at
+            if (self._photo_phase in (self.PHOTO_ALIGN, self.PHOTO_APPROACH)
+                    and hilang < self.PHOTO_LOST_GRACE_SEC):
+                # Kedip deteksi YOLO — pertahankan kemudi terakhir sebentar.
+                thr = self._safe_float(step.get("throttle"), self.PHOTO_APPROACH_THROTTLE)
+                return self._photo_last_steer, thr, f"PHOTO_BOX | {label_target} sesaat hilang"
+            return self._photo_search(step, target, label_target, sekarang)
+
+        # ── 6. Terlihat: ALIGN → APPROACH → SETTLE ────────────────────────
+        cx, _cy, x1, y1, x2, y2 = box
+        luas = float((x2 - x1) * (y2 - y1))
+        error_px = float(cx - self.camera_width / 2.0)
+
+        toleransi = self._safe_float(step.get("align_threshold_px"),
+                                     self.PHOTO_ALIGN_THRESHOLD_PX)
+        luas_minimum = self._photo_min_area(step, target)
+
+        # Steer proporsional sederhana: +1.0 saat box di tepi KANAN frame.
+        # Tanda mengikuti konvensi yang sama dengan seluruh engine ini
+        # (steer positif = kapal belok kanan).
+        steer = (self.PHOTO_STEER_KP * error_px) / max(1.0, self.camera_width / 2.0)
+        steer = max(-self.PHOTO_MAX_STEER, min(self.PHOTO_MAX_STEER, steer))
+        self._photo_last_steer = steer
+
+        if abs(error_px) > toleransi:
+            self._set_photo_phase(self.PHOTO_ALIGN)
+            # Throttle kecil saat memusatkan: kapal tetap punya laju agar kemudinya
+            # menggigit (kapal tanpa laju tidak berbelok), tapi tidak sampai melewati
+            # box sebelum lurus.
+            thr = self._safe_float(step.get("search_throttle"), self.PHOTO_SEARCH_THROTTLE)
+            return steer, thr, f"PHOTO_BOX | ALIGN {label_target} err={error_px:+.0f}px"
+
+        if luas < luas_minimum:
+            self._set_photo_phase(self.PHOTO_APPROACH)
+            thr = self._safe_float(step.get("throttle"), self.PHOTO_APPROACH_THROTTLE)
+            return steer, thr, (f"PHOTO_BOX | APPROACH {label_target} "
+                                f"{luas / max(1.0, luas_minimum) * 100:.0f}%")
+
+        # Cukup dekat & lurus → berhenti dan tunggu kapal diam.
+        if self._photo_phase != self.PHOTO_SETTLE:
+            self._set_photo_phase(self.PHOTO_SETTLE)
+            print(f"[MissionEngine] 🛑 {label_target} sudah dekat & lurus — "
+                  f"menunggu kapal diam sebelum memotret...")
+        if self.asv and self.asv.is_connected():
+            self.asv.stop_movement(silent=True)
+
+        diam = sekarang - self._photo_phase_since
+        tunggu = self._safe_float(step.get("settle_sec"), self.PHOTO_SETTLE_SEC)
+        if diam < tunggu:
+            return 0.0, 0.0, f"PHOTO_BOX | SETTLE {label_target} {diam:.1f}/{tunggu:.1f}s"
+
+        # Minta shutter. Foto diambil main.py dari frame BERSIH (sebelum tracker
+        # menggambari bounding box) lewat capture_now() — mekanisme yang sama dengan
+        # TAKE_IMAGE, supaya yang dinilai juri adalah pemandangan asli.
+        self._capture_requested_at = sekarang
+        self._capture_pending = True
+        self._capture_label = target
+        self._set_photo_phase(self.PHOTO_SHOOT)
+        print(f"[MissionEngine] 📸 Memotret {label_target}...")
+        return 0.0, 0.0, f"PHOTO_BOX | SHOOT {label_target}"
+
+    def _handle_photo_box(self, step, frame, gate_x, detected_balls, detected_boxes):
+        """
+        Adapter dispatch update_frame → photo_mission().
+
+        Ada di sini, bukan di dalam photo_mission(), supaya photo_mission() tetap
+        bisa dipanggil sendiri dengan argumen seadanya (step + deteksi box) — mis.
+        dari uji atau alat bantu — tanpa ikut membawa frame & gate_x yang tidak
+        dipakainya.
+
+        Kalau photo_mission() menyelesaikan step ini, step BERIKUTNYA langsung
+        dijalankan di frame yang sama, persis seperti handler step lain. Tanpa
+        rekursi ini kapal mendapat satu frame berisi (0, 0) di sela pergantian step
+        — jeda yang tidak berbahaya tapi membuat perilakunya beda sendiri dari
+        seluruh engine.
+        """
+        idx_sebelum = self._current_step_idx
+        hasil = self.photo_mission(step, detected_boxes)
+        if self._current_step_idx != idx_sebelum:
+            return self.update_frame(frame, gate_x, detected_balls)
+        return hasil
+
+    def _photo_wait_shutter(self, target: str, label_target: str, sekarang: float
+                            ) -> Tuple[float, float, str]:
+        """Tahan posisi sampai capture_now() mengambil fotonya, atau kamera menyerah."""
+        if self.asv and self.asv.is_connected():
+            self.asv.stop_movement(silent=True)
+
+        if not self._capture_pending:
+            self._photo_done.append(target)
+            print(f"[MissionEngine] ✅ Foto {label_target} tersimpan.")
+            self._photo_target = None
+            return 0.0, 0.0, f"PHOTO_BOX | {label_target} OK"
+
+        if sekarang - self._photo_phase_since >= self.PHOTO_SHOOT_TIMEOUT_SEC:
+            # Frame bersih tidak pernah datang (mis. kamera mati). Jangan menggantungkan
+            # permintaan foto ke step berikutnya — pola yang sama dengan TAKE_IMAGE.
+            self._capture_pending = False
+            self._photo_done.append(target)
+            self._photo_target = None
+            print(f"[MissionEngine] ⚠️ Foto {label_target} GAGAL — tidak ada frame kamera.")
+            return 0.0, 0.0, f"PHOTO_BOX | {label_target} GAGAL"
+
+        return 0.0, 0.0, f"PHOTO_BOX | SHOOT {label_target}"
+
+    def _photo_search(self, step: Dict, target: str, label_target: str, sekarang: float
+                      ) -> Tuple[float, float, str]:
+        """Menyapu mencari box yang belum terlihat, sampai batas waktu."""
+        if self._photo_phase != self.PHOTO_SEARCH:
+            self._set_photo_phase(self.PHOTO_SEARCH)
+
+        dicari = sekarang - self._photo_phase_since
+        batas = self._safe_float(step.get("search_timeout_sec"), self.PHOTO_SEARCH_TIMEOUT_SEC)
+        if dicari >= batas:
+            print(f"[MissionEngine] ⏭️ {label_target} tidak ditemukan dalam {batas:.0f}s — "
+                  f"dilewati, lanjut ke target berikutnya.")
+            self._photo_done.append(target)
+            self._photo_target = None
+            return 0.0, 0.0, f"PHOTO_BOX | {label_target} TIDAK KETEMU"
+
+        steer = self._safe_float(step.get("search_steer"), self.PHOTO_SEARCH_STEER)
+        steer = max(-1.0, min(1.0, steer))
+        thr = self._safe_float(step.get("search_throttle"), self.PHOTO_SEARCH_THROTTLE)
+        self._photo_last_steer = steer
+        return steer, thr, f"PHOTO_BOX | SEARCH {label_target} {dicari:.0f}/{batas:.0f}s"
+
+    def _next_photo_target(self, step: Dict) -> Optional[str]:
+        """Peran box berikutnya yang belum diproses, atau None kalau semua selesai."""
+        pilihan = str(step.get("target") or "both").strip().lower()
+        if pilihan in ("blue", "biru", "blue_box"):
+            urutan = [ROLE_BLUE_BOX]
+        elif pilihan in ("green", "hijau", "ijo", "green_box"):
+            urutan = [ROLE_GREEN_BOX]
+        else:
+            # Biru lebih dulu: bagiannya yang terlihat dari permukaan paling kecil,
+            # jadi paling butuh kapal mendekat — dikerjakan selagi waktu step masih panjang.
+            urutan = [ROLE_BLUE_BOX, ROLE_GREEN_BOX]
+        for peran in urutan:
+            if peran not in self._photo_done:
+                return peran
+        return None
+
+    def _photo_min_area(self, step: Dict, target: str) -> float:
+        """Ambang luas "cukup dekat" untuk target ini — beda per warna, lihat konstanta."""
+        if target == ROLE_BLUE_BOX:
+            return self._safe_float(step.get("min_area_px2_blue"),
+                                    self.PHOTO_MIN_AREA_PX2_BLUE)
+        return self._safe_float(step.get("min_area_px2_green"),
+                                self.PHOTO_MIN_AREA_PX2_GREEN)
+
+    def _set_photo_phase(self, fase: str):
+        """Pindah fase sambil mencatat waktunya (dipakai semua timeout di step ini)."""
+        if self._photo_phase != fase:
+            self._photo_phase = fase
+            self._photo_phase_since = time.time()
+
+    def _reset_photo_state(self):
+        """Kembalikan state PHOTO_BOX ke awal. Dipanggil saat step ini baru dimulai."""
+        self._photo_phase = self.PHOTO_SEARCH
+        self._photo_phase_since = time.time()
+        self._photo_target = None
+        self._photo_done = []
+        self._photo_last_seen_at = 0.0
+        self._photo_last_steer = 0.0
+        self._photo_blocked_since = None
 
     def _handle_hold(self, step, frame, gate_x, detected_balls=None):
         """Handle HOLD step."""
@@ -2423,9 +2847,13 @@ class MissionEngine:
         self.SEQ_IDENTITY_MAX_DIST_PX = round(MissionEngine.SEQ_IDENTITY_MAX_DIST_PX * px_scale)
         self.SEQ_CLEARED_EXCLUSION_RADIUS_PX = round(MissionEngine.SEQ_CLEARED_EXCLUSION_RADIUS_PX * px_scale)
 
+        self.PHOTO_ALIGN_THRESHOLD_PX = round(MissionEngine.PHOTO_ALIGN_THRESHOLD_PX * px_scale)
+
         # AREA piksel² — skala LEBAR × TINGGI
         self.SEQ_MIN_PAIR_AREA_PX2 = round(MissionEngine.SEQ_MIN_PAIR_AREA_PX2 * area_scale)
         self.SEQ_IGNORE_AREA_PX2 = round(MissionEngine.SEQ_IGNORE_AREA_PX2 * area_scale)
+        self.PHOTO_MIN_AREA_PX2_BLUE = round(MissionEngine.PHOTO_MIN_AREA_PX2_BLUE * area_scale)
+        self.PHOTO_MIN_AREA_PX2_GREEN = round(MissionEngine.PHOTO_MIN_AREA_PX2_GREEN * area_scale)
 
         if self.camera_width != MissionEngine.REFERENCE_FRAME_WIDTH or self.camera_height != MissionEngine.REFERENCE_FRAME_HEIGHT:
             print(f"[MissionEngine] 📐 Threshold piksel diskalakan dari referensi "
@@ -2861,6 +3289,18 @@ class MissionEngine:
         return None  # Bola terlalu jauh → bola gerbang lain, abaikan
 
     def _advance_step(self):
+        # Buka kunci PHOTO_BOX kalau step yang BARU SAJA selesai adalah step buoy.
+        # Ditaruh di sini, bukan di tiap handler, karena SEMUA jalur penyelesaian
+        # step lewat sini — termasuk yang selesai karena timeout SEARCHING atau
+        # karena buoy habis dari frame, yang mudah terlewat kalau flag-nya disetel
+        # satu per satu di dalam handler.
+        if self._current_step_idx < len(self._steps):
+            baru_selesai = self._steps[self._current_step_idx].get("type", "")
+            if baru_selesai in self.BUOY_STEP_TYPES and not self._tracking_buoy_completed:
+                self._tracking_buoy_completed = True
+                print(f"[MissionEngine] 🔓 Step buoy '{baru_selesai}' selesai — "
+                      f"PHOTO_BOX sekarang boleh dijalankan.")
+
         self._current_step_idx += 1
         self._step_start_time = None
         self._paused_step_elapsed = 0.0
