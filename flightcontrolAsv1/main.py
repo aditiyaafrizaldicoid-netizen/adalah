@@ -183,7 +183,7 @@ def main():
     # mengirimnya ke dashboard lewat antrean di thread terpisah — TIDAK PERNAH
     # memblokir loop kendali (lihat core/capture_uploader.py).
     from core.capture_uploader import CaptureUploader
-    capture_uploader = CaptureUploader()
+    capture_uploader = CaptureUploader(on_warning=ws_client.send_warning)
     capture_uploader.start()
 
     # ------------------------------------------------------------------ #

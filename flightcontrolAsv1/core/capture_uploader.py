@@ -35,11 +35,18 @@ class CaptureUploader:
     # batas di RAM Mini PC. Realistisnya satu run cuma menghasilkan beberapa foto.
     MAX_QUEUE = 32
 
-    def __init__(self, upload_url: str = None, token: str = None):
+    def __init__(self, upload_url: str = None, token: str = None, on_warning=None):
         # Sama seperti alamat WS & video: WAJIB dari .env, tidak boleh hardcode
         # localhost — di kapal, backend ada di base station.
         self.upload_url = upload_url or os.getenv("ASV_CAPTURE_URL", "").strip()
         self.token = token if token is not None else os.getenv("ASV_WS_TOKEN", "").strip()
+
+        # Dipakai untuk MENGABARKAN kegagalan ke base station, bukan cuma ke konsol
+        # Mini PC. Sebelum ini, foto yang tidak terkirim hanya terlihat sebagai panel
+        # dashboard yang kosong — dan satu-satunya penjelasannya ada di terminal yang
+        # sedang mengambang di tengah danau. Dua sesi lapangan habis karena itu.
+        self._on_warning = on_warning
+        self._sudah_lapor_config = False
 
         self._queue: "queue.Queue[str]" = queue.Queue(maxsize=self.MAX_QUEUE)
         self._is_running = False
@@ -69,7 +76,18 @@ class CaptureUploader:
         Aman dipanggil dengan None (capture_now() mengembalikan None saat foto gagal
         disimpan), sehingga pemanggil tidak perlu memeriksanya sendiri tiap frame.
         """
-        if not image_path or not self.upload_url:
+        if not image_path:
+            return
+        if not self.upload_url:
+            # Foto BERHASIL dipotret tapi tidak akan pernah sampai ke dashboard.
+            # Dilaporkan sekali per sesi supaya operator tahu harus mengisi .env,
+            # bukan mengira fitur fotonya yang rusak.
+            if not self._sudah_lapor_config:
+                self._sudah_lapor_config = True
+                self._warn("warning", "CAPTURE_URL_KOSONG",
+                           f"Foto '{os.path.basename(image_path)}' tersimpan di kapal "
+                           f"tapi TIDAK dikirim: ASV_CAPTURE_URL belum diisi di "
+                           f"flightcontrolAsv1/.env pada Mini PC.")
             return
         try:
             self._queue.put_nowait(image_path)
@@ -105,14 +123,27 @@ class CaptureUploader:
                 print(f"[CaptureUploader] 📤 Foto terkirim ke base station: {nama}")
                 return
             if hasil == self.GIVE_UP:
-                print(f"[CaptureUploader] ⚠️ {nama} tidak dikirim ulang — "
-                      f"permintaannya ditolak, bukan gangguan jaringan. "
-                      f"Berkasnya tetap ada di kapal.")
+                pesan = (f"Foto '{nama}' DITOLAK base station — permintaannya yang "
+                         f"salah, bukan gangguan jaringan (cek nama berkas / "
+                         f"ASV_WS_TOKEN). Berkasnya tetap tersimpan di kapal.")
+                print(f"[CaptureUploader] ⚠️ {pesan}")
+                self._warn("warning", "CAPTURE_UPLOAD_DITOLAK", pesan)
                 return
             if attempt < self.MAX_ATTEMPTS:
                 time.sleep(self.RETRY_DELAY_SEC)
-        print(f"[CaptureUploader] ⚠️ Gagal mengirim {nama} setelah "
-              f"{self.MAX_ATTEMPTS} percobaan. Berkasnya tetap ada di kapal.")
+        pesan = (f"Foto '{nama}' gagal dikirim ke base station setelah "
+                 f"{self.MAX_ATTEMPTS} percobaan. Berkasnya tetap tersimpan di kapal.")
+        print(f"[CaptureUploader] ⚠️ {pesan}")
+        self._warn("warning", "CAPTURE_UPLOAD_GAGAL", pesan)
+
+    def _warn(self, level: str, code: str, message: str):
+        """Kabarkan ke base station kalau ada saluran peringatan terpasang."""
+        if not self._on_warning:
+            return
+        try:
+            self._on_warning(level, code, message)
+        except Exception as e:
+            print(f"[CaptureUploader] Gagal mengirim peringatan: {e}")
 
     def _send_once(self, image_path: str, nama: str) -> str:
         try:
