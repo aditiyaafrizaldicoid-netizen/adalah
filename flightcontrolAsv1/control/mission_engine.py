@@ -1471,8 +1471,8 @@ class MissionEngine:
         luas = float((x2 - x1) * (y2 - y1))
         error_px = float(cx - self.camera_width / 2.0)
 
-        toleransi = self._safe_float(step.get("align_threshold_px"),
-                                     self.PHOTO_ALIGN_THRESHOLD_PX)
+        toleransi = self._px_dari_step(step, "align_threshold_px",
+                                       self.PHOTO_ALIGN_THRESHOLD_PX)
         luas_minimum = self._photo_min_area(step, target)
 
         # Steer proporsional sederhana: +1.0 saat box di tepi KANAN frame.
@@ -1600,13 +1600,35 @@ class MissionEngine:
                 return peran
         return None
 
+    def _px_dari_step(self, step: Dict, key: str, default_terskala: float) -> float:
+        """
+        Baca JARAK piksel dari field step, diskalakan dari resolusi referensi.
+
+        Nilai di panel misi ditulis dalam satuan REFERENSI (1920x1080) — defaultnya
+        memang disalin dari konstanta class di file ini. Jadi nilai itu harus melewati
+        penskalaan yang sama seperti konstantanya, bukan dipakai mentah. `default_
+        terskala` sudah diskalakan oleh _apply_resolution_scaling(), jadi dipakai apa
+        adanya saat field-nya kosong.
+        """
+        nilai = self._safe_float(step.get(key), -1.0)
+        if nilai <= 0:
+            return default_terskala
+        return nilai * self._px_scale
+
+    def _area_dari_step(self, step: Dict, key: str, default_terskala: float) -> float:
+        """Versi AREA (piksel²) dari _px_dari_step — skala lebar x tinggi, bukan lebar saja."""
+        nilai = self._safe_float(step.get(key), -1.0)
+        if nilai <= 0:
+            return default_terskala
+        return nilai * self._area_scale
+
     def _photo_min_area(self, step: Dict, target: str) -> float:
         """Ambang luas "cukup dekat" untuk target ini — beda per warna, lihat konstanta."""
         if target == ROLE_BLUE_BOX:
-            return self._safe_float(step.get("min_area_px2_blue"),
-                                    self.PHOTO_MIN_AREA_PX2_BLUE)
-        return self._safe_float(step.get("min_area_px2_green"),
-                                self.PHOTO_MIN_AREA_PX2_GREEN)
+            return self._area_dari_step(step, "min_area_px2_blue",
+                                        self.PHOTO_MIN_AREA_PX2_BLUE)
+        return self._area_dari_step(step, "min_area_px2_green",
+                                    self.PHOTO_MIN_AREA_PX2_GREEN)
 
     def _set_photo_phase(self, fase: str):
         """Pindah fase sambil mencatat waktunya (dipakai semua timeout di step ini)."""
@@ -2839,6 +2861,15 @@ class MissionEngine:
 
         px_scale = self.camera_width / float(MissionEngine.REFERENCE_FRAME_WIDTH)
         area_scale = px_scale * (self.camera_height / float(MissionEngine.REFERENCE_FRAME_HEIGHT))
+
+        # Disimpan supaya nilai piksel yang datang DARI STEP MISI ikut diskalakan —
+        # lihat _px_dari_step()/_area_dari_step(). Tanpa ini, field di panel misi
+        # (yang defaultnya ditulis dalam satuan referensi 1920x1080, disalin dari
+        # konstanta di atas) dipakai MENTAH pada resolusi berapa pun. Dikonfirmasi di
+        # lapangan: di 1280x720 nilai default 60000px² membuat kapal harus mendekat
+        # 2,25x lebih dekat dari yang dimaksud — nyaris menyentuh box.
+        self._px_scale = px_scale
+        self._area_scale = area_scale
 
         # Jarak piksel LINEAR — skala LEBAR
         self.GATE_IDENTITY_MAX_DIST_PX = round(MissionEngine.GATE_IDENTITY_MAX_DIST_PX * px_scale)

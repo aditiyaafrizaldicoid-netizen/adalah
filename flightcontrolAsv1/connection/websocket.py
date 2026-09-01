@@ -468,6 +468,7 @@ class ASVWebSocketClient:
         # --- MISSION ENGINE CONTROLS ---
         elif action == "load_mission":
             steps = cmd.get("steps", [])
+            self._peringatkan_urutan_photo_box(steps)
             if self.mission_engine and steps:
                 ok = self.mission_engine.load_mission(steps)
                 self.send_mission_status(self.mission_engine.get_status_dict())
@@ -494,6 +495,7 @@ class ASVWebSocketClient:
                     }
                 })
             elif self.mission_engine:
+                self._peringatkan_urutan_photo_box(steps or self.mission_engine._steps)
                 ok = self.mission_engine.start_mission(steps)
                 self.send_mission_status(self.mission_engine.get_status_dict())
                 print(f"[WS] Mission started (ok={ok}, steps={len(self.mission_engine._steps)})")
@@ -594,6 +596,40 @@ class ASVWebSocketClient:
     # ------------------------------------------------------------------ #
     #  EMERGENCY STOP                                                      #
     # ------------------------------------------------------------------ #
+
+    # Step yang menghitung sebagai "misi tracking buoy" — harus sama dengan
+    # MissionEngine.BUOY_STEP_TYPES.
+    _BUOY_STEPS = ("TRACKING_BUOY", "SEQUENTIAL_BUOY", "BUOY_CHASE")
+
+    def _peringatkan_urutan_photo_box(self, steps):
+        """
+        Beri tahu base station SEKARANG kalau PHOTO_BOX ditaruh tanpa step buoy di
+        depannya.
+
+        Tanpa ini, kesalahan urutan hanya terlihat sebagai kapal yang diam 10 detik
+        lalu step-nya terlewat — dari base station tidak ada bedanya dengan "fitur
+        fotonya rusak". Dikonfirmasi di lapangan: satu sesi tes penuh habis mengejar
+        penyebab yang sebenarnya cuma pipeline kurang satu step.
+        """
+        if not steps:
+            return
+        buoy_terlihat = False
+        for step in steps:
+            tipe = str((step or {}).get("type", ""))
+            if tipe in self._BUOY_STEPS:
+                buoy_terlihat = True
+            elif tipe == "PHOTO_BOX" and not buoy_terlihat:
+                self._send_warning(
+                    level="warning",
+                    code="PHOTO_BOX_TANPA_BUOY",
+                    message=("Step 'Photo Box' ditaruh sebelum step buoy mana pun. "
+                             "Kapal akan menahan posisi 10 detik lalu MELEWATI step "
+                             "itu tanpa memotret. Tambahkan Tracking/Sequential Buoy "
+                             "atau Buoy Chase sebelum Photo Box."),
+                )
+                print("[WS] ⚠️ Pipeline misi: PHOTO_BOX tanpa step buoy di depannya — "
+                      "step foto akan dilewati.")
+                return
 
     def _execute_emergency_stop(self, reason: str = "unknown"):
         """
