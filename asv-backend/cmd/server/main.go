@@ -107,9 +107,10 @@ func main() {
 	missionPresetHandler := handler.NewMissionPresetHandler(missionPresetService)
 	sessionHandler := handler.NewSessionHandler()
 	arenaHandler := handler.NewArenaHandler(arenaService)
+	captureHandler := handler.NewCaptureHandler(cfg)
 
 	// 9. Initialize Router & Get App
-	r := route.NewRouter(cfg, mid, authHandler, userHandler, healthHandler, wsHandler, videoHandler, calibHandler, pidConfigHandler, missionPresetHandler, sessionHandler, arenaHandler)
+	r := route.NewRouter(cfg, mid, authHandler, userHandler, healthHandler, wsHandler, videoHandler, calibHandler, pidConfigHandler, missionPresetHandler, sessionHandler, arenaHandler, captureHandler)
 
 
 	app := r.New()

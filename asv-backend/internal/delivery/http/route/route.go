@@ -26,6 +26,7 @@ type Router struct {
 	missionPresetHandler *handler.MissionPresetHandler
 	sessionHandler       *handler.SessionHandler
 	arenaHandler         *handler.ArenaHandler
+	captureHandler       *handler.CaptureHandler
 }
 
 func NewRouter(
@@ -41,6 +42,7 @@ func NewRouter(
 	missionPresetHandler *handler.MissionPresetHandler,
 	sessionHandler *handler.SessionHandler,
 	arenaHandler *handler.ArenaHandler,
+	captureHandler *handler.CaptureHandler,
 ) *Router {
 	return &Router{
 		cfg:                  cfg,
@@ -55,6 +57,7 @@ func NewRouter(
 		missionPresetHandler: missionPresetHandler,
 		sessionHandler:       sessionHandler,
 		arenaHandler:         arenaHandler,
+		captureHandler:       captureHandler,
 	}
 }
 
@@ -150,6 +153,16 @@ func (r *Router) New() *fiber.App {
 	sessionGroup.Get("", r.sessionHandler.GetAll)
 	sessionGroup.Get("/:filename", r.sessionHandler.Download)
 	sessionGroup.Delete("/:filename", requireAuth, r.sessionHandler.Delete)
+
+	// Mission Capture Routes — foto ber-geo-tag hasil step PHOTO_BOX di kapal.
+	// Upload dipagari ASV_WS_TOKEN di dalam handler (klien Python tidak login).
+	// Baca dibiarkan publik karena <img> tidak bisa mengirim header Authorization,
+	// dan panel Juri menampilkan foto yang dinilai tanpa login.
+	captureGroup := api.Group("/captures")
+	captureGroup.Get("", r.captureHandler.GetAll)
+	captureGroup.Post("", r.captureHandler.Upload)
+	captureGroup.Get("/:filename", r.captureHandler.Download)
+	captureGroup.Delete("/:filename", requireAuth, r.captureHandler.Delete)
 
 	// Arena Routes
 	arenaGroup := api.Group("/arenas")

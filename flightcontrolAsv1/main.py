@@ -177,6 +177,16 @@ def main():
     logger = TelemetryLogger()
 
     # ------------------------------------------------------------------ #
+    #  Pengirim foto misi ke base station                                 #
+    # ------------------------------------------------------------------ #
+    # Foto step PHOTO_BOX sebelumnya hanya mengendap di disk kapal. Uploader ini
+    # mengirimnya ke dashboard lewat antrean di thread terpisah — TIDAK PERNAH
+    # memblokir loop kendali (lihat core/capture_uploader.py).
+    from core.capture_uploader import CaptureUploader
+    capture_uploader = CaptureUploader()
+    capture_uploader.start()
+
+    # ------------------------------------------------------------------ #
     #  Frame processing callback (dipanggil ~30 FPS oleh VideoStreamer)   #
     # ------------------------------------------------------------------ #
     import time as _time
@@ -203,7 +213,9 @@ def main():
         # berisi pemandangan asli, bukan anotasi debug.
         # MissionEngine hanya menentukan KAPAN memotret; frame bersihnya dari sini.
         if mission_engine.status == "RUNNING" and mission_engine.capture_pending:
-            mission_engine.capture_now(frame)
+            # enqueue() aman menerima None (foto gagal disimpan) dan tidak pernah
+            # menunggu jaringan — pengirimannya terjadi di thread lain.
+            capture_uploader.enqueue(mission_engine.capture_now(frame))
 
         # Ambil gate_state dari mission_engine untuk OSD (agar tracker bisa menampilkan label)
         state_name  = _osd["last_label"]   # label dari frame sebelumnya (1-frame lag OK)
@@ -331,6 +343,7 @@ def main():
         print("\n[Main] Dibatalkan oleh pengguna.")
     finally:
         video_streamer.stop()
+        capture_uploader.stop()
         ws_client.stop()
         asv.stop()
         print("\n[Main] Selesai. Semua koneksi ditutup.")

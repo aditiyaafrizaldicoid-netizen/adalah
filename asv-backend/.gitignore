@@ -39,3 +39,7 @@ logs/
 dist/
 bin/
 tmp/
+
+# Foto misi ber-geo-tag yang diunggah kapal (runtime data, bukan sumber).
+# Bisa puluhan MB per hari lomba dan tidak ada gunanya di riwayat git.
+captures/

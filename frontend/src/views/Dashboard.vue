@@ -31,6 +31,7 @@ import ArmingControl from "../components/monitoring/ArmingControl.vue";
 import ControlSourceControl from "../components/monitoring/ControlSourceControl.vue";
 import GeotagPanel from "../components/monitoring/GeotagPanel.vue";
 import VideoCard from "../components/monitoring/VideoCard.vue";
+import MissionPhotos from "../components/monitoring/MissionPhotos.vue";
 import { VIDEO_STREAM_URL } from "@/config/api";
 
 const vessel = useVesselStore();
@@ -225,6 +226,12 @@ const wsStore = useWebsocketStore();
             </div>
           </div>
         </div> -->
+
+        <!-- Foto Misi — DI ATAS video stream. Hasil step PHOTO_BOX yang dikirim
+             kapal: box biru (dinilai sebagai Underwater/IMB) dan box hijau
+             (Surface/IMH). Keduanya dari kamera permukaan yang sama; kapal ini
+             tidak punya kamera underwater. -->
+        <MissionPhotos />
 
         <!-- Video Stream -->
         <VideoCard
