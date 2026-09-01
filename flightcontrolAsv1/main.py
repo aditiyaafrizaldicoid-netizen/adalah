@@ -187,6 +187,21 @@ def main():
     capture_uploader.start()
 
     # ------------------------------------------------------------------ #
+    #  Switch sumber kendali di remote fisik (mis. SwD pada FS-i6X)       #
+    # ------------------------------------------------------------------ #
+    # Menyerahkan kemudi ke remote tidak lagi harus lewat tombol di dashboard —
+    # tuasnya sekarang ada di tangan yang sama dengan stiknya. NONAKTIF sampai
+    # ASV_RC_SOURCE_CHANNEL diisi di .env; lihat control/rc_source_switch.py.
+    from control.rc_source_switch import RCSourceSwitch
+    rc_source_switch = RCSourceSwitch(
+        asv,
+        on_change=lambda sumber: ws_client.notify_manual_source(),
+        on_warning=ws_client.send_warning,
+    )
+    ws_client.rc_source_switch = rc_source_switch
+    rc_source_switch.start()
+
+    # ------------------------------------------------------------------ #
     #  Frame processing callback (dipanggil ~30 FPS oleh VideoStreamer)   #
     # ------------------------------------------------------------------ #
     import time as _time
@@ -343,6 +358,7 @@ def main():
         print("\n[Main] Dibatalkan oleh pengguna.")
     finally:
         video_streamer.stop()
+        rc_source_switch.stop()
         capture_uploader.stop()
         ws_client.stop()
         asv.stop()

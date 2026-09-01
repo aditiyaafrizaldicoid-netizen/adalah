@@ -24,6 +24,12 @@ const vessel = useVesselStore();
 const isConnected = computed(() => ws.status === 'CONNECTED');
 const isRemote = computed(() => vessel.manualSource === 'remote');
 
+// Saat switch fisik di remote yang menentukan sumber kendali, POSISI SWITCH SELALU
+// MENANG — menekan tombol di bawah akan dikembalikan kapal dalam sepersekian detik.
+// Tanpa penjelasan ini tombolnya terlihat rusak, dan operator akan menekannya
+// berulang-ulang di saat yang justru genting.
+const byRcSwitch = computed(() => vessel.rcSourceSwitch === true);
+
 // Perintah terkirim tapi kapal belum menjawab.
 const pending = ref(null);      // 'minipc' | 'remote' | null
 const timedOut = ref(false);
@@ -91,6 +97,16 @@ function takeBackToMinipc() {
       <span class="text-[9px] px-2 py-0.5 rounded font-bold"
         :class="isRemote ? 'bg-warning/10 text-warning' : 'bg-success/10 text-success'">
         {{ isRemote ? 'REMOTE RC' : 'MINI PC' }}
+      </span>
+    </div>
+
+    <div v-if="byRcSwitch"
+      class="flex items-start gap-2 p-2.5 rounded-lg bg-info/10 border border-info/30">
+      <Radio class="w-3.5 h-3.5 text-info shrink-0 mt-0.5" />
+      <span class="text-[10px] leading-relaxed text-(--text-secondary)">
+        Dikendalikan <b class="text-info">switch di remote</b><template v-if="vessel.rcSourceChannel">
+        (ch{{ vessel.rcSourceChannel }})</template>. Posisi switch selalu menang —
+        tombol di bawah hanya penunjuk keadaan, dan akan dikembalikan kapal kalau ditekan.
       </span>
     </div>
 

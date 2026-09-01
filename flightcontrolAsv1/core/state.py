@@ -11,7 +11,7 @@ from dataclasses import dataclass, field, asdict
 # jarum berputar-putar sendiri.
 # 0.3 m/s ≈ 0.6 knot — cukup di atas derau, masih jauh di bawah kecepatan jelajah.
 COG_MIN_SPEED_MS = 0.3
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 @dataclass
 class ASVStateData:
@@ -46,6 +46,14 @@ class ASVStateData:
     
     # Pesan status / log terakhir dari Pixhawk
     status_text: List[str] = field(default_factory=list)
+
+    # ── Input RC mentah dari receiver (lewat Pixhawk) ────────────────────────
+    # Dipakai untuk membaca posisi switch fisik di remote — mis. SwD pada FS-i6X
+    # yang memindahkan sumber kendali. Nilai dalam mikrodetik (±1000-2000);
+    # 0 atau 65535 berarti channel itu tidak tersedia.
+    rc_channels: List[int] = field(default_factory=list)
+    rc_rssi: int = 0            # 0 = tidak ada sinyal, 255 = tidak diketahui
+    rc_last_update: float = 0.0  # time.time() paket RC terakhir; 0 = belum pernah
 
 
 class ASVState:
@@ -94,6 +102,39 @@ class ASVState:
             else:
                 # Terlalu pelan untuk dipercaya — pertahankan nilai terakhir, tandai basi.
                 self._data.cog_valid = False
+
+    def update_rc_channels(self, channels: List[int], rssi: int = 255):
+        """Simpan nilai channel RC mentah dari receiver (via Pixhawk)."""
+        with self._lock:
+            self._data.rc_channels = list(channels)
+            self._data.rc_rssi = int(rssi)
+            self._data.rc_last_update = time.time()
+
+    def get_rc_channel(self, channel: int) -> Optional[int]:
+        """
+        Nilai PWM satu channel RC (1-indexed), atau None kalau tidak tersedia.
+
+        None dikembalikan — bukan 0 atau nilai tengah — supaya pemanggil bisa
+        membedakan "channel tidak terbaca" dari "channel bernilai rendah". Menebak
+        nilai di sini berarti posisi switch bisa salah dibaca, dan itu menentukan
+        siapa yang memegang kemudi kapal.
+        """
+        with self._lock:
+            ch = self._data.rc_channels
+            if channel < 1 or channel > len(ch):
+                return None
+            nilai = ch[channel - 1]
+            # 0 dan 65535 adalah penanda "tidak tersedia" di MAVLink, bukan PWM.
+            if nilai in (0, 65535):
+                return None
+            return int(nilai)
+
+    def rc_link_fresh(self, max_age_sec: float) -> bool:
+        """Apakah paket RC terakhir masih cukup baru untuk dipercaya."""
+        with self._lock:
+            if self._data.rc_last_update <= 0:
+                return False
+            return (time.time() - self._data.rc_last_update) <= max_age_sec
 
     def update_attitude(self, roll: float, pitch: float, yaw: float):
         with self._lock:

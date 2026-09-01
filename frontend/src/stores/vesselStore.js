@@ -49,6 +49,12 @@ export const useVesselStore = defineStore("vessel", () => {
   // benar-benar pegang kendali — jadi joystick/keyboard di halaman ini ikut nonaktif.
   const manualSource = ref('minipc');
 
+  // Apakah sumber kendali sedang ditentukan SWITCH FISIK di remote (mis. SwD pada
+  // FS-i6X). Saat true, posisi switch selalu menang dan tombol pemilih di dashboard
+  // hanya indikator — menekannya akan dikembalikan kapal dalam sepersekian detik.
+  const rcSourceSwitch = ref(false);
+  const rcSourceChannel = ref(0);
+
   // Video Recording State (Tanpa Object Detection)
   const isRecording = ref(false);
   const recordingFilename = ref('');
@@ -128,6 +134,8 @@ export const useVesselStore = defineStore("vessel", () => {
     if (data.is_armed !== undefined) isArmed.value = data.is_armed;
     if (data.mode !== undefined) mode.value = data.mode;
     if (data.manual_source !== undefined) manualSource.value = data.manual_source;
+    if (data.rc_source_switch !== undefined) rcSourceSwitch.value = data.rc_source_switch;
+    if (data.rc_source_channel !== undefined) rcSourceChannel.value = data.rc_source_channel;
     if (data.camera_connected !== undefined) cameraConnected.value = data.camera_connected;
     // Status Recording Video Mentah
     if (data.is_recording !== undefined) isRecording.value = data.is_recording;
@@ -180,7 +188,7 @@ export const useVesselStore = defineStore("vessel", () => {
     gpsFix, satellites, signalStrength,
     xte, dtw, nextWp,
     thrusterL, thrusterR, rpmL, rpmR,
-    isConnected, isArmed, mode, manualSource,
+    isConnected, isArmed, mode, manualSource, rcSourceSwitch, rcSourceChannel,
     isRecording, recordingFilename, recordingResolution,
     isStreaming,
     cameraConnected, asvConnected,

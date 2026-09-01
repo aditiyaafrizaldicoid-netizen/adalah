@@ -29,6 +29,8 @@ class MAVLinkParser:
             self._parse_battery_status(msg)
         elif msg_type == "VFR_HUD":
             self._parse_vfr_hud(msg)
+        elif msg_type in ("RC_CHANNELS", "RC_CHANNELS_RAW"):
+            self._parse_rc_channels(msg)
         elif msg_type == "STATUSTEXT":
             self._parse_status_text(msg)
 
@@ -124,6 +126,39 @@ class MAVLinkParser:
                 vy=current_data.vy,
                 vz=current_data.vz
             )
+
+    def _parse_rc_channels(self, msg):
+        """
+        Baca nilai channel RC mentah dari receiver.
+
+        Dipakai untuk membaca posisi switch fisik di remote (mis. SwD pada FS-i6X)
+        yang memindahkan sumber kendali — lihat control/rc_source_switch.py.
+
+        Dua tipe pesan ditangani karena tidak semua setup mengirim keduanya:
+          RC_CHANNELS     : sampai 18 channel + chancount (ArduPilot modern)
+          RC_CHANNELS_RAW : 8 channel, tanpa chancount (fallback/lama)
+
+        Channel dibaca lewat getattr dan bukan indeks tetap: jumlah field yang ADA
+        pada pesan berbeda antar dialek pymavlink, dan mengasumsikan 18 selalu ada
+        membuat parser gagal total di setup yang cuma punya 8.
+        """
+        channels = []
+        jumlah = int(getattr(msg, "chancount", 0) or 0)
+        maksimum = 18 if msg.get_type() == "RC_CHANNELS" else 8
+        for i in range(1, maksimum + 1):
+            nilai = getattr(msg, f"chan{i}_raw", None)
+            if nilai is None:
+                break
+            channels.append(int(nilai))
+
+        # chancount memberi tahu berapa channel yang BENAR-BENAR dikirim receiver.
+        # Sisanya berisi 0/65535 dan bukan pembacaan sungguhan — dipotong di sini
+        # supaya pembaca tidak perlu tahu soal itu.
+        if 0 < jumlah < len(channels):
+            channels = channels[:jumlah]
+
+        if channels:
+            self.state.update_rc_channels(channels, getattr(msg, "rssi", 255))
 
     def _parse_status_text(self, msg):
         try:

@@ -86,6 +86,10 @@ class ASVWebSocketClient:
         self.tracker = None
         self._camera_was_ok = False
         self.mission_engine = None
+        # Diisi main.py kalau switch sumber kendali di remote diaktifkan. Statusnya
+        # ikut telemetri supaya dashboard bisa menjelaskan kenapa tombol sumber
+        # kendali di sana "membalik sendiri" — tanpa itu, terlihat seperti rusak.
+        self.rc_source_switch = None
 
         # State kalibrasi IMU
         self._imu_calibrating = False
@@ -860,6 +864,21 @@ class ASVWebSocketClient:
         ok = self.asv.set_manual_source(target)
         self._send_manual_source_ack(ok=ok, requested=target)
 
+    def notify_manual_source(self):
+        """
+        Kabarkan sumber kendali yang aktif SEKARANG ke base station.
+
+        Publik — dipakai RCSourceSwitch saat switch fisik di remote memindahkan
+        kendali. Tanpa ini, panel di dashboard tetap menampilkan sumber yang lama
+        sampai telemetri berikutnya menyusul, dan operator tidak tahu perpindahan
+        yang baru saja dia lakukan sudah benar-benar terjadi.
+        """
+        self._send_manual_source_ack(ok=True, requested=None)
+
+    def send_warning(self, level: str, code: str, message: str):
+        """Kirim WARNING ke base station. Publik — dipakai modul di luar kelas ini."""
+        self._send_warning(level, code, message)
+
     def _send_manual_source_ack(self, ok: bool, requested):
         """Beri tahu base station sumber kendali yang BENAR-BENAR aktif setelah perintah."""
         self._send_ws({
@@ -913,6 +932,12 @@ class ASVWebSocketClient:
                         "is_streaming": self.video_streamer.is_streaming if self.video_streamer else False,
                         # Sumber kendali manual aktif: "minipc" | "remote"
                         "manual_source": self.asv.get_manual_source(),
+                        # Apakah sumber kendali sedang ditentukan switch fisik di
+                        # remote. Saat true, tombol di dashboard hanya indikator.
+                        "rc_source_switch": bool(
+                            self.rc_source_switch and self.rc_source_switch.enabled),
+                        "rc_source_channel": (
+                            self.rc_source_switch.channel if self.rc_source_switch else 0),
                     }
 
                     self.ws.send(json.dumps({
