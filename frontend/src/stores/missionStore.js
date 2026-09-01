@@ -657,11 +657,43 @@ export const STEP_TYPES = [
     bg: "bg-cyan-500/10 border-cyan-500/30",
     fields: [
       {
+        key: "mode",
+        label: "Mode (stop / moving)",
+        type: "text",
+        default: "stop",
+        // stop   = berhenti, putar sampai box di tengah, diam, baru jepret.
+        //          Foto paling tajam. Lintasan terputus sebentar tiap box.
+        // moving = tidak pernah berhenti: pusatkan sambil melaju, jepret, lalu
+        //          MEMBANTING MENJAUH dari box. Lebih cepat dan lintasan utuh,
+        //          tapi foto berisiko sedikit blur.
+        // Dua-duanya di step yang SAMA supaya bisa dibandingkan di danau cukup
+        // dengan mengganti satu nilai ini.
+      },
+      {
         key: "throttle",
         label: "Transit Throttle (0-1)",
         type: "number",
         default: 0.3,
-        // Laju saat menyusuri celah di antara kedua box.
+        // Laju saat menyusuri celah. Di mode moving, laju ini juga dipertahankan
+        // saat membidik dan menghindar — kapal tidak boleh kehilangan momentum
+        // tepat sebelum manuver menghindar.
+      },
+      {
+        key: "evade_sec",
+        label: "Lama Menghindar (s) — mode moving",
+        type: "number",
+        default: 1.5,
+        // Setelah menjepret sambil jalan, kapal sedang mengarah TEPAT ke box.
+        // Ini lama membanting menjauh sebelum kembali menyusuri celah.
+        // Tidak dipakai di mode stop — di sana kapal berhenti jauh dari box.
+      },
+      {
+        key: "evade_steer",
+        label: "Kuat Menghindar (0-1) — mode moving",
+        type: "number",
+        default: 0.45,
+        // Arahnya TIDAK perlu diisi: diturunkan dari warna box (biru menandai tepi
+        // kanan → menghindar ke kiri, hijau sebaliknya). Ini hanya kekuatannya.
       },
       {
         key: "aim_throttle",

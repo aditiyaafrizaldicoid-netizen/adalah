@@ -139,6 +139,9 @@ class MissionEngine:
     BOX_AIM     = "AIM"
     BOX_SETTLE  = "SETTLE"
     BOX_SHOOT   = "SHOOT"
+    # Hanya dipakai mode "moving": setelah menjepret sambil jalan, kapal sedang
+    # mengarah TEPAT ke box yang baru difoto dan harus membanting menjauh.
+    BOX_EVADE   = "EVADE"
 
     # ---- Fase step PHOTO_BOX ----
     # SEARCH   : box target belum terlihat. Maju pelan sambil menyapu.
@@ -543,6 +546,27 @@ class MissionEngine:
     BOXCH_AIM_TIMEOUT_SEC = 6.0
 
     BOXCH_SETTLE_SEC = 1.0
+
+    # ── Mode "moving": memotret sambil jalan ────────────────────────────────
+    # Mode "stop" (default) berhenti, memutar, diam, lalu menjepret — foto paling
+    # tajam. Mode "moving" tidak pernah berhenti: memusatkan box sambil melaju,
+    # menjepret, lalu MEMBANTING MENJAUH.
+    #
+    # Menghindar itu wajib di mode ini dan tidak ada padanannya di mode stop: di
+    # sana kapal berhenti jauh dari box, di sini kapal justru sedang menuju tepat
+    # ke box saat shutter ditekan. Arah menghindar TIDAK ditulis sebagai kiri/kanan
+    # di sini melainkan diturunkan dari konvensi sisi — box biru menandai tepi
+    # kanan, jadi menghindarnya ke kiri; hijau sebaliknya. Membalik konvensi arena
+    # cukup di gate_convention.py.
+    BOXCH_EVADE_SEC = 1.5
+    BOXCH_EVADE_STEER = 0.45
+
+    # Jaring pengaman jarak untuk mode moving: kalau box sudah sebesar ini kali
+    # ambang "cukup dekat" dan shutter belum juga ditekan (mis. tidak pernah
+    # terpusat), jepret SEKARANG dan langsung menghindar. Batas waktu membidik
+    # saja tidak cukup di sini — kapal sedang melaju, jadi yang menentukan bahaya
+    # adalah JARAK, bukan lamanya waktu.
+    BOXCH_FORCE_SHOOT_AREA_RATIO = 2.0
     BOXCH_SHOOT_TIMEOUT_SEC = 3.0
 
     # Tidak ada box terlihat sama sekali: kapal maju lurus selama ini, lalu BERHENTI.
@@ -598,6 +622,7 @@ class MissionEngine:
         self._boxch_last_seen_at: float = 0.0
         self._boxch_last_steer: float = 0.0
         self._boxch_blind_since: Optional[float] = None
+        self._boxch_evade_steer: float = 0.0
         # Deteksi box milik frame yang sedang diproses — lihat catatan di update_frame().
         self._frame_boxes: Dict[str, List] = {}
 
@@ -1822,7 +1847,20 @@ class MissionEngine:
         # Didahulukan supaya deteksi yang berkedip tidak membatalkan foto yang
         # shutter-nya sudah diminta.
         if self._boxch_phase == self.BOX_SHOOT:
-            return self._boxch_tunggu_shutter(sekarang)
+            return self._boxch_tunggu_shutter(step, sekarang)
+
+        # ── EVADE: membanting menjauh dari box yang baru difoto ────────────
+        # Sengaja didahulukan juga: begitu kapal berbelok, box-nya keluar frame,
+        # dan kalau menghindar bergantung pada box yang masih terlihat, manuvernya
+        # akan terpotong tepat saat paling dibutuhkan.
+        if self._boxch_phase == self.BOX_EVADE:
+            lama = sekarang - self._boxch_phase_since
+            durasi = self._safe_float(step.get("evade_sec"), self.BOXCH_EVADE_SEC)
+            if lama < durasi:
+                thr = self._safe_float(step.get("throttle"), self.BOXCH_TRANSIT_THROTTLE)
+                return self._boxch_evade_steer, thr, \
+                    f"BOX_CHANNEL | EVADE {lama:.1f}/{durasi:.1f}s"
+            self._boxch_set_phase(self.BOX_TRANSIT)
 
         # ── Tidak ada box terlihat sama sekali ─────────────────────────────
         if terbesar is None:
@@ -1867,11 +1905,22 @@ class MissionEngine:
         self._boxch_last_steer = steer_bidik
         label_target = ROLE_LABELS[peran_target]
 
+        bergerak = self._boxch_mode_bergerak(step)
+        luas_target = float((box_target[4] - box_target[2]) * (box_target[5] - box_target[3]))
+
         # ── AIM: putar sampai box di tengah ────────────────────────────────
         if self._boxch_phase == self.BOX_AIM:
             lama_bidik = sekarang - self._boxch_phase_since
             batas = self._safe_float(step.get("aim_timeout_sec"), self.BOXCH_AIM_TIMEOUT_SEC)
-            if abs(error_px) <= toleransi:
+            batas_luas = (self._boxch_min_area(step, peran_target)
+                          * self.BOXCH_FORCE_SHOOT_AREA_RATIO)
+            if bergerak and luas_target >= batas_luas:
+                # Sudah terlalu dekat sementara masih melaju. Waktu bukan ukuran
+                # yang tepat di sini — jaraklah yang menentukan bahaya.
+                print(f"[MissionEngine] ⚠️ {label_target} sudah terlalu dekat "
+                      f"(belum terpusat) — jepret sekarang lalu menghindar.")
+                self._boxch_set_phase(self.BOX_SETTLE)
+            elif abs(error_px) <= toleransi:
                 self._boxch_set_phase(self.BOX_SETTLE)
             elif lama_bidik >= batas:
                 # Menyerah memusatkan. Menjepret dengan framing seadanya jauh lebih
@@ -1881,27 +1930,47 @@ class MissionEngine:
                       f"{batas:.0f}s — difoto apa adanya (err={error_px:+.0f}px).")
                 self._boxch_set_phase(self.BOX_SETTLE)
             else:
-                thr = self._safe_float(step.get("aim_throttle"), self.BOXCH_AIM_THROTTLE)
-                return steer_bidik, thr, (f"BOX_CHANNEL | AIM {label_target} "
+                # Mode moving TIDAK melambat: laju jelajah dipertahankan supaya
+                # kapal tidak kehilangan momentum sebelum manuver menghindar.
+                thr = (self._safe_float(step.get("throttle"), self.BOXCH_TRANSIT_THROTTLE)
+                       if bergerak
+                       else self._safe_float(step.get("aim_throttle"), self.BOXCH_AIM_THROTTLE))
+                mode_lbl = "jalan" if bergerak else "diam"
+                return steer_bidik, thr, (f"BOX_CHANNEL | AIM {label_target} ({mode_lbl}) "
                                           f"err={error_px:+.0f}px {lama_bidik:.1f}/{batas:.0f}s")
 
         # ── SETTLE: berhenti, tunggu kapal diam ────────────────────────────
+        # Mode moving MELEWATI fase ini seluruhnya — tidak berhenti, tidak menunggu.
+        # Itu memang inti perbedaannya: foto sedikit kurang tajam, ditukar dengan
+        # lintasan yang tidak terputus.
         if self._boxch_phase == self.BOX_SETTLE:
-            if self.asv and self.asv.is_connected():
-                self.asv.stop_movement(silent=True)
-            diam = sekarang - self._boxch_phase_since
-            tunggu = self._safe_float(step.get("settle_sec"), self.BOXCH_SETTLE_SEC)
-            if diam < tunggu:
-                return 0.0, 0.0, (f"BOX_CHANNEL | SETTLE {label_target} "
-                                  f"{diam:.1f}/{tunggu:.1f}s")
+            # Berhenti & menunggu HANYA di mode stop. Mode moving lewat begitu saja
+            # ke shutter — itu memang inti perbedaan keduanya.
+            if not bergerak:
+                if self.asv and self.asv.is_connected():
+                    self.asv.stop_movement(silent=True)
+                diam = sekarang - self._boxch_phase_since
+                tunggu = self._safe_float(step.get("settle_sec"), self.BOXCH_SETTLE_SEC)
+                if diam < tunggu:
+                    return 0.0, 0.0, (f"BOX_CHANNEL | SETTLE {label_target} "
+                                      f"{diam:.1f}/{tunggu:.1f}s")
+
             # Minta shutter. main.py memotret dari frame BERSIH (sebelum tracker
             # menggambari bounding box) — mekanisme yang sama dengan TAKE_IMAGE.
             self._capture_requested_at = sekarang
             self._capture_pending = True
             self._capture_label = peran_target
+            # Arah menghindar disiapkan SEKARANG, selagi kita masih tahu box mana
+            # yang dibidik: begitu kapal membanting, box-nya keluar frame.
+            self._boxch_evade_steer = channel_sign(peran_target) * self._safe_float(
+                step.get("evade_steer"), self.BOXCH_EVADE_STEER)
             self._boxch_set_phase(self.BOX_SHOOT)
-            print(f"[MissionEngine] 📸 Memotret {label_target}...")
-            return 0.0, 0.0, f"BOX_CHANNEL | SHOOT {label_target}"
+            print(f"[MissionEngine] 📸 Memotret {label_target}"
+                  f"{' (sambil jalan)' if bergerak else ''}...")
+            thr = (self._safe_float(step.get("throttle"), self.BOXCH_TRANSIT_THROTTLE)
+                   if bergerak else 0.0)
+            return (steer_bidik if bergerak else 0.0), thr, \
+                f"BOX_CHANNEL | SHOOT {label_target}"
 
         return steer_alur, self._safe_float(step.get("throttle"),
                                             self.BOXCH_TRANSIT_THROTTLE), \
@@ -1970,9 +2039,22 @@ class MissionEngine:
         return self._area_dari_step(step, "min_area_px2_green",
                                     self.BOXCH_MIN_AREA_PX2_GREEN)
 
-    def _boxch_tunggu_shutter(self, sekarang: float) -> Tuple[float, float, str]:
+    def _boxch_mode_bergerak(self, step: Dict) -> bool:
+        """
+        True kalau step ini memotret SAMBIL JALAN.
+
+        Dua mode sengaja dijadikan satu field, bukan dua tipe step: di danau,
+        membandingkan keduanya jadi soal mengganti satu nilai lalu menjalankan ulang
+        — bukan menyusun pipeline baru dengan belasan field yang harus disamakan
+        satu per satu.
+        """
+        mode = str(step.get("mode") or "stop").strip().lower()
+        return mode in ("moving", "jalan", "bergerak", "move")
+
+    def _boxch_tunggu_shutter(self, step: Dict, sekarang: float) -> Tuple[float, float, str]:
         """Tahan posisi sampai capture_now() mengambil fotonya, atau kamera menyerah."""
-        if self.asv and self.asv.is_connected():
+        bergerak = self._boxch_mode_bergerak(step)
+        if not bergerak and self.asv and self.asv.is_connected():
             self.asv.stop_movement(silent=True)
         peran = self._boxch_target
         label = ROLE_LABELS.get(peran, "box")
@@ -1980,8 +2062,16 @@ class MissionEngine:
         if not self._capture_pending:
             if peran and peran not in self._boxch_done:
                 self._boxch_done.append(peran)
-            print(f"[MissionEngine] ✅ Foto {label} tersimpan — lanjut menyusuri celah.")
             self._boxch_target = None
+            if bergerak:
+                # Kapal sedang mengarah TEPAT ke box yang baru difoto — membanting
+                # menjauh dulu sebelum kembali menyusuri celah.
+                self._boxch_set_phase(self.BOX_EVADE)
+                print(f"[MissionEngine] ✅ Foto {label} tersimpan — menghindar "
+                      f"({'kiri' if self._boxch_evade_steer < 0 else 'kanan'}) lalu lanjut.")
+                thr = self._safe_float(step.get("throttle"), self.BOXCH_TRANSIT_THROTTLE)
+                return self._boxch_evade_steer, thr, f"BOX_CHANNEL | EVADE {label}"
+            print(f"[MissionEngine] ✅ Foto {label} tersimpan — lanjut menyusuri celah.")
             self._boxch_set_phase(self.BOX_TRANSIT)
             return 0.0, 0.0, f"BOX_CHANNEL | {label} OK"
 
@@ -1992,7 +2082,9 @@ class MissionEngine:
             if peran and peran not in self._boxch_done:
                 self._boxch_done.append(peran)
             self._boxch_target = None
-            self._boxch_set_phase(self.BOX_TRANSIT)
+            # Tetap menghindar walau fotonya gagal: kapal sudah terlanjur mengarah
+            # ke box, dan kegagalan kamera bukan alasan untuk menabraknya.
+            self._boxch_set_phase(self.BOX_EVADE if bergerak else self.BOX_TRANSIT)
             print(f"[MissionEngine] ⚠️ Foto {label} GAGAL — tidak ada frame kamera.")
             return 0.0, 0.0, f"BOX_CHANNEL | {label} GAGAL"
 
@@ -2040,6 +2132,7 @@ class MissionEngine:
         self._boxch_last_seen_at = 0.0
         self._boxch_last_steer = 0.0
         self._boxch_blind_since = None
+        self._boxch_evade_steer = 0.0
 
     def _handle_hold(self, step, frame, gate_x, detected_balls=None):
         """Handle HOLD step."""
