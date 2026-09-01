@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from "vue";
-import { useRouter, useRoute } from "vue-router";
+import { RouterLink, useRouter, useRoute } from "vue-router";
 import {
   Activity,
   Mail,
@@ -207,7 +207,27 @@ async function handleSubmit() {
           </button>
         </form>
 
-        <p class="mt-8 text-center text-[10px] uppercase tracking-widest text-(--text-muted)">
+        <!-- Jalan masuk panel juri.
+             Juri TIDAK punya akun: panelnya baca-saja dan terbuka tanpa login
+             (lihat router meta.public pada route /juri). Tautan ini ada murni
+             supaya halamannya bisa DITEMUKAN — sebelumnya tidak ada satu pun
+             tautan ke sana di seluruh aplikasi, sehingga satu-satunya cara masuk
+             adalah mengetik alamatnya dari hafalan. -->
+        <div class="mt-8 pt-6 border-t border-(--border-subtle)">
+          <RouterLink
+            to="/juri"
+            class="group flex items-center justify-center gap-2 text-[10px] font-bold uppercase tracking-widest text-(--text-muted) hover:text-(--accent-primary) transition-colors"
+          >
+            <Eye class="w-3.5 h-3.5" />
+            Masuk sebagai Juri — tanpa login
+            <span class="opacity-0 group-hover:opacity-100 transition-opacity">→</span>
+          </RouterLink>
+          <p class="mt-2 text-center text-[9px] text-(--text-muted) opacity-70">
+            Panel penilaian baca-saja. Tidak dapat mengubah pengaturan kapal.
+          </p>
+        </div>
+
+        <p class="mt-6 text-center text-[10px] uppercase tracking-widest text-(--text-muted)">
           Base Station ASV · Universitas Muhammadiyah Malang
         </p>
       </div>
