@@ -105,8 +105,33 @@ func (h *PidConfigHandler) SaveGeofence(c *fiber.Ctx) error {
 	}})
 }
 
+// PidConfigRequest memakai POINTER untuk setiap field.
+//
+// KENAPA (bug lapangan): versi sebelumnya mem-parse langsung ke entity.PidConfig
+// lalu menyalin field dengan pola `if body.Ki != 0`. Karena nol adalah nilai nol
+// Go untuk field yang TIDAK DIKIRIM, pola itu tidak bisa membedakan "tidak
+// dikirim" dari "sengaja diisi nol" — sehingga MENYETEL NILAI KE NOL MUSTAHIL.
+//
+// Itu bukan kasus teoretis. Komentar di control/pid_tracker.py justru menganjurkan
+// "Kd sangat kecil / nol" pada 15 FPS, jadi Kd=0 adalah setelan yang memang ingin
+// dipakai. Operator mengetik 0, panel menjawab "berhasil disimpan" karena server
+// mengembalikan 200, dan nilainya diam-diam tetap seperti semula.
+//
+// Pointer membuat "tidak dikirim" (nil) berbeda dari "dikirim bernilai 0".
+type PidConfigRequest struct {
+	Kp                  *float64 `json:"kp"`
+	Ki                  *float64 `json:"ki"`
+	Kd                  *float64 `json:"kd"`
+	ForwardSpeed        *float64 `json:"forward_speed"`
+	MaxTurnRate         *float64 `json:"max_turn_rate"`
+	AlignThresholdPx    *float64 `json:"align_threshold_px"`
+	MinDetectionAreaPx2 *float64 `json:"min_detection_area_px2"`
+	CameraWidth         *int     `json:"camera_width"`
+	CameraHeight        *int     `json:"camera_height"`
+}
+
 func (h *PidConfigHandler) SaveConfig(c *fiber.Ctx) error {
-	var body entity.PidConfig
+	var body PidConfigRequest
 	if err := c.BodyParser(&body); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"status":  "error",
@@ -119,32 +144,44 @@ func (h *PidConfigHandler) SaveConfig(c *fiber.Ctx) error {
 		config = &entity.PidConfig{}
 	}
 
-	if body.Kp != 0 {
-		config.Kp = body.Kp
+	if body.Kp != nil {
+		config.Kp = *body.Kp
 	}
-	if body.Ki != 0 {
-		config.Ki = body.Ki
+	if body.Ki != nil {
+		config.Ki = *body.Ki
 	}
-	if body.Kd != 0 {
-		config.Kd = body.Kd
+	if body.Kd != nil {
+		config.Kd = *body.Kd
 	}
-	if body.ForwardSpeed != 0 {
-		config.ForwardSpeed = body.ForwardSpeed
+	if body.ForwardSpeed != nil {
+		config.ForwardSpeed = *body.ForwardSpeed
 	}
-	if body.MaxTurnRate != 0 {
-		config.MaxTurnRate = body.MaxTurnRate
+	if body.MaxTurnRate != nil {
+		config.MaxTurnRate = *body.MaxTurnRate
 	}
-	if body.AlignThresholdPx != 0 {
-		config.AlignThresholdPx = body.AlignThresholdPx
+	if body.AlignThresholdPx != nil {
+		config.AlignThresholdPx = *body.AlignThresholdPx
 	}
-	if body.MinDetectionAreaPx2 != 0 {
-		config.MinDetectionAreaPx2 = body.MinDetectionAreaPx2
+	if body.MinDetectionAreaPx2 != nil {
+		config.MinDetectionAreaPx2 = *body.MinDetectionAreaPx2
 	}
-	if body.CameraWidth != 0 {
-		config.CameraWidth = body.CameraWidth
+	// Resolusi nol akan membuat kamera gagal dibuka di kapal, dan tidak ada
+	// keadaan sah yang membutuhkannya — ditolak, bukan diterima diam-diam.
+	if body.CameraWidth != nil {
+		if *body.CameraWidth <= 0 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status": "error", "message": "camera_width harus lebih dari 0",
+			})
+		}
+		config.CameraWidth = *body.CameraWidth
 	}
-	if body.CameraHeight != 0 {
-		config.CameraHeight = body.CameraHeight
+	if body.CameraHeight != nil {
+		if *body.CameraHeight <= 0 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status": "error", "message": "camera_height harus lebih dari 0",
+			})
+		}
+		config.CameraHeight = *body.CameraHeight
 	}
 
 	if err := h.service.SaveConfig(config); err != nil {
