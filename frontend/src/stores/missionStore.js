@@ -653,7 +653,7 @@ export const STEP_TYPES = [
   //
   // Bedanya dengan BOX_CHANNEL: step itu mengurus DUA box sekaligus, menyusuri
   // celah di antaranya, dan memotret keduanya. Step ini sengaja dibuat sesederhana
-  // mungkin — satu box, tiga fase, dan SEMUA angkanya terbuka untuk di-tuning —
+  // mungkin — satu box, tiga fase inti, dan SEMUA angkanya terbuka untuk di-tuning —
   // supaya perilaku yang benar bisa dicari dulu di danau tanpa variabel lain ikut
   // berubah. Untuk box kedua, pasang step ini sekali lagi dengan target hijau.
   //
@@ -772,10 +772,32 @@ export const STEP_TYPES = [
         // walau belum terpusat. Isi 0 untuk mematikan (tidak disarankan).
       },
 
-      // ─── Fase 3: EVADE — manuver menghindar ────────────────────────────
+      // ─── Foto (opsional, default MATI) ─────────────────────────────────
+      {
+        key: "photo",
+        label: "4. FOTO — Mode (off / stop / moving)",
+        type: "text",
+        default: "off",
+        // "off"    = tidak memotret sama sekali (default).
+        // "stop"   = berhenti, tunggu diam, jepret, baru menghindar. Foto tertajam.
+        // "moving" = jepret tanpa berhenti lalu langsung menghindar. Lintasan utuh,
+        //            foto berisiko sedikit blur.
+        // Default MATI supaya step ini tetap murni soal manuver — menambah shutter
+        // mengubah waktu tempuh dan bisa mengacaukan tuning yang sudah jadi.
+        // Salah ketik dianggap "off", bukan memotret.
+      },
+      {
+        key: "photo_settle_sec",
+        label: "4. FOTO — Diam Sebelum Jepret (s)",
+        type: "number",
+        default: 1.0,
+        // Hanya berlaku di mode "stop". Naikkan kalau foto masih goyang.
+      },
+
+      // ─── Fase 5: EVADE — manuver menghindar ────────────────────────────
       {
         key: "evade_direction",
-        label: "4. HINDAR — Arah (kiri/kanan/auto)",
+        label: "5. HINDAR — Arah (kiri/kanan/auto)",
         type: "text",
         default: "left",
         // "left"/"kiri", "right"/"kanan", atau "auto".
@@ -785,7 +807,7 @@ export const STEP_TYPES = [
       },
       {
         key: "evade_throttle",
-        label: "4. HINDAR — Throttle",
+        label: "5. HINDAR — Throttle",
         type: "number",
         default: 0.3,
         // Laju selama manuver menghindar. Kalau kemudi kapal servo, jangan terlalu
@@ -793,14 +815,14 @@ export const STEP_TYPES = [
       },
       {
         key: "evade_steer",
-        label: "4. HINDAR — Kuat Bantingan",
+        label: "5. HINDAR — Kuat Bantingan",
         type: "number",
         default: 0.5,
         // Hanya kekuatannya (0..1). Arahnya diambil dari field arah di atas.
       },
       {
         key: "evade_sec",
-        label: "4. HINDAR — Durasi (s)",
+        label: "5. HINDAR — Durasi (s)",
         type: "number",
         default: 2.0,
         // Lama membanting sebelum step dianggap selesai.

@@ -151,6 +151,9 @@ class MissionEngine:
     #            diminta selama sekian detik, lalu step selesai.
     BAP_SCAN     = "SCAN"
     BAP_APPROACH = "APPROACH"
+    # Hanya dilewati kalau step diminta memotret (field `photo`). Default step ini
+    # TIDAK memotret sama sekali — lihat BAP_PHOTO_MODE.
+    BAP_SHOOT    = "SHOOT"
     BAP_EVADE    = "EVADE"
 
     # ---- Fase step PHOTO_BOX ----
@@ -646,6 +649,24 @@ class MissionEngine:
                                     #   walau belum terpusat. Isi 0 untuk mematikan
                                     #   pengaman ini (tidak disarankan).
 
+    # ---- Foto (opsional, default MATI) ----
+    BAP_PHOTO_MODE = "off"          # step['photo']
+                                    #   "off"    = tidak memotret sama sekali (default).
+                                    #   "stop"   = berhenti, tunggu diam, jepret, baru
+                                    #              menghindar. Foto paling tajam.
+                                    #   "moving" = jepret tanpa berhenti lalu langsung
+                                    #              menghindar. Lintasan tidak terputus,
+                                    #              foto berisiko sedikit blur.
+                                    #   Default MATI supaya step ini tetap murni soal
+                                    #   manuver: menambah shutter mengubah waktu tempuh
+                                    #   dan bisa mengacaukan tuning yang sudah jadi.
+    BAP_PHOTO_SETTLE_SEC = 1.0      # step['photo_settle_sec']
+                                    #   Lama kapal DIAM sebelum shutter, mode "stop" saja.
+    BAP_SHOOT_TIMEOUT_SEC = 3.0     # Frame bersih tidak pernah datang (mis. kamera mati)
+                                    #   → berhenti menunggu dan TETAP menghindar. Kapal
+                                    #   sudah terlanjur mengarah ke box, dan kamera yang
+                                    #   gagal bukan alasan untuk menabraknya.
+
     # ---- Fase EVADE: manuver menghindar ----
     BAP_EVADE_DIRECTION = "left"    # step['evade_direction']  "left"/"kiri" atau "right"/"kanan"
                                     #   Default KIRI karena box biru menandai tepi KANAN
@@ -718,6 +739,9 @@ class MissionEngine:
         self._bap_last_steer: float = 0.0
         self._bap_evade_steer: float = 0.0
         self._bap_evade_reason: str = ""
+        self._bap_target_peran: str = ROLE_BLUE_BOX
+        self._bap_shutter_diminta: bool = False
+        self._bap_shutter_sejak: float = 0.0
         # Deteksi box milik frame yang sedang diproses — lihat catatan di update_frame().
         self._frame_boxes: Dict[str, List] = {}
 
@@ -2255,9 +2279,17 @@ class MissionEngine:
         """
         Cari satu box, dekati sampai terpusat & cukup dekat, lalu menghindar.
 
-        Tiga fase, berurutan dan tidak pernah mundur kecuali box hilang:
+        Tiga fase inti, berurutan dan tidak pernah mundur kecuali box hilang:
 
             SCAN ──► APPROACH ──► EVADE ──► step selesai
+
+        Kalau field `photo` dinyalakan, satu fase disisipkan sebelum menghindar:
+
+            SCAN ──► APPROACH ──► SHOOT ──► EVADE ──► step selesai
+
+        Default-nya MATI. Step ini dibuat untuk mencari perilaku manuver yang benar,
+        dan shutter mengubah waktu tempuh — menyalakannya diam-diam akan membuat
+        angka yang sudah di-tuning tidak lagi berarti sama.
 
         BEDANYA DENGAN BOX_CHANNEL: step itu menyusuri celah di antara DUA box dan
         memotret keduanya. Step ini hanya mengurus SATU box dan tidak memotret sama
@@ -2294,6 +2326,10 @@ class MissionEngine:
           target_area_px2         "sudah dekat" = luas bbox >= ini
           force_evade_area_ratio  pengaman tabrakan (lihat catatan di bawah)
 
+          --- Foto (opsional, default MATI) ---
+          photo                   "off" (default) | "stop" | "moving"
+          photo_settle_sec        lama diam sebelum shutter, mode "stop" saja
+
           --- Fase EVADE ---
           evade_direction         "left"/"kiri", "right"/"kanan", atau "auto"
           evade_throttle          laju saat menghindar                  (0..1)
@@ -2328,6 +2364,10 @@ class MissionEngine:
             if umur >= batas_step:
                 print(f"[MissionEngine] ⏱️ BOX_APPROACH dihentikan — batas {batas_step:.0f}s "
                       f"terlampaui di fase {self._bap_phase}.")
+                # Permintaan shutter yang belum dilayani JANGAN diwariskan: step
+                # berikutnya akan memotret pada momen yang sama sekali tidak diminta.
+                if self._bap_shutter_diminta:
+                    self._capture_pending = False
                 self._advance_step()
                 return 0.0, 0.0, "BOX_APPROACH | BATAS WAKTU"
 
@@ -2337,6 +2377,11 @@ class MissionEngine:
         # paling dibutuhkan.
         if self._bap_phase == self.BAP_EVADE:
             return self._bap_menghindar(step, sekarang)
+
+        # SHOOT juga didahulukan: shutter yang sudah diminta tidak boleh dibatalkan
+        # hanya karena deteksi box berkedip satu frame.
+        if self._bap_phase == self.BAP_SHOOT:
+            return self._bap_memotret(step, sekarang)
 
         peran = self._bap_peran_target(step)
         min_deteksi = self._area_dari_step(step, "min_detect_area_px2",
@@ -2477,14 +2522,102 @@ class MissionEngine:
 
     def _bap_mulai_menghindar(self, step: Dict, sekarang: float, peran: str,
                               alasan: str) -> Tuple[float, float, str]:
-        """Masuk fase EVADE. Arah & kekuatan dikunci SEKARANG, selagi box masih terlihat."""
+        """
+        Syarat menghindar terpenuhi.
+
+        Arah & kekuatan bantingan dikunci SEKARANG, selagi box masih terlihat: begitu
+        kapal membanting — atau berhenti untuk memotret — box bisa keluar frame, dan
+        arah yang dihitung ulang saat itu tidak lagi punya dasar.
+
+        Kalau step diminta memotret, fase SHOOT disisipkan dulu di sini. Kalau tidak
+        (default), langsung menghindar.
+        """
         kuat = min(1.0, abs(self._safe_float(step.get("evade_steer"), self.BAP_EVADE_STEER)))
         self._bap_evade_steer = self._bap_arah_menghindar(step, peran) * kuat
         self._bap_evade_reason = alasan
-        self._bap_set_phase(self.BAP_EVADE)
-        print(f"[MissionEngine] ↩️ {ROLE_LABELS[peran]} — {alasan}. Menghindar ke "
-              f"{'KANAN' if self._bap_evade_steer > 0 else 'KIRI'}.")
-        return self._bap_menghindar(step, sekarang)
+        self._bap_target_peran = peran
+        arah_lbl = "KANAN" if self._bap_evade_steer > 0 else "KIRI"
+
+        mode_foto = self._bap_mode_foto(step)
+        if mode_foto is None:
+            self._bap_set_phase(self.BAP_EVADE)
+            print(f"[MissionEngine] ↩️ {ROLE_LABELS[peran]} — {alasan}. "
+                  f"Menghindar ke {arah_lbl}.")
+            return self._bap_menghindar(step, sekarang)
+
+        self._bap_shutter_diminta = False
+        self._bap_set_phase(self.BAP_SHOOT)
+        print(f"[MissionEngine] 📷 {ROLE_LABELS[peran]} — {alasan}. Memotret "
+              f"({mode_foto}), lalu menghindar ke {arah_lbl}.")
+        return self._bap_memotret(step, sekarang)
+
+    def _bap_mode_foto(self, step: Dict) -> Optional[str]:
+        """
+        "stop" | "moving" kalau step diminta memotret, None kalau tidak.
+
+        Nilai yang tidak dikenali dianggap TIDAK memotret, bukan memotret: salah ketik
+        pada field ini paling aman kalau berakhir pada perilaku default step.
+        """
+        mode = str(step.get("photo") or self.BAP_PHOTO_MODE).strip().lower()
+        if mode in ("stop", "berhenti", "diam"):
+            return "stop"
+        if mode in ("moving", "jalan", "bergerak", "move"):
+            return "moving"
+        return None
+
+    def _bap_memotret(self, step: Dict, sekarang: float) -> Tuple[float, float, str]:
+        """
+        Minta shutter, tunggu main.py mengambil frame BERSIH, lalu lanjut menghindar.
+
+        Mekanismenya sama persis dengan TAKE_IMAGE dan BOX_CHANNEL: engine cuma
+        menyalakan _capture_pending, dan main.py yang memanggil capture_now() dengan
+        frame yang belum digambari anotasi YOLO/OSD.
+        """
+        mode = self._bap_mode_foto(step) or "moving"
+        label = ROLE_LABELS.get(self._bap_target_peran, "box")
+        lama = sekarang - self._bap_phase_since
+
+        # --- Mode stop: berhenti dan tunggu kapal benar-benar diam dulu ---
+        if mode == "stop" and not self._bap_shutter_diminta:
+            if self.asv and self.asv.is_connected():
+                self.asv.stop_movement(silent=True)
+            tunggu = max(0.0, self._safe_float(step.get("photo_settle_sec"),
+                                               self.BAP_PHOTO_SETTLE_SEC))
+            if lama < tunggu:
+                return 0.0, 0.0, (f"BOX_APPROACH | SETTLE {label} "
+                                  f"{lama:.1f}/{tunggu:.1f}s")
+
+        # --- Minta shutter, sekali saja ---
+        if not self._bap_shutter_diminta:
+            self._capture_requested_at = sekarang
+            self._capture_pending = True
+            self._capture_label = self._bap_target_peran
+            self._bap_shutter_diminta = True
+            self._bap_shutter_sejak = sekarang
+            print(f"[MissionEngine] 📸 Memotret {label}"
+                  f"{' (sambil jalan)' if mode == 'moving' else ''}...")
+
+        # --- Foto sudah diambil → menghindar ---
+        if not self._capture_pending:
+            print(f"[MissionEngine] ✅ Foto {label} tersimpan — menghindar.")
+            self._bap_set_phase(self.BAP_EVADE)
+            return self._bap_menghindar(step, sekarang)
+
+        # --- Kamera tidak pernah menyerahkan frame bersih ---
+        if (sekarang - self._bap_shutter_sejak) >= self.BAP_SHOOT_TIMEOUT_SEC:
+            self._capture_pending = False
+            print(f"[MissionEngine] ⚠️ Foto {label} GAGAL — tidak ada frame kamera. "
+                  f"Tetap menghindar.")
+            self._bap_set_phase(self.BAP_EVADE)
+            return self._bap_menghindar(step, sekarang)
+
+        # --- Menunggu shutter: tahan posisi sesuai modenya ---
+        if mode == "stop":
+            if self.asv and self.asv.is_connected():
+                self.asv.stop_movement(silent=True)
+            return 0.0, 0.0, f"BOX_APPROACH | SHOOT {label}"
+        thr = self._bap_throttle(step, "approach_throttle", self.BAP_APPROACH_THROTTLE)
+        return self._bap_last_steer, thr, f"BOX_APPROACH | SHOOT {label} (jalan)"
 
     def _bap_menghindar(self, step: Dict, sekarang: float) -> Tuple[float, float, str]:
         """Tahan bantingan selama durasi yang diminta, lalu selesaikan step."""
@@ -2513,6 +2646,9 @@ class MissionEngine:
         self._bap_last_steer = 0.0
         self._bap_evade_steer = 0.0
         self._bap_evade_reason = ""
+        self._bap_target_peran = ROLE_BLUE_BOX
+        self._bap_shutter_diminta = False
+        self._bap_shutter_sejak = 0.0
 
     def _handle_hold(self, step, frame, gate_x, detected_balls=None):
         """Handle HOLD step."""

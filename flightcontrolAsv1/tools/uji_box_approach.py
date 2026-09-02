@@ -54,7 +54,8 @@ def box(cx, luas, tinggi_rasio=1.0):
             cx + lebar / 2, TINGGI / 2 + tinggi / 2)
 
 
-class UjiBoxApproach(unittest.TestCase):
+class BasisUji:
+    """Helper bersama. Bukan TestCase supaya uji-nya tidak ikut jalan dua kali."""
 
     def setUp(self):
         self.engine = MissionEngine(AsvPalsu(), None, KontrolerPalsu(),
@@ -71,6 +72,9 @@ class UjiBoxApproach(unittest.TestCase):
         self.engine.load_mission([step, {"type": "FINISH"}])
         self.engine.start_mission()
         return step
+
+
+class UjiBoxApproach(BasisUji, unittest.TestCase):
 
     # ── Fase SCAN ──────────────────────────────────────────────────────────
 
@@ -271,6 +275,101 @@ class UjiBoxApproach(unittest.TestCase):
             steer, thr, _ = self.jalankan(None, boxes)
             self.assertTrue(-1.0 <= steer <= 1.0, f"steer di luar batas: {steer}")
             self.assertTrue(0.0 <= thr <= 1.0, f"throttle di luar batas: {thr}")
+
+
+class UjiBoxApproachFoto(BasisUji, unittest.TestCase):
+    """
+    Fase SHOOT — opsional, default MATI.
+
+    main.py-lah yang benar-benar memotret: engine cuma menyalakan capture_pending
+    dan menunggu bendera itu turun. Di sini main.py disimulasikan dengan menurunkan
+    benderanya sendiri, jadi yang diuji adalah KONTRAKNYA, bukan kameranya.
+    """
+
+    def layani_shutter(self):
+        """Perankan main.py: ambil fotonya."""
+        self.assertTrue(self.engine.capture_pending, "engine belum meminta shutter")
+        self.engine._capture_pending = False
+
+    def test_default_tidak_pernah_memotret(self):
+        """Tanpa field photo, step ini murni manuver — persis seperti sebelum fitur foto."""
+        self.mulai(target_area_px2=50000, evade_sec=5.0)
+        _, _, label = self.jalankan(None, {ROLE_BLUE_BOX: [box(LEBAR / 2, 60000)]})
+        self.assertIn("EVADE", label, "default harus langsung menghindar, tanpa SHOOT")
+        self.assertFalse(self.engine.capture_pending)
+
+    def test_salah_ketik_dianggap_tidak_memotret(self):
+        self.mulai(target_area_px2=50000, photo="stopp", evade_sec=5.0)
+        _, _, label = self.jalankan(None, {ROLE_BLUE_BOX: [box(LEBAR / 2, 60000)]})
+        self.assertIn("EVADE", label)
+        self.assertFalse(self.engine.capture_pending)
+
+    def test_mode_moving_menjepret_tanpa_berhenti(self):
+        self.mulai(target_area_px2=50000, photo="moving", approach_throttle=0.3,
+                   evade_sec=5.0)
+        steer, thr, label = self.jalankan(None, {ROLE_BLUE_BOX: [box(LEBAR / 2, 60000)]})
+        self.assertIn("SHOOT", label)
+        self.assertTrue(self.engine.capture_pending)
+        self.assertAlmostEqual(thr, 0.3, places=6, msg="mode moving tidak boleh berhenti")
+
+        self.layani_shutter()
+        steer, _, label = self.jalankan(None, {})
+        self.assertIn("EVADE", label)
+        self.assertLess(steer, 0.0)
+
+    def test_mode_stop_diam_dulu_baru_jepret(self):
+        self.mulai(target_area_px2=50000, photo="stop", photo_settle_sec=0.3,
+                   evade_sec=5.0)
+        steer, thr, label = self.jalankan(None, {ROLE_BLUE_BOX: [box(LEBAR / 2, 60000)]})
+        self.assertIn("SETTLE", label)
+        self.assertEqual((steer, thr), (0.0, 0.0), "mode stop harus benar-benar berhenti")
+        self.assertFalse(self.engine.capture_pending, "shutter jangan diminta sebelum diam")
+
+        time.sleep(0.35)
+        _, _, label = self.jalankan(None, {ROLE_BLUE_BOX: [box(LEBAR / 2, 60000)]})
+        self.assertIn("SHOOT", label)
+        self.assertTrue(self.engine.capture_pending)
+
+        self.layani_shutter()
+        _, _, label = self.jalankan(None, {})
+        self.assertIn("EVADE", label)
+
+    def test_shutter_tidak_dibatalkan_saat_deteksi_berkedip(self):
+        """Box hilang setelah shutter diminta: permintaannya tidak boleh hangus."""
+        self.mulai(target_area_px2=50000, photo="moving", evade_sec=5.0)
+        self.jalankan(None, {ROLE_BLUE_BOX: [box(LEBAR / 2, 60000)]})
+        _, _, label = self.jalankan(None, {})
+        self.assertIn("SHOOT", label)
+        self.assertTrue(self.engine.capture_pending)
+
+    def test_kamera_mati_tetap_menghindar(self):
+        """
+        Frame bersih tidak pernah datang. Kapal sudah terlanjur mengarah ke box —
+        kamera yang gagal bukan alasan untuk menabraknya.
+        """
+        self.mulai(target_area_px2=50000, photo="moving", evade_sec=5.0)
+        self.engine.BAP_SHOOT_TIMEOUT_SEC = 0.2
+        self.jalankan(None, {ROLE_BLUE_BOX: [box(LEBAR / 2, 60000)]})
+        time.sleep(0.25)
+        steer, _, label = self.jalankan(None, {})
+        self.assertIn("EVADE", label)
+        self.assertLess(steer, 0.0)
+        self.assertFalse(self.engine.capture_pending, "permintaan shutter harus dibatalkan")
+
+    def test_batas_keras_tidak_mewariskan_shutter(self):
+        """Step yang dipotong batas waktu tidak boleh membuat step berikutnya memotret."""
+        self.mulai(target_area_px2=50000, photo="stop", photo_settle_sec=99,
+                   max_duration_sec=0.3)
+        self.jalankan(None, {ROLE_BLUE_BOX: [box(LEBAR / 2, 60000)]})
+        time.sleep(0.35)
+        self.jalankan(None, {})
+        self.assertFalse(self.engine.capture_pending,
+                         "shutter menggantung akan memotret di momen yang tidak diminta")
+
+    def test_label_foto_ikut_warna_box(self):
+        self.mulai(target="green", target_area_px2=50000, photo="moving", evade_sec=5.0)
+        self.jalankan(None, {ROLE_GREEN_BOX: [box(LEBAR / 2, 60000)]})
+        self.assertEqual(self.engine._capture_label, ROLE_GREEN_BOX)
 
 
 if __name__ == "__main__":
