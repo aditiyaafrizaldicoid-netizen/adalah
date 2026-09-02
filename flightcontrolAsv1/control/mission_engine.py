@@ -98,6 +98,7 @@ class MissionEngine:
     STEP_TYPE_PHOTO_BOX      = "PHOTO_BOX"       # Cari, dekati, dan foto box biru & hijau — WAJIB setelah step buoy selesai
     STEP_TYPE_BOX_CHANNEL    = "BOX_CHANNEL"     # Susuri celah di antara box biru & hijau, berhenti & foto tiap box
     STEP_TYPE_STEER_UNTIL_BOX = "STEER_UNTIL_BOX"  # TIMED_STEER yang berhenti saat BOX (biru/hijau) terlihat
+    STEP_TYPE_BOX_APPROACH   = "BOX_APPROACH"    # Cari box → dekati → menghindar. Tanpa foto, semua parameternya bisa di-tuning
 
     # Step yang dianggap "misi tracking buoy". Menyelesaikan salah satunya membuka
     # kunci PHOTO_BOX (lihat tracking_buoy_completed & _advance_step).
@@ -142,6 +143,15 @@ class MissionEngine:
     # Hanya dipakai mode "moving": setelah menjepret sambil jalan, kapal sedang
     # mengarah TEPAT ke box yang baru difoto dan harus membanting menjauh.
     BOX_EVADE   = "EVADE"
+
+    # ---- Fase step BOX_APPROACH ----
+    # SCAN     : box target belum terlihat. Kapal maju sambil menyapu ke satu arah.
+    # APPROACH : box terlihat. Kapal memusatkannya sambil mendekat.
+    # EVADE    : box sudah di tengah DAN sudah cukup dekat. Membanting ke arah yang
+    #            diminta selama sekian detik, lalu step selesai.
+    BAP_SCAN     = "SCAN"
+    BAP_APPROACH = "APPROACH"
+    BAP_EVADE    = "EVADE"
 
     # ---- Fase step PHOTO_BOX ----
     # SEARCH   : box target belum terlihat. Maju pelan sambil menyapu.
@@ -577,6 +587,83 @@ class MissionEngine:
     # Kedip deteksi tidak boleh langsung membatalkan bidikan.
     BOXCH_LOST_GRACE_SEC = 0.6
 
+    # ══════════════════════════════════════════════════════════════════════
+    #  BOX_APPROACH — Cari box → Dekati → Menghindar
+    # ══════════════════════════════════════════════════════════════════════
+    # SEMUA nilai di bawah cuma DEFAULT. Setiap satunya bisa ditimpa dari panel
+    # misi lewat field step dengan nama yang tertera di komentarnya, jadi tidak
+    # perlu mengedit file ini untuk tuning di danau.
+    #
+    # Nilai piksel & piksel² ditulis dalam satuan referensi 1920x1080 dan
+    # diskalakan otomatis ke resolusi kamera aktual — lihat
+    # _apply_resolution_scaling(). Jangan mengonversinya sendiri.
+
+    # ---- Fase SCAN: mencari box ----
+    BAP_SCAN_THROTTLE = 0.25        # step['scan_throttle']  laju saat menyapu mencari box
+    BAP_SCAN_STEER = 0.25           # step['scan_steer']     arah & kuat sapuan.
+                                    #   NEGATIF = menyapu ke KIRI, POSITIF = ke KANAN,
+                                    #   0 = maju lurus tanpa menyapu. Besarnya = seberapa
+                                    #   tajam belokannya (0..1).
+    BAP_SCAN_TIMEOUT_SEC = 25.0     # step['scan_timeout_sec']
+                                    #   Box tidak ketemu selama ini → step DISELESAIKAN,
+                                    #   bukan digantung. Kapal yang menyapu tanpa batas
+                                    #   akan keluar arena, dan misi yang menggantung
+                                    #   tidak pernah sampai ke FINISH.
+
+    # ---- Fase APPROACH: mendekati box ----
+    BAP_APPROACH_THROTTLE = 0.25    # step['approach_throttle']  laju saat mendekat
+    BAP_APPROACH_STEER_GAIN = 1.0   # step['approach_steer_gain']
+                                    #   Sensitivitas pemusatan. Simpangan box dari tengah
+                                    #   frame dinormalkan ke -1..+1 lalu dikali angka ini.
+                                    #   Naikkan kalau kapal lambat meluruskan ke box,
+                                    #   turunkan kalau kapal bergoyang kiri-kanan (osilasi).
+    BAP_MAX_STEER = 0.5             # step['max_steer']
+                                    #   Batas kemudi saat mendekat. Ada supaya gain yang
+                                    #   kebesaran tidak berubah jadi bantingan penuh.
+    BAP_MIN_DETECT_AREA_PX2 = 3000  # step['min_detect_area_px2']
+                                    #   Bbox lebih kecil dari ini TIDAK dianggap box.
+                                    #   Wajib ada: satu pantulan air yang lolos YOLO sudah
+                                    #   cukup membuat kapal mengunci sasaran palsu di
+                                    #   kejauhan dan meninggalkan alurnya.
+    BAP_LOST_GRACE_SEC = 1.0        # step['lost_grace_sec']
+                                    #   Box hilang sekejap (kedip deteksi) → kemudi terakhir
+                                    #   dipertahankan selama ini dulu. Lewat dari ini baru
+                                    #   kembali ke SCAN. Tanpa jeda ini kapal meluruskan
+                                    #   haluan tiap kali YOLO berkedip.
+
+    # ---- Pemicu menghindar ----
+    BAP_CENTER_TOLERANCE_PX = 120   # step['center_tolerance_px']
+                                    #   "Sudah di titik tengah" = simpangan <= ini.
+    BAP_TARGET_AREA_PX2 = 45000     # step['target_area_px2']
+                                    #   "Sudah dekat" = luas bbox >= ini. Inilah yang
+                                    #   menentukan pada JARAK berapa kapal menghindar.
+    BAP_FORCE_EVADE_AREA_RATIO = 1.8  # step['force_evade_area_ratio']
+                                    #   PENGAMAN TABRAKAN. Dua syarat di atas dipakai
+                                    #   bersama (DAN), jadi box yang tidak pernah benar-benar
+                                    #   terpusat akan membuat kapal terus mendekat tanpa
+                                    #   pernah menghindar. Begitu luasnya melewati
+                                    #   target x rasio ini, kapal MENGHINDAR SEKARANG
+                                    #   walau belum terpusat. Isi 0 untuk mematikan
+                                    #   pengaman ini (tidak disarankan).
+
+    # ---- Fase EVADE: manuver menghindar ----
+    BAP_EVADE_DIRECTION = "left"    # step['evade_direction']  "left"/"kiri" atau "right"/"kanan"
+                                    #   Default KIRI karena box biru menandai tepi KANAN
+                                    #   lintasan — menghindar ke kiri membawa kapal ke
+                                    #   tengah celah, bukan keluar dari alur.
+    BAP_EVADE_THROTTLE = 0.3        # step['evade_throttle']   laju saat menghindar
+    BAP_EVADE_STEER = 0.5           # step['evade_steer']      kuat bantingan (0..1)
+    BAP_EVADE_SEC = 2.0             # step['evade_sec']        lama manuver menghindar
+
+    # ---- Pengaman terakhir ----
+    BAP_MAX_DURATION_SEC = 90.0     # step['max_duration_sec']
+                                    #   Batas keras SELURUH step, berlaku di fase mana
+                                    #   pun. Ada karena scan_timeout_sec me-reset tiap
+                                    #   kali kapal sempat melihat box: deteksi yang
+                                    #   berkedip-kedip bisa membuat SCAN dan APPROACH
+                                    #   bergantian tanpa pernah kedaluwarsa. Isi 0 untuk
+                                    #   mematikan (tidak disarankan).
+
     def __init__(self, asv, tracker, tracking_controller, speed_scheduler: Optional[SpeedScheduler] = None,
                  camera_width: int = REFERENCE_FRAME_WIDTH, camera_height: int = REFERENCE_FRAME_HEIGHT):
         self.asv = asv
@@ -623,6 +710,14 @@ class MissionEngine:
         self._boxch_last_steer: float = 0.0
         self._boxch_blind_since: Optional[float] = None
         self._boxch_evade_steer: float = 0.0
+
+        # State step BOX_APPROACH (di-reset tiap kali step-nya dimulai)
+        self._bap_phase: str = self.BAP_SCAN
+        self._bap_phase_since: float = 0.0
+        self._bap_last_seen_at: float = 0.0
+        self._bap_last_steer: float = 0.0
+        self._bap_evade_steer: float = 0.0
+        self._bap_evade_reason: str = ""
         # Deteksi box milik frame yang sedang diproses — lihat catatan di update_frame().
         self._frame_boxes: Dict[str, List] = {}
 
@@ -983,6 +1078,10 @@ class MissionEngine:
                 "boxch_phase": self._boxch_phase,
                 "boxch_target": self._boxch_target,
                 "boxch_done": list(self._boxch_done),
+                # BOX_APPROACH — operator perlu tahu kapal sedang mencari, mendekat,
+                # atau sudah menghindar, dan APA yang memicu menghindarnya.
+                "bap_phase": self._bap_phase,
+                "bap_evade_reason": self._bap_evade_reason,
             }
 
     # ------------------------------------------------------------------ #
@@ -1055,6 +1154,14 @@ class MissionEngine:
                     self._reset_boxch_state()
                     if self.asv and self.asv.is_connected() and self.asv.get_telemetry().mode != "MANUAL":
                         print("[MissionEngine] 🔄 Switch mode → MANUAL untuk BOX_CHANNEL...")
+                        self.asv.set_mode("MANUAL")
+
+                elif step_type == self.STEP_TYPE_BOX_APPROACH:
+                    # Mode MANUAL + RC override: memusatkan box butuh kemudi yang
+                    # merespons per frame, bukan velocity GUIDED yang dihaluskan.
+                    self._reset_bap_state()
+                    if self.asv and self.asv.is_connected() and self.asv.get_telemetry().mode != "MANUAL":
+                        print("[MissionEngine] 🔄 Switch mode → MANUAL untuk BOX_APPROACH...")
                         self.asv.set_mode("MANUAL")
 
                 elif step_type == self.STEP_TYPE_PHOTO_BOX:
@@ -1151,6 +1258,11 @@ class MissionEngine:
             elif step_type == self.STEP_TYPE_PHOTO_BOX:
                 return self._handle_photo_box(step, frame, gate_x, detected_balls,
                                               self._frame_boxes)
+
+            # ---- BOX_APPROACH ----
+            elif step_type == self.STEP_TYPE_BOX_APPROACH:
+                return self._handle_box_approach(step, frame, gate_x, detected_balls,
+                                                 self._frame_boxes)
 
             # ---- BOX_CHANNEL ----
             elif step_type == self.STEP_TYPE_BOX_CHANNEL:
@@ -2133,6 +2245,274 @@ class MissionEngine:
         self._boxch_last_steer = 0.0
         self._boxch_blind_since = None
         self._boxch_evade_steer = 0.0
+
+    # ------------------------------------------------------------------ #
+    #  BOX_APPROACH — Cari box → Dekati → Menghindar                      #
+    # ------------------------------------------------------------------ #
+
+    def box_approach(self, step: Dict, detected_boxes: Optional[Dict] = None
+                     ) -> Tuple[float, float, str]:
+        """
+        Cari satu box, dekati sampai terpusat & cukup dekat, lalu menghindar.
+
+        Tiga fase, berurutan dan tidak pernah mundur kecuali box hilang:
+
+            SCAN ──► APPROACH ──► EVADE ──► step selesai
+
+        BEDANYA DENGAN BOX_CHANNEL: step itu menyusuri celah di antara DUA box dan
+        memotret keduanya. Step ini hanya mengurus SATU box dan tidak memotret sama
+        sekali — semua parameternya terbuka untuk di-tuning, jadi cocok dipakai
+        mencari perilaku yang benar di danau sebelum dipindahkan ke step yang lebih
+        pintar. Untuk box kedua, pasang lagi step ini dengan target warna yang lain.
+
+        URUTAN SETELAH BUOY: ditentukan oleh POSISI step di pipeline, bukan oleh
+        gerbang tersembunyi di dalam sini. Taruh step ini setelah step buoy
+        (TRACKING_BUOY / SEQUENTIAL_BUOY / BUOY_CHASE) dan urutannya otomatis benar.
+        Sengaja tidak memakai gerbang seperti PHOTO_BOX: gerbang yang menahan diam
+        pernah terbaca sebagai "kapal tidak jalan" tanpa petunjuk apa pun di layar.
+
+        Field step yang bisa di-tuning (semua opsional, semua di-parse aman —
+        kosong/salah ketik jatuh ke default, tidak pernah melempar exception):
+
+          target                  "blue"/"biru" (default) atau "green"/"hijau"
+
+          --- Fase SCAN ---
+          scan_throttle           laju saat mencari                     (0..1)
+          scan_steer              arah & kuat sapuan: NEGATIF = kiri,
+                                  POSITIF = kanan, 0 = maju lurus       (-1..1)
+          scan_timeout_sec        tidak ketemu selama ini → step selesai
+
+          --- Fase APPROACH ---
+          approach_throttle       laju saat mendekat                    (0..1)
+          approach_steer_gain     sensitivitas pemusatan ke box
+          max_steer               batas kemudi saat mendekat            (0..1)
+          min_detect_area_px2     bbox di bawah ini bukan box (anti false positive)
+          lost_grace_sec          box hilang sekejap → tahan kemudi terakhir
+
+          --- Pemicu menghindar ---
+          center_tolerance_px     "sudah di tengah" = simpangan <= ini
+          target_area_px2         "sudah dekat" = luas bbox >= ini
+          force_evade_area_ratio  pengaman tabrakan (lihat catatan di bawah)
+
+          --- Fase EVADE ---
+          evade_direction         "left"/"kiri", "right"/"kanan", atau "auto"
+          evade_throttle          laju saat menghindar                  (0..1)
+          evade_steer             kuat bantingan                        (0..1)
+          evade_sec               lama manuver menghindar
+
+          --- Pengaman ---
+          max_duration_sec        batas keras seluruh step
+
+        PENGAMAN TABRAKAN, kenapa ada: syarat menghindar adalah "di tengah DAN
+        cukup dekat" — dua syarat yang harus terpenuhi BERSAMAAN. Kalau box tidak
+        pernah benar-benar terpusat (toleransi kesempitan, arus menyamping, box
+        miring), syarat itu tidak pernah terpenuhi sementara kapal terus mendekat.
+        Tanpa penjaga, satu-satunya yang menghentikan kapal adalah box itu sendiri.
+        Karena itu, begitu luas bbox melewati target x force_evade_area_ratio,
+        kapal menghindar SEKARANG walau belum terpusat.
+
+        :param step: dict step misi.
+        :param detected_boxes: {"blue_box": [...], "green_box": [...]} dari tracker.
+            Tuple per deteksi: (cx, cy, x1, y1, x2, y2).
+        :return: (steer_norm, thr_norm, label) — sama seperti handler step lain.
+        """
+        detected_boxes = detected_boxes or {}
+        sekarang = time.time()
+
+        # ── Batas keras seluruh step ───────────────────────────────────────
+        # Dicek paling awal supaya berlaku di fase mana pun, termasuk saat kapal
+        # sedang mendekat dan box tidak kunjung membesar.
+        batas_step = self._safe_float(step.get("max_duration_sec"), self.BAP_MAX_DURATION_SEC)
+        if batas_step > 0 and self._step_start_time:
+            umur = sekarang - self._step_start_time
+            if umur >= batas_step:
+                print(f"[MissionEngine] ⏱️ BOX_APPROACH dihentikan — batas {batas_step:.0f}s "
+                      f"terlampaui di fase {self._bap_phase}.")
+                self._advance_step()
+                return 0.0, 0.0, "BOX_APPROACH | BATAS WAKTU"
+
+        # ── EVADE didahulukan ──────────────────────────────────────────────
+        # Begitu kapal membanting, box-nya keluar frame. Kalau manuver ini
+        # bergantung pada box yang masih terlihat, ia akan terpotong tepat saat
+        # paling dibutuhkan.
+        if self._bap_phase == self.BAP_EVADE:
+            return self._bap_menghindar(step, sekarang)
+
+        peran = self._bap_peran_target(step)
+        min_deteksi = self._area_dari_step(step, "min_detect_area_px2",
+                                           self.BAP_MIN_DETECT_AREA_PX2)
+        box = self._bap_box_terdekat(detected_boxes, peran, min_deteksi)
+
+        if box is None:
+            return self._bap_mencari(step, sekarang)
+
+        self._bap_last_seen_at = sekarang
+
+        # ── APPROACH: pusatkan box sambil mendekat ─────────────────────────
+        cx = float(box[0])
+        luas = self._bbox_area(box)
+        setengah = self.camera_width / 2.0
+        error_px = cx - setengah
+
+        gain = self._safe_float(step.get("approach_steer_gain"),
+                                self.BAP_APPROACH_STEER_GAIN)
+        batas_steer = min(1.0, abs(self._safe_float(step.get("max_steer"),
+                                                    self.BAP_MAX_STEER)))
+        steer = (gain * error_px) / max(1.0, setengah)
+        steer = max(-batas_steer, min(batas_steer, steer))
+        self._bap_last_steer = steer
+        self._bap_set_phase(self.BAP_APPROACH)
+
+        toleransi = self._px_dari_step(step, "center_tolerance_px",
+                                       self.BAP_CENTER_TOLERANCE_PX)
+        area_target = self._area_dari_step(step, "target_area_px2",
+                                           self.BAP_TARGET_AREA_PX2)
+        di_tengah = abs(error_px) <= toleransi
+        cukup_dekat = luas >= area_target
+
+        rasio = self._safe_float(step.get("force_evade_area_ratio"),
+                                 self.BAP_FORCE_EVADE_AREA_RATIO)
+        terlalu_dekat = rasio > 0 and luas >= (area_target * rasio)
+
+        if di_tengah and cukup_dekat:
+            return self._bap_mulai_menghindar(
+                step, sekarang, peran,
+                f"terpusat ({error_px:+.0f}px) & jarak target tercapai")
+
+        if terlalu_dekat:
+            # Pengaman tabrakan — lihat catatan di docstring.
+            return self._bap_mulai_menghindar(
+                step, sekarang, peran,
+                f"PENGAMAN: terlalu dekat, belum terpusat ({error_px:+.0f}px)")
+
+        thr = self._bap_throttle(step, "approach_throttle", self.BAP_APPROACH_THROTTLE)
+        return steer, thr, (f"BOX_APPROACH | APPROACH {ROLE_LABELS[peran]} "
+                            f"err={error_px:+.0f}px luas={luas/max(1.0, area_target):.0%}")
+
+    def _handle_box_approach(self, step, frame, gate_x, detected_balls, detected_boxes):
+        """Adapter dispatch update_frame → box_approach(); rekursi saat step selesai."""
+        idx_sebelum = self._current_step_idx
+        hasil = self.box_approach(step, detected_boxes)
+        if self._current_step_idx != idx_sebelum:
+            return self.update_frame(frame, gate_x, detected_balls)
+        return hasil
+
+    def _bap_peran_target(self, step: Dict) -> str:
+        """Warna box yang dicari step ini. Default biru, sesuai alur lomba."""
+        pilihan = str(step.get("target") or "blue").strip().lower()
+        if pilihan in ("green", "hijau", "ijo", "green_box"):
+            return ROLE_GREEN_BOX
+        return ROLE_BLUE_BOX
+
+    def _bap_box_terdekat(self, detected_boxes: Dict, peran: str, min_area: float):
+        """
+        Box target dengan bbox TERBESAR (= paling dekat), atau None.
+
+        Dipilih yang terbesar, bukan yang pertama dari YOLO: urutan keluaran YOLO
+        tidak menjamin apa pun, dan mengunci box yang jauh saat ada yang dekat
+        membuat kapal melewati sasaran yang benar.
+        """
+        terbaik = None
+        luas_terbaik = 0.0
+        for b in (detected_boxes.get(peran) or []):
+            luas = self._bbox_area(b)
+            if luas >= min_area and luas > luas_terbaik:
+                luas_terbaik = luas
+                terbaik = b
+        return terbaik
+
+    def _bap_throttle(self, step: Dict, key: str, default: float) -> float:
+        """Throttle dari field step, dijepit ke 0..1."""
+        return max(0.0, min(1.0, self._safe_float(step.get(key), default)))
+
+    def _bap_mencari(self, step: Dict, sekarang: float) -> Tuple[float, float, str]:
+        """Box target tidak terlihat: sapu ke arah yang diminta, lalu menyerah."""
+        # Kedip deteksi sesaat saat sedang mendekat: pertahankan kemudi terakhir
+        # supaya kapal tidak meluruskan haluan tiap kali YOLO berkedip satu frame.
+        if self._bap_phase == self.BAP_APPROACH:
+            jeda = self._safe_float(step.get("lost_grace_sec"), self.BAP_LOST_GRACE_SEC)
+            if self._bap_last_seen_at > 0.0 and (sekarang - self._bap_last_seen_at) < jeda:
+                thr = self._bap_throttle(step, "approach_throttle",
+                                         self.BAP_APPROACH_THROTTLE)
+                return self._bap_last_steer, thr, "BOX_APPROACH | box hilang sekejap"
+            self._bap_set_phase(self.BAP_SCAN)
+        else:
+            self._bap_set_phase(self.BAP_SCAN)
+
+        lama = sekarang - self._bap_phase_since
+        batas = self._safe_float(step.get("scan_timeout_sec"), self.BAP_SCAN_TIMEOUT_SEC)
+        if batas > 0 and lama >= batas:
+            # Diselesaikan, BUKAN digantung: kapal yang menyapu tanpa batas akan
+            # keluar arena, dan misi yang menggantung tidak pernah sampai FINISH.
+            print(f"[MissionEngine] ⏱️ BOX_APPROACH selesai — box tidak ketemu "
+                  f"dalam {lama:.0f}s.")
+            self._advance_step()
+            return 0.0, 0.0, "BOX_APPROACH | TIDAK KETEMU"
+
+        steer = max(-1.0, min(1.0, self._safe_float(step.get("scan_steer"),
+                                                    self.BAP_SCAN_STEER)))
+        thr = self._bap_throttle(step, "scan_throttle", self.BAP_SCAN_THROTTLE)
+        arah = "←" if steer < -0.05 else ("→" if steer > 0.05 else "↑")
+        sisa = f"{max(0.0, batas - lama):.0f}s" if batas > 0 else "∞"
+        return steer, thr, f"BOX_APPROACH | SCAN {arah} sisa {sisa}"
+
+    def _bap_arah_menghindar(self, step: Dict, peran: str) -> float:
+        """
+        Tanda kemudi manuver menghindar: -1 ke KIRI, +1 ke KANAN.
+
+        "auto" memakai konvensi sisi (vision/gate_convention.py): box biru menandai
+        tepi KANAN lintasan sehingga kapal menghindar ke KIRI, hijau sebaliknya.
+        Arah eksplisit selalu menang atas konvensi — operator yang mengetik "kanan"
+        pasti sedang menangani kasus yang tidak diketahui kode ini.
+        """
+        arah = str(step.get("evade_direction") or self.BAP_EVADE_DIRECTION).strip().lower()
+        if arah in ("right", "kanan", "r", "+1"):
+            return 1.0
+        if arah in ("left", "kiri", "l", "-1"):
+            return -1.0
+        if arah == "auto":
+            return float(channel_sign(peran))
+        # Salah ketik jangan diam-diam jadi "kanan": jatuh ke default yang aman.
+        return -1.0 if str(self.BAP_EVADE_DIRECTION).lower().startswith("l") else 1.0
+
+    def _bap_mulai_menghindar(self, step: Dict, sekarang: float, peran: str,
+                              alasan: str) -> Tuple[float, float, str]:
+        """Masuk fase EVADE. Arah & kekuatan dikunci SEKARANG, selagi box masih terlihat."""
+        kuat = min(1.0, abs(self._safe_float(step.get("evade_steer"), self.BAP_EVADE_STEER)))
+        self._bap_evade_steer = self._bap_arah_menghindar(step, peran) * kuat
+        self._bap_evade_reason = alasan
+        self._bap_set_phase(self.BAP_EVADE)
+        print(f"[MissionEngine] ↩️ {ROLE_LABELS[peran]} — {alasan}. Menghindar ke "
+              f"{'KANAN' if self._bap_evade_steer > 0 else 'KIRI'}.")
+        return self._bap_menghindar(step, sekarang)
+
+    def _bap_menghindar(self, step: Dict, sekarang: float) -> Tuple[float, float, str]:
+        """Tahan bantingan selama durasi yang diminta, lalu selesaikan step."""
+        durasi = max(0.0, self._safe_float(step.get("evade_sec"), self.BAP_EVADE_SEC))
+        lama = sekarang - self._bap_phase_since
+        if lama < durasi:
+            thr = self._bap_throttle(step, "evade_throttle", self.BAP_EVADE_THROTTLE)
+            arah = "KANAN" if self._bap_evade_steer > 0 else "KIRI"
+            return self._bap_evade_steer, thr,                 f"BOX_APPROACH | EVADE {arah} {lama:.1f}/{durasi:.1f}s"
+
+        print(f"[MissionEngine] ✅ BOX_APPROACH selesai — manuver menghindar "
+              f"{durasi:.1f}s tuntas.")
+        self._advance_step()
+        return 0.0, 0.0, "BOX_APPROACH | SELESAI"
+
+    def _bap_set_phase(self, fase: str):
+        if self._bap_phase != fase:
+            self._bap_phase = fase
+            self._bap_phase_since = time.time()
+
+    def _reset_bap_state(self):
+        """Kembalikan state BOX_APPROACH ke awal. Dipanggil saat step ini dimulai."""
+        self._bap_phase = self.BAP_SCAN
+        self._bap_phase_since = time.time()
+        self._bap_last_seen_at = 0.0
+        self._bap_last_steer = 0.0
+        self._bap_evade_steer = 0.0
+        self._bap_evade_reason = ""
 
     def _handle_hold(self, step, frame, gate_x, detected_balls=None):
         """Handle HOLD step."""
@@ -3492,6 +3872,7 @@ class MissionEngine:
         self.PHOTO_ALIGN_THRESHOLD_PX = round(MissionEngine.PHOTO_ALIGN_THRESHOLD_PX * px_scale)
         self.BOXCH_ALIGN_THRESHOLD_PX = round(MissionEngine.BOXCH_ALIGN_THRESHOLD_PX * px_scale)
         self.BOXCH_CHANNEL_OFFSET_PX = round(MissionEngine.BOXCH_CHANNEL_OFFSET_PX * px_scale)
+        self.BAP_CENTER_TOLERANCE_PX = round(MissionEngine.BAP_CENTER_TOLERANCE_PX * px_scale)
 
         # AREA piksel² — skala LEBAR × TINGGI
         self.SEQ_MIN_PAIR_AREA_PX2 = round(MissionEngine.SEQ_MIN_PAIR_AREA_PX2 * area_scale)
@@ -3500,6 +3881,8 @@ class MissionEngine:
         self.PHOTO_MIN_AREA_PX2_GREEN = round(MissionEngine.PHOTO_MIN_AREA_PX2_GREEN * area_scale)
         self.BOXCH_MIN_AREA_PX2_BLUE = round(MissionEngine.BOXCH_MIN_AREA_PX2_BLUE * area_scale)
         self.BOXCH_MIN_AREA_PX2_GREEN = round(MissionEngine.BOXCH_MIN_AREA_PX2_GREEN * area_scale)
+        self.BAP_TARGET_AREA_PX2 = round(MissionEngine.BAP_TARGET_AREA_PX2 * area_scale)
+        self.BAP_MIN_DETECT_AREA_PX2 = round(MissionEngine.BAP_MIN_DETECT_AREA_PX2 * area_scale)
 
         if self.camera_width != MissionEngine.REFERENCE_FRAME_WIDTH or self.camera_height != MissionEngine.REFERENCE_FRAME_HEIGHT:
             print(f"[MissionEngine] 📐 Threshold piksel diskalakan dari referensi "

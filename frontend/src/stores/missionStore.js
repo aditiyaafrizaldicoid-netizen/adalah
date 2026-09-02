@@ -649,6 +649,176 @@ export const STEP_TYPES = [
   // KIRI, jadi SATU box yang terlihat sudah cukup untuk tahu di sebelah mana
   // celahnya. Kapal berhenti dan memusatkan tiap box sebelum menjepret, lalu
   // kembali menyusuri celah menuju box berikutnya.
+  // BOX_APPROACH — cari satu box, dekati, lalu menghindar. Tanpa foto.
+  //
+  // Bedanya dengan BOX_CHANNEL: step itu mengurus DUA box sekaligus, menyusuri
+  // celah di antaranya, dan memotret keduanya. Step ini sengaja dibuat sesederhana
+  // mungkin — satu box, tiga fase, dan SEMUA angkanya terbuka untuk di-tuning —
+  // supaya perilaku yang benar bisa dicari dulu di danau tanpa variabel lain ikut
+  // berubah. Untuk box kedua, pasang step ini sekali lagi dengan target hijau.
+  //
+  // Urutan setelah buoy ditentukan oleh POSISI step di pipeline: taruh step ini
+  // sesudah step buoy. Tidak ada gerbang tersembunyi di dalamnya.
+  {
+    type: "BOX_APPROACH",
+    label: "Box: Cari → Dekati → Hindar",
+    icon: "🎯",
+    color: "text-indigo-400",
+    bg: "bg-indigo-500/10 border-indigo-500/30",
+    fields: [
+      {
+        key: "target",
+        label: "Cari Box Warna",
+        type: "text",
+        default: "blue",
+        // "blue"/"biru" atau "green"/"hijau". Default biru sesuai urutan lintasan.
+      },
+
+      // ─── Fase 1: SCAN — mencari box ────────────────────────────────────
+      {
+        key: "scan_throttle",
+        label: "1. CARI — Throttle",
+        type: "number",
+        default: 0.25,
+        // Laju kapal selama box belum terlihat.
+      },
+      {
+        key: "scan_steer",
+        label: "1. CARI — Belok (− kiri / + kanan)",
+        type: "number",
+        default: 0.25,
+        // Arah SEKALIGUS sensitivitas sapuan, dalam satu angka bertanda:
+        //   -0.4 = menyapu ke kiri, agak tajam
+        //    0   = maju lurus, tanpa menyapu
+        //   +0.25 = menyapu ke kanan, landai
+        // Digabung jadi satu field, bukan dipisah arah + kekuatan, supaya tidak
+        // mungkin ada kombinasi yang saling bertentangan.
+      },
+      {
+        key: "scan_timeout_sec",
+        label: "1. CARI — Menyerah Setelah (s)",
+        type: "number",
+        default: 25,
+        // Box tidak ketemu selama ini → step DISELESAIKAN, bukan digantung.
+        // Kapal yang menyapu tanpa batas akan keluar arena.
+      },
+
+      // ─── Fase 2: APPROACH — mendekati box ──────────────────────────────
+      {
+        key: "approach_throttle",
+        label: "2. DEKATI — Throttle",
+        type: "number",
+        default: 0.25,
+        // Laju saat box sudah terlihat dan kapal mendekat.
+      },
+      {
+        key: "approach_steer_gain",
+        label: "2. DEKATI — Sensitivitas Pemusatan",
+        type: "number",
+        default: 1.0,
+        // Naikkan kalau kapal lambat meluruskan ke box.
+        // Turunkan kalau kapal bergoyang kiri-kanan (osilasi) saat mendekat.
+      },
+      {
+        key: "max_steer",
+        label: "2. DEKATI — Batas Kemudi",
+        type: "number",
+        default: 0.5,
+        // Sensitivitas yang kebesaran tidak boleh berubah jadi bantingan penuh.
+      },
+      {
+        key: "min_detect_area_px2",
+        label: "2. DEKATI — Abaikan Bbox < (px²)",
+        type: "number",
+        default: 3000,
+        // Bbox lebih kecil dari ini bukan dianggap box. Wajib ada: satu pantulan
+        // air yang lolos YOLO cukup membuat kapal mengunci sasaran palsu.
+      },
+      {
+        key: "lost_grace_sec",
+        label: "2. DEKATI — Toleransi Box Hilang (s)",
+        type: "number",
+        default: 1.0,
+        // Box berkedip hilang → kemudi terakhir dipertahankan selama ini dulu,
+        // baru kembali mencari. Tanpa ini kapal meluruskan haluan tiap kedipan.
+      },
+
+      // ─── Pemicu menghindar ─────────────────────────────────────────────
+      {
+        key: "center_tolerance_px",
+        label: "3. PICU — Toleransi Tengah (px)",
+        type: "number",
+        default: 120,
+        // "Sudah di titik tengah" = simpangan box dari tengah frame <= ini.
+      },
+      {
+        key: "target_area_px2",
+        label: "3. PICU — Ukuran Target (px²)",
+        type: "number",
+        default: 45000,
+        // "Sudah dekat" = luas bbox >= ini. INI yang menentukan pada JARAK berapa
+        // kapal mulai menghindar. Ditulis dalam satuan 1920x1080 dan diskalakan
+        // otomatis ke resolusi kamera — jangan dikonversi sendiri.
+      },
+      {
+        key: "force_evade_area_ratio",
+        label: "3. PICU — Pengaman Tabrakan (x target)",
+        type: "number",
+        default: 1.8,
+        // Dua syarat di atas harus terpenuhi BERSAMAAN. Kalau box tak pernah
+        // benar-benar terpusat, syarat itu tak pernah terpenuhi sementara kapal
+        // terus mendekat — dan satu-satunya yang menghentikannya adalah box itu
+        // sendiri. Begitu luas bbox melewati target x angka ini, kapal menghindar
+        // walau belum terpusat. Isi 0 untuk mematikan (tidak disarankan).
+      },
+
+      // ─── Fase 3: EVADE — manuver menghindar ────────────────────────────
+      {
+        key: "evade_direction",
+        label: "4. HINDAR — Arah (kiri/kanan/auto)",
+        type: "text",
+        default: "left",
+        // "left"/"kiri", "right"/"kanan", atau "auto".
+        // Default KIRI karena box biru menandai tepi KANAN lintasan — menghindar
+        // ke kiri membawa kapal ke tengah celah, bukan keluar alur.
+        // "auto" menurunkannya dari warna box: biru → kiri, hijau → kanan.
+      },
+      {
+        key: "evade_throttle",
+        label: "4. HINDAR — Throttle",
+        type: "number",
+        default: 0.3,
+        // Laju selama manuver menghindar. Kalau kemudi kapal servo, jangan terlalu
+        // kecil — tanpa aliran air kemudinya tidak menggigit dan bantingannya lemah.
+      },
+      {
+        key: "evade_steer",
+        label: "4. HINDAR — Kuat Bantingan",
+        type: "number",
+        default: 0.5,
+        // Hanya kekuatannya (0..1). Arahnya diambil dari field arah di atas.
+      },
+      {
+        key: "evade_sec",
+        label: "4. HINDAR — Durasi (s)",
+        type: "number",
+        default: 2.0,
+        // Lama membanting sebelum step dianggap selesai.
+      },
+
+      // ─── Pengaman ──────────────────────────────────────────────────────
+      {
+        key: "max_duration_sec",
+        label: "Batas Keras Seluruh Step (s)",
+        type: "number",
+        default: 90,
+        // Berlaku di fase mana pun. Ada karena batas CARI di atas me-reset setiap
+        // kali kapal sempat melihat box: deteksi berkedip bisa membuat CARI dan
+        // DEKATI bergantian tanpa pernah kedaluwarsa. Isi 0 untuk mematikan.
+      },
+    ],
+  },
+
   {
     type: "BOX_CHANNEL",
     label: "Box Channel (Lewat Tengah + Foto)",
