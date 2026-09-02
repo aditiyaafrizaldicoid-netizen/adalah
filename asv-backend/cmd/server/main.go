@@ -58,6 +58,11 @@ func main() {
 	// 3. Initialize Database
 	db := config.NewDatabase(cfg, logger)
 
+	// 3.5 Selaraskan skema dengan entity, lalu laporkan sisa yang tidak sinkron.
+	// Deploy tanpa migrasi dulu muncul sebagai HTTP 500 tanpa penjelasan saat
+	// menyimpan setelan; lihat config.SelaraskanSkema.
+	config.SelaraskanSkema(db, logger)
+
 	// 4. Initialize Validator
 	validator, translator := config.NewValidator()
 
@@ -111,7 +116,6 @@ func main() {
 
 	// 9. Initialize Router & Get App
 	r := route.NewRouter(cfg, mid, authHandler, userHandler, healthHandler, wsHandler, videoHandler, calibHandler, pidConfigHandler, missionPresetHandler, sessionHandler, arenaHandler, captureHandler)
-
 
 	app := r.New()
 

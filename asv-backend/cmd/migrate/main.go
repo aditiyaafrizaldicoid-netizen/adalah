@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"go-fiber-template/internal/config"
-	"go-fiber-template/internal/entity"
 	"go.uber.org/zap"
 )
 
@@ -28,17 +27,7 @@ func main() {
 
 	logger.Info("Starting Database Migration...")
 
-	err = db.AutoMigrate(
-		&entity.User{},
-		&entity.RefreshToken{},
-		&entity.AsvConfig{},
-		&entity.CalibrationProfile{},
-		&entity.PidConfig{},
-		&entity.MissionPreset{},
-		&entity.Arena{},
-	)
-
-
+	err = db.AutoMigrate(config.ModelsTerdaftar()...)
 
 	if err != nil {
 		logger.Fatal("Failed to run database migrations", zap.Error(err))
