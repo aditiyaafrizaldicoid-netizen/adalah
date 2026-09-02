@@ -53,8 +53,21 @@ const applyTuning = async () => {
   });
 
   // 2. Persist in Database via HTTP REST API
+  //
+  // Hasilnya WAJIB diperiksa. Versi sebelumnya meng-await fetch() lalu langsung
+  // menampilkan "Applied & Saved to DB" tanpa melihat statusnya sama sekali —
+  // sehingga 401 (sesi habis), 400, maupun 500 semuanya terlihat sebagai
+  // "berhasil". Gejalanya di lapangan: operator menyetel Kp=0.4, panel bilang
+  // tersimpan, lalu halaman dimuat ulang dan angkanya kembali 0.5 tanpa penjelasan.
+  //
+  // Dua hasil ini juga dilaporkan TERPISAH, karena artinya berbeda: nilai bisa
+  // sudah berlaku di kapal lewat WebSocket meski gagal disimpan di database —
+  // artinya kapal memakai nilai baru sekarang, tapi kembali ke nilai lama begitu
+  // di-restart. Operator perlu tahu bedanya.
+  let simpanOk = false;
+  let alasanGagal = '';
   try {
-    await fetch(apiUrl('/api/v1/pid-config'), {
+    const res = await fetch(apiUrl('/api/v1/pid-config'), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({
@@ -66,12 +79,29 @@ const applyTuning = async () => {
         align_threshold_px: alignThresholdPx.value
       })
     });
+    simpanOk = res.ok;
+    if (!res.ok) {
+      alasanGagal = res.status === 401
+        ? 'sesi kedaluwarsa — login ulang'
+        : `HTTP ${res.status}`;
+    }
   } catch (e) {
     console.error('Failed to persist PID in database:', e);
+    alasanGagal = 'backend tidak terhubung';
   }
-  
-  isSaved.value = true;
-  statusMsg.value = `Applied & Saved to DB: Kp=${kp.value}, Ki=${ki.value}, Kd=${kd.value}, Speed=${forwardSpeed.value}m/s, MaxTurn=${maxTurnRate.value}°/s`;
+
+  const kirimKapal = wsStore.status === 'CONNECTED';
+  isSaved.value = simpanOk;
+  if (simpanOk) {
+    statusMsg.value = `Tersimpan: Kp=${kp.value}, Ki=${ki.value}, Kd=${kd.value}, `
+      + `Speed=${forwardSpeed.value}m/s, MaxTurn=${maxTurnRate.value}°/s`
+      + (kirimKapal ? ' — dikirim ke kapal.' : ' — kapal tidak terhubung.');
+  } else {
+    statusMsg.value = `GAGAL disimpan (${alasanGagal}). `
+      + (kirimKapal
+        ? 'Nilai sudah dikirim ke kapal dan berlaku SEKARANG, tapi akan kembali ke nilai lama saat kapal di-restart.'
+        : 'Nilai tidak tersimpan dan tidak sampai ke kapal.');
+  }
   setTimeout(() => { isSaved.value = false; }, 3000);
 };
 
