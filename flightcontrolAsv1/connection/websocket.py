@@ -5,6 +5,7 @@ import threading
 import websocket
 from core.client import ASVController
 from control import manual_source
+from vision import gate_convention
 
 
 def _with_asv_token(url: str) -> str:
@@ -147,6 +148,19 @@ class ASVWebSocketClient:
                         min_area = cfg.get("min_detection_area_px2")
                         if self.tracker and min_area is not None:
                             self.tracker.set_min_detection_area(min_area)
+                        # Lintasan arena juga menumpang baris config yang sama.
+                        # Tanpa ini, kapal yang di-restart di tepi danau diam-diam
+                        # kembali ke Lintasan B — dan operator baru sadar setelah
+                        # kapal membanting ke arah yang salah pada bola pertama.
+                        lintasan = cfg.get("track")
+                        if lintasan:
+                            if gate_convention.set_lintasan(lintasan):
+                                print(f"[WS] 🔀 Lintasan dari DB → {lintasan}")
+                            elif str(lintasan).strip().upper() not in gate_convention.daftar_lintasan():
+                                print(f"[WS] ⚠️ Lintasan '{lintasan}' dari DB tidak "
+                                      f"dikenal — tetap di "
+                                      f"{gate_convention.lintasan_aktif()}")
+
                         # Geofence menumpang baris config yang sama, jadi ikut
                         # terbawa tanpa permintaan HTTP tambahan.
                         if self.geofence is not None and cfg.get("geofence_radius_m") is not None:
@@ -589,6 +603,10 @@ class ASVWebSocketClient:
                 self._send_warning("info", "GEOFENCE_DIPERBARUI",
                                    f"Geofence diperbarui: {ringkas}")
 
+        # --- LINTASAN ARENA (konvensi sisi) ---
+        elif action == "set_track":
+            self._terapkan_lintasan(cmd.get("track"))
+
         # --- GPS OFFSET ---
         elif action == "set_gps_offset":
             lat_offset = float(cmd.get("lat_offset", 0.0))
@@ -984,6 +1002,63 @@ class ASVWebSocketClient:
             }
         })
 
+    def _terapkan_lintasan(self, nama):
+        """
+        Ganti lintasan arena (konvensi sisi merah/hijau & box) secara live.
+
+        DITOLAK SELAGI MISI BERJALAN — ini keputusan keselamatan, bukan kelalaian.
+        Konvensi sisi menentukan ke arah mana kapal membanting saat hanya satu
+        penanda terlihat. Membaliknya di tengah misi membalik SEKETIKA setiap
+        koreksi kemudi yang sedang berjalan: manuver yang tadinya menjauhi bola
+        berubah jadi menuju bola, pada jarak yang sudah dekat. Operator cukup
+        menghentikan misi lebih dulu — beberapa detik, dibanding satu tabrakan.
+
+        Balasannya SELALU berisi lintasan yang BENAR-BENAR aktif di kapal, bukan
+        yang diminta, supaya dashboard tidak pernah menampilkan setelan yang
+        sebenarnya ditolak.
+        """
+        diminta = str(nama or "").strip().upper()
+        aktif = gate_convention.lintasan_aktif()
+
+        if diminta not in gate_convention.daftar_lintasan():
+            print(f"[WS] set_track: lintasan '{nama}' tidak dikenal, diabaikan")
+            self._kirim_ack_lintasan(ok=False,
+                                     alasan=f"Lintasan '{nama}' tidak dikenal")
+            return
+
+        misi_jalan = (self.mission_engine is not None
+                      and self.mission_engine.status == "RUNNING")
+        if misi_jalan and diminta != aktif:
+            print(f"[WS] ⛔ set_track {diminta} DITOLAK — misi sedang berjalan.")
+            self._kirim_ack_lintasan(
+                ok=False,
+                alasan="Misi sedang berjalan. Hentikan misi dulu — membalik "
+                       "konvensi sisi di tengah misi membalik arah setiap "
+                       "koreksi kemudi seketika.")
+            return
+
+        berubah = gate_convention.set_lintasan(diminta)
+        sisi = gate_convention.sisi_lintasan(diminta)
+        if berubah:
+            print(f"[WS] 🔀 Lintasan → {diminta} | " + "  ".join(
+                f"{k}={v}" for k, v in sisi.items()))
+            self._send_warning("info", "LINTASAN_DIPERBARUI",
+                               f"Lintasan arena diubah ke {diminta}.")
+        self._kirim_ack_lintasan(ok=True)
+
+    def _kirim_ack_lintasan(self, ok: bool, alasan: str = ""):
+        """Balas dengan lintasan yang benar-benar berlaku di kapal saat ini."""
+        aktif = gate_convention.lintasan_aktif()
+        self._send_ws({
+            "type": "TRACK_CONFIG",
+            "payload": {
+                "track": aktif,
+                "ok": bool(ok),
+                "reason": alasan,
+                "sides": gate_convention.sisi_lintasan(aktif),
+            },
+        })
+
     def _send_channel_config_ack(self):
         """Kirim channel config saat ini ke base station (untuk sinkronisasi UI)."""
         self._send_ws({
@@ -1043,6 +1118,11 @@ class ASVWebSocketClient:
                         # Batas yang BENAR-BENAR berlaku di kapal — peta menggambar
                         # dari sini, bukan dari yang tersimpan di DB, supaya
                         # lingkaran di layar selalu mewakili keadaan sebenarnya.
+                        # Lintasan arena yang BENAR-BENAR berlaku di kapal. Ikut di
+                        # telemetri, bukan cuma di ACK, supaya dashboard yang baru
+                        # dibuka (atau baru tersambung ulang) langsung menampilkan
+                        # keadaan sebenarnya tanpa perlu bertanya.
+                        "track": gate_convention.lintasan_aktif(),
                         "geofence_enabled": bool(self.geofence and self.geofence.enabled),
                         "geofence_radius_m": (self.geofence.radius_m if self.geofence else 0),
                         "geofence_lat": (self.geofence.center[0]

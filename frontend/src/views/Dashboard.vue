@@ -33,6 +33,7 @@ import GeotagPanel from "../components/monitoring/GeotagPanel.vue";
 import VideoCard from "../components/monitoring/VideoCard.vue";
 import MissionPhotos from "../components/monitoring/MissionPhotos.vue";
 import TrajectoryPanel from "../components/monitoring/TrajectoryPanel.vue";
+import TrackSelector from "../components/monitoring/TrackSelector.vue";
 import { VIDEO_STREAM_URL } from "@/config/api";
 
 const vessel = useVesselStore();
@@ -253,6 +254,11 @@ const wsStore = useWebsocketStore();
              Ditaruh tepat di bawah FLIGHT CONTROLLER karena satu kelompok
              pertanyaan dengan ARM/DISARM & mode: siapa yang memegang kapal. -->
         <ControlSourceControl />
+
+        <!-- Lintasan arena. Satu kelompok dengan ARM/DISARM dan sumber kendali:
+             ketiganya adalah setelan yang harus dipastikan BENAR sebelum kapal
+             diturunkan, dan salahnya baru terlihat setelah kapal di air. -->
+        <TrackSelector />
 
         <!-- Lintasan kapal. Ditaruh tepat di bawah kelompok "siapa yang memegang
              kapal" karena menjawab pertanyaan lanjutannya: ke mana kapal sudah

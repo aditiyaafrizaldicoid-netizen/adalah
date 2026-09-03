@@ -26,39 +26,109 @@ boleh mengimpornya tanpa menimbulkan dependency silang.
 
 from typing import Dict
 
-# ── Pemetaan warna bola → tepi lintasan yang ditandainya ────────────────────────
-# UBAH DI SINI SAJA kalau arena memakai konvensi sebaliknya (mis. IALA region A/B
-# yang berbeda, atau lomba dengan aturan lain). Tidak ada literal sisi lain di
-# codebase yang perlu ikut diubah.
-#
-# Arena ASV yang dipakai saat ini: bola MERAH di sebelah KANAN lintasan, bola HIJAU
-# di sebelah KIRI lintasan (dilihat dari haluan kapal yang sedang maju).
-BUOY_SIDE: Dict[str, str] = {
-    "red":   "right",
-    "green": "left",
-}
-
-# Box misi mengikuti konvensi yang SAMA, dengan biru mengambil peran merah:
-# box biru menandai tepi KANAN lintasan, box hijau menandai tepi KIRI.
-#
-# Ini yang membuat step BOX_CHANNEL bisa menyusuri celah walau kedua box TIDAK
-# berdampingan seperti bola. Karena tiap box sendirian sudah cukup untuk menentukan
-# di sisi mana lintasannya, kapal tidak perlu melihat keduanya sekaligus — dan
-# memang jarang bisa, karena letaknya berselang di sepanjang lintasan.
-BOX_SIDE: Dict[str, str] = {
-    "blue_box":  "right",
-    "green_box": "left",
-}
-
-# Satu tabel gabungan supaya side_of()/channel_sign() melayani bola dan box tanpa
-# pemanggil perlu tahu sedang berurusan dengan yang mana.
-_MARKER_SIDE: Dict[str, str] = {**BUOY_SIDE, **BOX_SIDE}
-
 RED   = "red"
 GREEN = "green"
 
 LEFT  = "left"
 RIGHT = "right"
+
+# ── DUA LINTASAN ARENA ──────────────────────────────────────────────────────────
+# Arena bisa dipasang dalam dua cerminan. Keduanya ditulis LENGKAP di sini, bukan
+# satu tabel yang dibalik dengan kode: tabel yang dibalik secara terprogram tidak
+# bisa dibaca sekilas untuk memastikan mana yang benar, dan inilah tabel yang
+# menentukan ke arah mana kapal membanting saat cuma satu penanda terlihat.
+#
+# Sisi selalu dilihat DARI HALUAN kapal yang sedang maju menyusuri lintasan.
+#
+#   LINTASAN A : bola hijau KANAN, bola merah KIRI, box biru KIRI, box hijau KANAN
+#   LINTASAN B : kebalikannya — dan inilah konfigurasi bawaan kapal saat ini
+LINTASAN_A = "A"
+LINTASAN_B = "B"
+
+_TABEL_LINTASAN: Dict[str, Dict[str, str]] = {
+    LINTASAN_A: {
+        "green":     RIGHT,
+        "red":       LEFT,
+        "blue_box":  LEFT,
+        "green_box": RIGHT,
+    },
+    LINTASAN_B: {
+        "green":     LEFT,
+        "red":       RIGHT,
+        "blue_box":  RIGHT,
+        "green_box": LEFT,
+    },
+}
+
+# Lintasan yang berlaku sekarang. B adalah bawaan, sesuai konfigurasi kapal
+# sebelum fitur pemilih lintasan ada — supaya kapal yang belum pernah menerima
+# perintah apa pun berperilaku persis seperti sebelumnya.
+_LINTASAN_AKTIF: str = LINTASAN_B
+
+# Tabel gabungan yang benar-benar dibaca side_of(). Satu tabel supaya
+# side_of()/channel_sign() melayani bola dan box tanpa pemanggil perlu tahu
+# sedang berurusan dengan yang mana.
+_MARKER_SIDE: Dict[str, str] = dict(_TABEL_LINTASAN[_LINTASAN_AKTIF])
+
+
+def daftar_lintasan() -> tuple:
+    """Nama lintasan yang dikenali, untuk validasi di sisi pemanggil."""
+    return tuple(_TABEL_LINTASAN.keys())
+
+
+def lintasan_aktif() -> str:
+    """Lintasan yang SEDANG berlaku ("A" atau "B")."""
+    return _LINTASAN_AKTIF
+
+
+def snapshot() -> Dict[str, str]:
+    """
+    Seluruh tabel sisi yang berlaku, diambil dalam SATU pembacaan.
+
+    KENAPA PERLU: tiap panggilan side_of() memang atomik, tapi HIMPUNAN beberapa
+    panggilan tidak. Pemanggil yang menanyakan empat penanda satu per satu bisa
+    terbelah oleh pergantian lintasan di tengahnya — misalnya bola merah sudah
+    memakai tabel baru sementara bola hijau masih tabel lama, sehingga keduanya
+    sesaat menunjuk sisi yang sama dan kemudi kehilangan arah untuk satu frame.
+    Fungsi ini mengambil rujukan tabelnya sekali, jadi seluruh isinya dijamin
+    berasal dari lintasan yang sama.
+
+    Dalam praktik, celah itu paling lama satu frame dan hanya bisa terjadi saat
+    operator menekan tombol — dan pergantian sudah ditolak selagi misi berjalan
+    (lihat _terapkan_lintasan di connection/websocket.py), yaitu satu-satunya saat
+    kemudi otonom benar-benar bergantung padanya. Fungsi ini disediakan untuk
+    pemanggil yang tetap ingin kepastian penuh dalam satu frame.
+    """
+    return dict(_MARKER_SIDE)
+
+
+def sisi_lintasan(nama: str) -> Dict[str, str]:
+    """Salinan tabel sisi milik satu lintasan — untuk ditampilkan, bukan diubah."""
+    return dict(_TABEL_LINTASAN[str(nama).strip().upper()])
+
+
+def set_lintasan(nama: str) -> bool:
+    """
+    Ganti lintasan yang berlaku. True kalau berubah, False kalau nama tidak dikenal
+    atau sudah sama.
+
+    KENAPA TABELNYA DIGANTI UTUH, BUKAN DIUBAH ISINYA: modul ini dibaca thread
+    kontrol/vision pada ~30 FPS sementara yang mengubahnya adalah thread WebSocket.
+    Mengubah isi dict yang sedang dipakai membuat pembaca bisa menangkap keadaan
+    setengah jadi — misalnya bola merah sudah pindah sisi sementara bola hijau
+    belum, yang berarti KEDUA bola sesaat menunjuk sisi yang sama dan kemudi
+    kehilangan arah. Mengikat ulang nama modul ke dict BARU bersifat atomik di
+    bawah GIL: pembaca melihat tabel lama seutuhnya atau tabel baru seutuhnya.
+    """
+    global _LINTASAN_AKTIF, _MARKER_SIDE
+    kunci = str(nama or "").strip().upper()
+    if kunci not in _TABEL_LINTASAN:
+        return False
+    if kunci == _LINTASAN_AKTIF:
+        return False
+    _MARKER_SIDE = dict(_TABEL_LINTASAN[kunci])
+    _LINTASAN_AKTIF = kunci
+    return True
 
 
 def side_of(color: str) -> str:

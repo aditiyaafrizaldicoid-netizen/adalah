@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"strings"
+
 	"go-fiber-template/internal/entity"
 	"go-fiber-template/internal/service"
 
@@ -128,6 +130,18 @@ type PidConfigRequest struct {
 	MinDetectionAreaPx2 *float64 `json:"min_detection_area_px2"`
 	CameraWidth         *int     `json:"camera_width"`
 	CameraHeight        *int     `json:"camera_height"`
+	Track               *string  `json:"track"`
+}
+
+// trackValid menormalkan dan memvalidasi nama lintasan.
+//
+// Ditolak, bukan dibetulkan diam-diam: lintasan yang salah membalik arah setiap
+// koreksi kemudi. Nilai yang tidak dikenali jauh lebih baik gagal terang-terangan
+// di dashboard daripada tersimpan lalu diabaikan kapal, yang membuat layar dan
+// kapal menampilkan dua kenyataan berbeda.
+func trackValid(v string) (string, bool) {
+	t := strings.ToUpper(strings.TrimSpace(v))
+	return t, t == "A" || t == "B"
 }
 
 func (h *PidConfigHandler) SaveConfig(c *fiber.Ctx) error {
@@ -182,6 +196,15 @@ func (h *PidConfigHandler) SaveConfig(c *fiber.Ctx) error {
 			})
 		}
 		config.CameraHeight = *body.CameraHeight
+	}
+	if body.Track != nil {
+		t, ok := trackValid(*body.Track)
+		if !ok {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status": "error", "message": "track harus \"A\" atau \"B\"",
+			})
+		}
+		config.Track = t
 	}
 
 	if err := h.service.SaveConfig(config); err != nil {

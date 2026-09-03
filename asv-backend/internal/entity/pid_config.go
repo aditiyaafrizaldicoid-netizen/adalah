@@ -20,8 +20,8 @@ type PidConfig struct {
 	// ukuran frame berubah. Ini bukan teori: saat resolusi sempat diturunkan ke
 	// 640x360, MinDetectionAreaPx2 tertinggal di nilai lama dan seluruh bola berhenti
 	// terdeteksi — bola terdekat pun hanya 784px², jauh di bawah ambang 4000.
-	CameraWidth  int       `gorm:"default:1280" json:"camera_width"`
-	CameraHeight int       `gorm:"default:720" json:"camera_height"`
+	CameraWidth  int `gorm:"default:1280" json:"camera_width"`
+	CameraHeight int `gorm:"default:720" json:"camera_height"`
 
 	// ── Geofence ────────────────────────────────────────────────────────────
 	// Menumpang baris ini, bukan tabel sendiri, karena kapal sudah menarik
@@ -34,5 +34,11 @@ type PidConfig struct {
 	GeofenceLat     float64 `gorm:"default:0" json:"geofence_lat"`
 	GeofenceLon     float64 `gorm:"default:0" json:"geofence_lon"`
 	GeofenceRadiusM float64 `gorm:"default:0" json:"geofence_radius_m"`
-	UpdatedAt    time.Time `gorm:"autoUpdateTime" json:"updated_at"`
+
+	// Lintasan arena: "A" atau "B". Menentukan sisi mana yang ditandai tiap warna
+	// bola dan box — lihat vision/gate_convention.py di kapal. Default "B" karena
+	// itulah konfigurasi kapal sebelum pemilih lintasan ada, jadi baris DB yang
+	// belum pernah disentuh berperilaku persis seperti sebelumnya.
+	Track     string    `gorm:"size:1;default:'B'" json:"track"`
+	UpdatedAt time.Time `gorm:"autoUpdateTime" json:"updated_at"`
 }

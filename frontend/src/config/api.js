@@ -12,7 +12,11 @@
 
 // Garis miring di ekor ("http://host:3000/") akan menghasilkan "//api/v1/..."
 // saat digabung. Dirapikan sekali di sini, bukan di tiap pemanggil.
-const RAW_BASE = import.meta.env.VITE_API_URL;
+// `import.meta.env?.` — bukan langsung: di luar Vite (mis. berkas uji yang
+// dijalankan node) `import.meta.env` tidak ada sama sekali, dan mengaksesnya
+// langsung melempar TypeError saat modul dimuat. Rantai opsional membuat modul
+// ini tetap bisa diimpor, lalu jatuh ke peringatan yang sudah ada di bawah.
+const RAW_BASE = import.meta.env?.VITE_API_URL;
 
 export const API_BASE = RAW_BASE ? RAW_BASE.replace(/\/+$/, "") : "";
 

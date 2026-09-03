@@ -39,6 +39,11 @@ export const useVesselStore = defineStore("vessel", () => {
   const satellites = ref(0);
   // HDOP horizontal (meter) dari GPS_RAW_INT. 0 = belum diketahui.
   const gpsHdop = ref(0);
+
+  // Lintasan arena yang BENAR-BENAR berlaku di kapal ("A" | "B"). Datang lewat
+  // telemetri, bukan disimpan dari apa yang dikira sudah terkirim — kapal bisa
+  // menolak perintahnya (mis. saat misi berjalan).
+  const track = ref("B");
   const signalStrength = ref(0);
 
   // Flight Controller Status (dari Pixhawk via MAVLink)
@@ -133,6 +138,7 @@ export const useVesselStore = defineStore("vessel", () => {
     if (data.gps_fix !== undefined) gpsFix.value = data.gps_fix;
     if (data.satellites !== undefined) satellites.value = data.satellites;
     if (Number.isFinite(data.gps_hdop)) gpsHdop.value = data.gps_hdop;
+    if (data.track) track.value = String(data.track).toUpperCase();
     if (data.signal_strength !== undefined) signalStrength.value = data.signal_strength;
 
     // Advanced Nav & Engines
@@ -204,7 +210,7 @@ export const useVesselStore = defineStore("vessel", () => {
     lat, lng, heading, sog, cog, cogValid,
     pitch, roll, yaw,
     batteryPct, batteryVolt,
-    gpsFix, satellites, gpsHdop, signalStrength,
+    gpsFix, satellites, gpsHdop, signalStrength, track,
     xte, dtw, nextWp,
     thrusterL, thrusterR, rpmL, rpmR,
     isConnected, isArmed, mode, manualSource, rcSourceSwitch, rcSourceChannel,

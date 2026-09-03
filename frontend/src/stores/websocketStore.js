@@ -110,6 +110,12 @@ export const useWebsocketStore = defineStore("websocket", () => {
         } else if (data.type === "PONG") {
 
           latency.value = Date.now() - data.timestamp;
+        } else if (data.type === "TRACK_CONFIG") {
+          // Balasan kapal atas set_track. Isinya SELALU lintasan yang benar-benar
+          // aktif di kapal, termasuk saat perintahnya ditolak.
+          import("./trackStore").then(({ useTrackStore }) => {
+            useTrackStore().terimaAck(data.payload);
+          });
         } else if (data.type === "CHANNEL_CONFIG") {
           // Sinkronisasi channel config dari ASV
           import("./channelConfigStore").then(({ useChannelConfigStore }) => {
