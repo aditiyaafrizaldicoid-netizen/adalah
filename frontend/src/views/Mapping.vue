@@ -5,6 +5,7 @@ import GridMap from '../components/mapping/GridMap.vue';
 import WaypointEditor from '../components/mapping/WaypointEditor.vue';
 import ArenaEditor from '../components/mapping/ArenaEditor.vue';
 import GeofenceEditor from '../components/mapping/GeofenceEditor.vue';
+import TrajectoryPanel from '../components/monitoring/TrajectoryPanel.vue';
 import { useMissionStore } from '@/stores/missionStore';
 import { useArenaStore } from '@/stores/arenaStore';
 import {
@@ -139,8 +140,10 @@ function setMode(mode) {
         <CheckCircle2 class="w-4 h-4" /> {{ uploadFeedback }}
       </div>
 
-      <!-- Right Panel — WaypointEditor or ArenaEditor -->
-      <div class="absolute top-6 right-6 w-72 z-10">
+      <!-- Right Panel — editor sesuai mode, lalu panel lintasan yang SELALU tampil.
+           Lintasan direkam di latar belakang lepas dari mode peta, jadi panelnya
+           tidak ikut berganti-ganti bersama editor di atasnya. -->
+      <div class="absolute top-6 right-6 w-72 z-10 space-y-3 max-h-[calc(100vh-8rem)] overflow-y-auto">
         <WaypointEditor v-if="mapMode === 'waypoint'"
           :waypoints="mission.waypoints"
           @delete="handleWaypointDelete"
@@ -152,6 +155,8 @@ function setMode(mode) {
           class="glass-card p-4 max-h-[calc(100vh-12rem)] overflow-y-auto">
           <GeofenceEditor />
         </div>
+
+        <TrajectoryPanel />
       </div>
 
       <!-- Map Mode Switcher (bottom-left) -->

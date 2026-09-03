@@ -4,6 +4,8 @@ import { useVesselStore } from '@/stores/vesselStore';
 import { useMissionStore } from '@/stores/missionStore';
 import { useGeofenceStore } from '@/stores/geofenceStore';
 import { useArenaStore } from '@/stores/arenaStore';
+import { useTrajectoryStore } from '@/stores/trajectoryStore';
+import { useTrajectoryLayer } from '@/composables/useTrajectoryLayer';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { formatDay, formatDate, formatTime, formatCoordA, formatCoordB } from '@/utils/geotag';
@@ -20,12 +22,17 @@ const vessel = useVesselStore();
 const mission = useMissionStore();
 const arenaStore = useArenaStore();
 const geofence = useGeofenceStore();
+const traj = useTrajectoryStore();
+const trajLayer = useTrajectoryLayer();
 
 const mapContainer = ref(null);
 let map = null;
 let asvMarker = null;
-let trailPolyline = null;
-let trailCoords = [];
+// Jejak kapal TIDAK lagi ditumpuk di komponen ini. Dulu koordinatnya hidup di
+// variabel milik instance ini, jadi berpindah halaman menghapus seluruh lintasan,
+// dan selama peta tidak terbuka tidak ada satu titik pun yang terekam. Sekarang
+// datanya ada di trajectoryStore (hidup selama aplikasi hidup) dan digambar oleh
+// useTrajectoryLayer, sehingga Mapping dan Juri melihat lintasan yang sama persis.
 let waypointMarkers = [];
 let waypointPolyline = null;
 
@@ -86,14 +93,10 @@ onMounted(() => {
 
   asvMarker = L.marker([vessel.lat || defaultLat, vessel.lng || defaultLng], { icon: asvIcon, zIndexOffset: 1000 }).addTo(map);
 
-  // Trail Polyline
-  trailPolyline = L.polyline([], {
-    color: '#ef4444',
-    weight: 3,
-    opacity: 0.7,
-    dashArray: '5, 10',
-    lineJoin: 'round'
-  }).addTo(map);
+  // Lintasan kapal — datanya dari trajectoryStore, sudah berisi titik yang
+  // terekam SEBELUM peta ini dibuka.
+  trajLayer.pasang(map);
+  trajLayer.setTampil(props.visibleLayers.includes('trail'));
 
   // Waypoints Polyline
   waypointPolyline = L.polyline([], {
@@ -143,14 +146,13 @@ watch(() => [vessel.lat, vessel.lng, vessel.heading], ([lat, lng, heading]) => {
     }
   }
 
-  // Update Trail
-  trailCoords.push(newPos);
-  if (trailCoords.length > 10000) trailCoords.shift(); // Keep last 10000 points (~15 mins at 10Hz)
-  trailPolyline.setLatLngs(trailCoords);
-
-  // Auto-pan if map is tracking (could add a toggle state for this)
-  // map.panTo(newPos);
-}, { deep: true });
+  // Peta hanya digeser saat penanda kapal HAMPIR keluar dari bidang pandang,
+  // bukan tiap kali posisi berubah: memaksa kapal selalu di tengah membuat peta
+  // merebut kembali tampilan tiap kali operator menggesernya untuk melihat area lain.
+  if (traj.mengikutiKapal && !map.getBounds().pad(-0.15).contains(newPos)) {
+    map.panTo(newPos, { animate: true, duration: 0.5 });
+  }
+});
 
 // --- GEO-TAG FORMATTING & TIME ---
 const currentTime = ref(new Date());
@@ -356,16 +358,15 @@ watch(() => props.visibleLayers, (layers) => {
     map.removeLayer(asvMarker);
   }
 
-  // Toggle Trail
-  if (layers.includes('trail') && !map.hasLayer(trailPolyline)) {
-    trailPolyline.addTo(map);
-  } else if (!layers.includes('trail') && map.hasLayer(trailPolyline)) {
-    map.removeLayer(trailPolyline);
-  }
+  // Toggle Lintasan
+  trajLayer.setTampil(layers.includes('trail'));
 }, { deep: true });
 
 onUnmounted(() => {
   if (timeInterval) clearInterval(timeInterval);
+  // Layer dilepas SEBELUM peta dibuang. Perekaman di store tetap berjalan —
+  // yang berhenti hanyalah penggambarannya.
+  trajLayer.lepas();
   if (map) {
     map.remove();
     map = null;

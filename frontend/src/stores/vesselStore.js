@@ -37,6 +37,8 @@ export const useVesselStore = defineStore("vessel", () => {
 
   const gpsFix = ref(0); // 0: No Fix, 1: 2D, 2: 3D, 3: DGPS, 4: RTK
   const satellites = ref(0);
+  // HDOP horizontal (meter) dari GPS_RAW_INT. 0 = belum diketahui.
+  const gpsHdop = ref(0);
   const signalStrength = ref(0);
 
   // Flight Controller Status (dari Pixhawk via MAVLink)
@@ -104,8 +106,12 @@ export const useVesselStore = defineStore("vessel", () => {
 
   // Actions to update telemetry
   function updateTelemetry(data) {
-    if (data.lat !== undefined && data.lat !== 0) lat.value = data.lat;
-    if (data.lng !== undefined && data.lng !== 0) lng.value = data.lng;
+    // Number.isFinite, bukan `!== undefined`: saat kapal belum punya fix, kapal
+    // mengirim lat/lng bernilai null, dan `null !== undefined && null !== 0`
+    // dua-duanya benar — posisi kapal jadi null, penanda di peta hilang, dan
+    // setiap perhitungan jarak menghasilkan NaN tanpa satu pun pesan error.
+    if (Number.isFinite(data.lat) && data.lat !== 0) lat.value = data.lat;
+    if (Number.isFinite(data.lng) && data.lng !== 0) lng.value = data.lng;
 
     if (data.heading !== undefined) {
       heading.value = data.heading;
@@ -126,6 +132,7 @@ export const useVesselStore = defineStore("vessel", () => {
     if (data.battery_volt !== undefined) batteryVolt.value = data.battery_volt;
     if (data.gps_fix !== undefined) gpsFix.value = data.gps_fix;
     if (data.satellites !== undefined) satellites.value = data.satellites;
+    if (Number.isFinite(data.gps_hdop)) gpsHdop.value = data.gps_hdop;
     if (data.signal_strength !== undefined) signalStrength.value = data.signal_strength;
 
     // Advanced Nav & Engines
@@ -197,7 +204,7 @@ export const useVesselStore = defineStore("vessel", () => {
     lat, lng, heading, sog, cog, cogValid,
     pitch, roll, yaw,
     batteryPct, batteryVolt,
-    gpsFix, satellites, signalStrength,
+    gpsFix, satellites, gpsHdop, signalStrength,
     xte, dtw, nextWp,
     thrusterL, thrusterR, rpmL, rpmR,
     isConnected, isArmed, mode, manualSource, rcSourceSwitch, rcSourceChannel,

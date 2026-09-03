@@ -32,6 +32,7 @@ import ControlSourceControl from "../components/monitoring/ControlSourceControl.
 import GeotagPanel from "../components/monitoring/GeotagPanel.vue";
 import VideoCard from "../components/monitoring/VideoCard.vue";
 import MissionPhotos from "../components/monitoring/MissionPhotos.vue";
+import TrajectoryPanel from "../components/monitoring/TrajectoryPanel.vue";
 import { VIDEO_STREAM_URL } from "@/config/api";
 
 const vessel = useVesselStore();
@@ -252,6 +253,12 @@ const wsStore = useWebsocketStore();
              Ditaruh tepat di bawah FLIGHT CONTROLLER karena satu kelompok
              pertanyaan dengan ARM/DISARM & mode: siapa yang memegang kapal. -->
         <ControlSourceControl />
+
+        <!-- Lintasan kapal. Ditaruh tepat di bawah kelompok "siapa yang memegang
+             kapal" karena menjawab pertanyaan lanjutannya: ke mana kapal sudah
+             pergi. Perekamannya berjalan di latar belakang lepas dari halaman
+             yang terbuka, jadi angkanya sudah benar begitu panel ini muncul. -->
+        <TrajectoryPanel />
 
         <!-- 3-in-1 Waypoint Determination Panel -->
         <div class="glass-card p-4 space-y-3 border-t-4 border-t-primary">

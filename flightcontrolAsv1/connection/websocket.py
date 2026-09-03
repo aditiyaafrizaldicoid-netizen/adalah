@@ -1013,8 +1013,16 @@ class ASVWebSocketClient:
                         "yaw": t.get("yaw"),
                         "battery_pct": t.get("battery_remaining"),
                         "battery_volt": t.get("battery_voltage"),
-                        "satellites": t.get("satellites_visible", 0),  # FIX: 0 bukan 10
-                        "gps_fix": 3 if t.get("lat") else 0,
+                        "satellites": t.get("satellites_visible", 0),
+                        # Jenis fix SUNGGUHAN dari GPS_RAW_INT (0/1 tanpa fix, 2=2D,
+                        # 3=3D, 4+=DGPS/RTK). Sebelumnya dikarang `3 if lat else 0`,
+                        # yang melaporkan "3D fix" bahkan selagi penerima masih
+                        # mencari satelit — koordinat pertama saat akuisisi memang
+                        # bukan nol, cuma meleset puluhan meter. Perekam jejak yang
+                        # mempercayai angka itu menggambar lompatan melintasi danau
+                        # sebagai lintasan yang sungguh ditempuh.
+                        "gps_fix": t.get("gps_fix_type", 0),
+                        "gps_hdop": t.get("gps_eph", 0.0),
                         "is_armed": t.get("is_armed", False),
                         "mode": t.get("mode", "UNKNOWN"),
                         "is_connected": t.get("is_connected", False),

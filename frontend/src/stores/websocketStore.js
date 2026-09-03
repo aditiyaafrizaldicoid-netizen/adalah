@@ -2,6 +2,12 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 import { useVesselStore } from "./vesselStore";
 import { useMissionStore } from "./missionStore";
+// Diimpor statis, BUKAN lewat import() dinamis seperti store lain di bawah:
+// perekaman lintasan dipanggil untuk SETIAP pesan telemetri (10x per detik), dan
+// menunggu promise di jalur sepanas itu akan menjatuhkan titik saat modulnya
+// belum selesai dimuat. trajectoryStore tidak mengimpor apa pun dari sini, jadi
+// tidak ada risiko impor melingkar.
+import { useTrajectoryStore } from "./trajectoryStore";
 // Token dibaca langsung dari penyimpanan sesi, bukan lewat useAuthStore():
 // authStore justru memanggil reconnect() di sini setelah login/logout, dan
 // saling-impor di antara keduanya akan melingkar.
@@ -11,6 +17,7 @@ import { getToken } from "@/utils/session";
 export const useWebsocketStore = defineStore("websocket", () => {
   const vesselStore = useVesselStore();
   const missionStore = useMissionStore();
+  const trajectoryStore = useTrajectoryStore();
 
   const socket = ref(null);
   const status = ref("DISCONNECTED"); // CONNECTED, CONNECTING, DISCONNECTED, ERROR
@@ -72,6 +79,11 @@ export const useWebsocketStore = defineStore("websocket", () => {
 
         if (data.type === "TELEMETRY") {
           vesselStore.updateTelemetry(data.payload);
+          // Perekaman lintasan disuntik DI SINI — satu-satunya tempat telemetri
+          // masuk ke aplikasi. Dengan begitu titik tetap bertambah apa pun
+          // halaman yang sedang dibuka operator, dan baik saat misi otonom
+          // berjalan maupun saat kapal dikemudikan manual dari remote.
+          trajectoryStore.rekam(data.payload);
         } else if (data.type === "RECORDING_STATUS") {
           if (data.payload) {
             vesselStore.isRecording = !!data.payload.is_recording;
@@ -92,6 +104,9 @@ export const useWebsocketStore = defineStore("websocket", () => {
           import("./missionStore").then(({ useMissionStore }) => {
             useMissionStore().updateMissionStatus(data.payload);
           });
+          // Hanya untuk MEWARNAI titik (otonom vs manual). Perekaman sendiri
+          // tidak pernah bergantung pada status misi — lihat trajectoryStore.
+          trajectoryStore.setStatusMisi(data.payload?.status);
         } else if (data.type === "PONG") {
 
           latency.value = Date.now() - data.timestamp;

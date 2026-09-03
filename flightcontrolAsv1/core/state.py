@@ -33,6 +33,17 @@ class ASVStateData:
     vx: float = 0.0           # Kecepatan maju m/s (relatif bumi/utara)
     vy: float = 0.0           # Kecepatan lateral m/s (relatif bumi/timur)
     vz: float = 0.0           # Kecepatan vertikal m/s (relatif bumi/bawah)
+
+    # ── Mutu sinyal GPS (dari GPS_RAW_INT) ──────────────────────────────────
+    # Sebelumnya tidak pernah diisi: parser tidak mendengarkan GPS_RAW_INT sama
+    # sekali, dan websocket.py mengarang `gps_fix = 3 if lat else 0`. Artinya
+    # dashboard melaporkan "3D fix" bahkan saat penerima masih mencari satelit,
+    # selama koordinatnya bukan nol — dan koordinat pertama saat akuisisi memang
+    # bukan nol, cuma salah beberapa puluh meter. Perekam jejak yang mempercayai
+    # angka itu akan menggambar lompatan melintasi danau sebagai lintasan asli.
+    gps_fix_type: int = 0        # 0/1 = tanpa fix, 2 = 2D, 3 = 3D, 4+ = DGPS/RTK
+    satellites_visible: int = 0  # Jumlah satelit yang terkunci
+    gps_eph: float = 0.0         # HDOP horizontal (meter); 0 = tidak diketahui
     
     # Attitude (Orientasi Kapal)
     roll: float = 0.0         # Derajat (-180 sampai 180)
@@ -79,6 +90,24 @@ class ASVState:
                 self._data.mode = mode
             self._data.system_status = system_status
             self._data.last_heartbeat = time.time()
+
+    def update_gps_raw(self, fix_type: int, satellites_visible: int, eph: float):
+        """
+        Mutu sinyal GPS dari pesan GPS_RAW_INT.
+
+        Dipisah dari update_gps() karena datang dari pesan MAVLink yang BERBEDA
+        dan pada laju yang berbeda pula: posisi datang dari GLOBAL_POSITION_INT
+        yang tetap mengalir memakai estimasi EKF walau fix hilang, sementara mutu
+        sinyalnya cuma ada di sini. Menggabungkan keduanya berarti mutu sinyal
+        ikut "membeku" pada nilai terakhir setiap kali GPS bermasalah — persis
+        saat angka itu paling dibutuhkan.
+        """
+        with self._lock:
+            self._data.gps_fix_type = int(fix_type or 0)
+            self._data.satellites_visible = int(satellites_visible or 0)
+            # eph datang dalam satuan cm (uint16); 65535 = tidak diketahui.
+            self._data.gps_eph = (float(eph) / 100.0
+                                  if eph not in (None, 65535) else 0.0)
 
     def update_gps(self, lat: float, lon: float, alt: float, heading: float, ground_speed: float, vx: float = 0.0, vy: float = 0.0, vz: float = 0.0):
         with self._lock:

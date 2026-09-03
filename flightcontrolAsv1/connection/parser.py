@@ -21,6 +21,8 @@ class MAVLinkParser:
             self._parse_heartbeat(msg)
         elif msg_type == "GLOBAL_POSITION_INT":
             self._parse_global_position(msg)
+        elif msg_type == "GPS_RAW_INT":
+            self._parse_gps_raw(msg)
         elif msg_type == "ATTITUDE":
             self._parse_attitude(msg)
         elif msg_type == "SYS_STATUS":
@@ -33,6 +35,21 @@ class MAVLinkParser:
             self._parse_rc_channels(msg)
         elif msg_type == "STATUSTEXT":
             self._parse_status_text(msg)
+
+    def _parse_gps_raw(self, msg):
+        """
+        Mutu sinyal GPS: jenis fix, jumlah satelit, dan HDOP.
+
+        GPS_RAW_INT adalah SATU-SATUNYA pesan yang membawanya.
+        GLOBAL_POSITION_INT (yang dipakai untuk posisi) tetap mengalir memakai
+        estimasi EKF walau fix sudah hilang, jadi posisi yang masih masuk sama
+        sekali bukan bukti GPS masih terkunci.
+        """
+        self.state.update_gps_raw(
+            fix_type=getattr(msg, "fix_type", 0),
+            satellites_visible=getattr(msg, "satellites_visible", 0),
+            eph=getattr(msg, "eph", None),
+        )
 
     def _parse_heartbeat(self, msg):
         # Abaikan heartbeat yang berasal dari GCS/Base Station sendiri (system ID 255)
