@@ -302,9 +302,15 @@ export const STEP_TYPES = [
       },
       {
         key: "target",
-        label: "Target (any / blue / green / both)",
-        type: "text",
+        label: "Target Box",
+        type: "select",
         default: "any",
+        options: [
+          { value: "any", label: "Box apa pun" },
+          { value: "blue", label: "Box biru", aliases: ["biru", "blue_box"] },
+          { value: "green", label: "Box hijau", aliases: ["hijau", "ijo", "green_box"] },
+          { value: "both", label: "Keduanya sekaligus" },
+        ],
         // any  = box mana pun mengakhiri step (paling umum)
         // blue / green = tunggu warna itu saja
         // both = tunggu kedua box terlihat bersamaan
@@ -569,9 +575,14 @@ export const STEP_TYPES = [
     fields: [
       {
         key: "target",
-        label: "Target (both / blue / green)",
-        type: "text",
+        label: "Target Foto",
+        type: "select",
         default: "both",
+        options: [
+          { value: "both", label: "Biru lalu hijau" },
+          { value: "blue", label: "Box biru saja", aliases: ["biru", "blue_box"] },
+          { value: "green", label: "Box hijau saja", aliases: ["hijau", "ijo", "green_box"] },
+        ],
         // Urutan default: biru dulu, karena bagiannya yang terlihat dari permukaan
         // paling kecil sehingga paling butuh kapal mendekat.
       },
@@ -701,9 +712,14 @@ export const STEP_TYPES = [
       // ─── Pemilihan sasaran ─────────────────────────────────────────────
       {
         key: "prefer",
-        label: "Pilih Pasangan (auto / kiri / kanan)",
-        type: "text",
+        label: "Pilih Pasangan Bola",
+        type: "select",
         default: "auto",
+        options: [
+          { value: "auto", label: "Auto — haluan terdekat" },
+          { value: "left", label: "Kiri + Tengah", aliases: ["kiri"] },
+          { value: "right", label: "Tengah + Kanan", aliases: ["kanan"] },
+        ],
         // "auto"  = pasangan yang titik tengahnya paling dekat ke haluan saat
         //           penguncian — perubahan haluan terkecil, peluang melenceng
         //           paling kecil.
@@ -834,8 +850,12 @@ export const STEP_TYPES = [
       {
         key: "target",
         label: "Cari Box Warna",
-        type: "text",
+        type: "select",
         default: "blue",
+        options: [
+          { value: "blue", label: "Box biru", aliases: ["biru", "blue_box"] },
+          { value: "green", label: "Box hijau", aliases: ["hijau", "ijo", "green_box"] },
+        ],
         // "blue"/"biru" atau "green"/"hijau". Default biru sesuai urutan lintasan.
       },
 
@@ -940,9 +960,14 @@ export const STEP_TYPES = [
       // ─── Foto (opsional, default MATI) ─────────────────────────────────
       {
         key: "photo",
-        label: "4. FOTO — Mode (off / stop / moving)",
-        type: "text",
+        label: "4. FOTO — Mode",
+        type: "select",
         default: "off",
+        options: [
+          { value: "off", label: "Mati — tidak memotret" },
+          { value: "stop", label: "Berhenti lalu jepret", aliases: ["berhenti", "diam"] },
+          { value: "moving", label: "Jepret sambil jalan", aliases: ["jalan", "bergerak", "move"] },
+        ],
         // "off"    = tidak memotret sama sekali (default).
         // "stop"   = berhenti, tunggu diam, jepret, baru menghindar. Foto tertajam.
         // "moving" = jepret tanpa berhenti lalu langsung menghindar. Lintasan utuh,
@@ -962,9 +987,14 @@ export const STEP_TYPES = [
       // ─── Fase 5: EVADE — manuver menghindar ────────────────────────────
       {
         key: "evade_direction",
-        label: "5. HINDAR — Arah (kiri/kanan/auto)",
-        type: "text",
+        label: "5. HINDAR — Arah",
+        type: "select",
         default: "left",
+        options: [
+          { value: "left", label: "Ke kiri", aliases: ["kiri", "l", "-1"] },
+          { value: "right", label: "Ke kanan", aliases: ["kanan", "r", "+1"] },
+          { value: "auto", label: "Auto — ikut warna box" },
+        ],
         // "left"/"kiri", "right"/"kanan", atau "auto".
         // Default KIRI karena box biru menandai tepi KANAN lintasan — menghindar
         // ke kiri membawa kapal ke tengah celah, bukan keluar alur.
@@ -1015,9 +1045,13 @@ export const STEP_TYPES = [
     fields: [
       {
         key: "mode",
-        label: "Mode (stop / moving)",
-        type: "text",
+        label: "Mode Pemotretan",
+        type: "select",
         default: "stop",
+        options: [
+          { value: "stop", label: "Berhenti lalu jepret", aliases: ["berhenti", "diam"] },
+          { value: "moving", label: "Jepret sambil jalan", aliases: ["jalan", "bergerak", "move"] },
+        ],
         // stop   = berhenti, putar sampai box di tengah, diam, baru jepret.
         //          Foto paling tajam. Lintasan terputus sebentar tiap box.
         // moving = tidak pernah berhenti: pusatkan sambil melaju, jepret, lalu
@@ -1159,6 +1193,34 @@ export const STEP_TYPES = [
 ];
 
 export const getStepTypeDef = (type) => STEP_TYPES.find((s) => s.type === type) || null;
+
+/**
+ * Nilai yang harus DITAMPILKAN dropdown untuk field pilihan pada satu step.
+ *
+ * Misi yang sudah tersimpan berisi apa pun yang sempat diketik operator waktu
+ * field ini masih berupa teks bebas: "MOVING" huruf besar, "kanan", "biru".
+ * Kapal menerima semuanya — parser di mission_engine.py me-lowercase dan
+ * mengenali alias — tapi <select> hanya menyorot pilihan kalau nilainya SAMA
+ * PERSIS dengan salah satu option. Tanpa pemetaan ini, membuka misi lama
+ * memperlihatkan dropdown kosong, dan menyimpannya lagi akan diam-diam
+ * mengganti setelan yang sebetulnya sudah benar.
+ *
+ * Nilai yang tidak dikenali sama sekali (salah ketik lama, mis. "stopp")
+ * ditampilkan sebagai DEFAULT field-nya. Itu bukan tebakan: setiap parser di
+ * mission_engine.py juga jatuh ke perilaku default untuk nilai asing, jadi yang
+ * terlihat di layar tetap sama dengan yang akan dikerjakan kapal.
+ *
+ * Sengaja TIDAK menulis balik ke step: membuka misi tidak boleh mengubahnya.
+ * Nilai lama baru tergantikan saat operator benar-benar memilih sesuatu.
+ */
+export const nilaiTerpilih = (step, field) => {
+  const nilai = String(step?.[field.key] ?? "").trim().toLowerCase();
+  if (!nilai) return field.default;
+  const cocok = (field.options || []).find(
+    (o) => o.value === nilai || (o.aliases || []).includes(nilai)
+  );
+  return cocok ? cocok.value : field.default;
+};
 
 // ─── Mission Store ────────────────────────────────────────────────────────────
 export const useMissionStore = defineStore("mission", () => {

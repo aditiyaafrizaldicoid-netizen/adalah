@@ -1978,18 +1978,27 @@ class MissionEngine:
         self._photo_last_steer = steer
         return steer, thr, f"PHOTO_BOX | SEARCH {label_target} {dicari:.0f}/{batas:.0f}s"
 
+    def _photo_urutan_target(self, step: Dict) -> List[str]:
+        """
+        Urutan box yang akan difoto, dari field `target`.
+
+        Dipisah jadi fungsi sendiri supaya dropdown di panel misi bisa diuji
+        terhadap keputusan yang SESUNGGUHNYA (lihat tools/uji_opsi_panel.py).
+        Menuliskan ulang aturannya di berkas uji cuma menguji tiruan yang bisa
+        menyimpang diam-diam dari yang dijalankan kapal.
+        """
+        pilihan = self._target_box_normal(step.get("target"), "both")
+        if pilihan == "blue":
+            return [ROLE_BLUE_BOX]
+        if pilihan == "green":
+            return [ROLE_GREEN_BOX]
+        # Biru lebih dulu: bagiannya yang terlihat dari permukaan paling kecil,
+        # jadi paling butuh kapal mendekat — dikerjakan selagi waktu step masih panjang.
+        return [ROLE_BLUE_BOX, ROLE_GREEN_BOX]
+
     def _next_photo_target(self, step: Dict) -> Optional[str]:
         """Peran box berikutnya yang belum diproses, atau None kalau semua selesai."""
-        pilihan = str(step.get("target") or "both").strip().lower()
-        if pilihan in ("blue", "biru", "blue_box"):
-            urutan = [ROLE_BLUE_BOX]
-        elif pilihan in ("green", "hijau", "ijo", "green_box"):
-            urutan = [ROLE_GREEN_BOX]
-        else:
-            # Biru lebih dulu: bagiannya yang terlihat dari permukaan paling kecil,
-            # jadi paling butuh kapal mendekat — dikerjakan selagi waktu step masih panjang.
-            urutan = [ROLE_BLUE_BOX, ROLE_GREEN_BOX]
-        for peran in urutan:
+        for peran in self._photo_urutan_target(step):
             if peran not in self._photo_done:
                 return peran
         return None
@@ -2553,10 +2562,47 @@ class MissionEngine:
             return self.update_frame(frame, gate_x, detected_balls)
         return hasil
 
+    @staticmethod
+    def _target_box_normal(nilai, default: str) -> str:
+        """
+        Ejaan apa pun untuk warna box → "blue" | "green" | nilai apa adanya.
+
+        Satu tempat untuk daftar ejaannya. Sebelumnya daftar yang sama persis
+        ditulis ulang di tiga handler (PHOTO_BOX, STEER_UNTIL_BOX, BOX_APPROACH),
+        dan dropdown di panel misi harus cocok dengan ketiganya sekaligus —
+        satu daftar yang lupa ikut diperbarui berarti operator memilih "Box hijau"
+        lalu kapal mengejar box biru, tanpa error apa pun.
+        """
+        p = str(nilai or default).strip().lower()
+        if p in ("blue", "biru", "blue_box"):
+            return "blue"
+        if p in ("green", "hijau", "ijo", "green_box"):
+            return "green"
+        return p
+
+    def _steer_box_target_mode(self, step: Dict) -> str:
+        """
+        "blue" | "green" | "both" | "any" dari field `target` STEER_UNTIL_BOX.
+
+        Nilai asing jatuh ke "any" — sama seperti field yang dikosongkan. Dipisah
+        jadi fungsi sendiri dengan alasan yang sama seperti _photo_urutan_target.
+        """
+        pilihan = self._target_box_normal(step.get("target"), "any")
+        return pilihan if pilihan in ("blue", "green", "both") else "any"
+
+    @staticmethod
+    def _dock_prefer_normal(nilai) -> str:
+        """Ejaan apa pun untuk sisi docking → "left" | "right" | "auto"."""
+        p = str(nilai or "auto").strip().lower()
+        if p in ("left", "kiri"):
+            return "left"
+        if p in ("right", "kanan"):
+            return "right"
+        return "auto"
+
     def _bap_peran_target(self, step: Dict) -> str:
         """Warna box yang dicari step ini. Default biru, sesuai alur lomba."""
-        pilihan = str(step.get("target") or "blue").strip().lower()
-        if pilihan in ("green", "hijau", "ijo", "green_box"):
+        if self._target_box_normal(step.get("target"), "blue") == "green":
             return ROLE_GREEN_BOX
         return ROLE_BLUE_BOX
 
@@ -2956,10 +3002,10 @@ class MissionEngine:
         mid_kiri = (bolas[0][0] + bolas[1][0]) / 2.0
         mid_kanan = (bolas[1][0] + bolas[2][0]) / 2.0
 
-        diminta = str(step.get("prefer") or self.DOCK_PREFER).strip().lower()
-        if diminta in ("left", "kiri"):
+        diminta = self._dock_prefer_normal(step.get("prefer") or self.DOCK_PREFER)
+        if diminta == "left":
             self._dock_pilihan, self._dock_alasan = "left", "diminta operator"
-        elif diminta in ("right", "kanan"):
+        elif diminta == "right":
             self._dock_pilihan, self._dock_alasan = "right", "diminta operator"
         elif abs(mid_kiri - setengah) <= abs(mid_kanan - setengah):
             self._dock_pilihan, self._dock_alasan = "left", "perubahan haluan terkecil"
@@ -3624,12 +3670,12 @@ class MissionEngine:
             return 0.0, 0.0, "STEER_UNTIL_BOX"
 
         blue_seen, green_seen = self._box_visible(detected_boxes or {}, min_area)
-        pilihan = str(step.get("target") or "any").strip().lower()
-        if pilihan in ("blue", "biru", "blue_box"):
+        mode = self._steer_box_target_mode(step)
+        if mode == "blue":
             box_visible, target_label = blue_seen, "biru"
-        elif pilihan in ("green", "hijau", "ijo", "green_box"):
+        elif mode == "green":
             box_visible, target_label = green_seen, "hijau"
-        elif pilihan == "both":
+        elif mode == "both":
             box_visible, target_label = (blue_seen and green_seen), "biru+hijau"
         else:
             box_visible, target_label = (blue_seen or green_seen), "box apa pun"

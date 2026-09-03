@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onUnmounted } from 'vue';
-import { useMissionStore, STEP_TYPES, getStepTypeDef } from '@/stores/missionStore';
+import { useMissionStore, STEP_TYPES, getStepTypeDef, nilaiTerpilih } from '@/stores/missionStore';
 import { useVesselStore } from '@/stores/vesselStore';
 import { useWebsocketStore } from '@/stores/websocketStore';
 import {
@@ -380,7 +380,24 @@ onUnmounted(stopAutoScroll);
                     <template v-for="field in getStepTypeDef(step.type)?.fields" :key="field.key">
                       <div class="flex items-center gap-2 bg-(--bg-secondary) px-2 py-1 rounded-lg border border-(--border-subtle)">
                         <span class="text-[10px] text-(--text-muted) font-bold uppercase">{{ field.label }}:</span>
-                        <input v-model.number="step[field.key]" :type="field.type" step="any"
+
+                        <!-- Field berisi pilihan tetap: dropdown, bukan ketikan bebas.
+                             Salah ketik pada field seperti "moving" atau "kanan" tidak
+                             pernah memunculkan error — parser di kapal diam-diam jatuh ke
+                             perilaku default, dan kapal menjalankan manuver yang sama
+                             sekali lain dari yang dimaksud operator. -->
+                        <select v-if="field.type === 'select'"
+                          :value="nilaiTerpilih(step, field)"
+                          @change="step[field.key] = $event.target.value"
+                          :disabled="mission.missionStatus === 'RUNNING'"
+                          class="bg-transparent text-xs font-mono font-bold text-(--text-primary) outline-none cursor-pointer disabled:cursor-not-allowed">
+                          <option v-for="opsi in field.options" :key="opsi.value" :value="opsi.value"
+                            class="bg-(--bg-secondary) text-(--text-primary) font-sans">
+                            {{ opsi.label }}
+                          </option>
+                        </select>
+
+                        <input v-else v-model.number="step[field.key]" :type="field.type" step="any"
                           :disabled="mission.missionStatus === 'RUNNING'"
                           class="bg-transparent text-xs font-mono font-bold text-(--text-primary) w-24 outline-none" />
                       </div>
