@@ -649,6 +649,171 @@ export const STEP_TYPES = [
   // KIRI, jadi SATU box yang terlihat sudah cukup untuk tahu di sebelah mana
   // celahnya. Kapal berhenti dan memusatkan tiap box sebelum menjepret, lalu
   // kembali menyusuri celah menuju box berikutnya.
+  // DOCKING — menabrak DUA dari tiga bola biru yang berjajar.
+  //
+  // Lambung 40 cm lebih sempit daripada rentang ketiga bola 60 cm, jadi ketiganya
+  // mustahil kena sekaligus. Membidik bola TENGAH malah yang terburuk: lambung
+  // menutup ±20 cm sementara bola luar ada di ±30 cm, jadi cuma SATU yang kena.
+  // Membidik titik tengah salah satu pasangan bersebelahan menutup tepat DUA:
+  //
+  //     kiri -30      tengah 0      kanan +30   (cm)
+  //        └──── bidik -15 ────┘                 → lambung [-35..+5]  kena 2
+  //                     └──── bidik +15 ────┘    → lambung [-5..+35]  kena 2
+  //
+  // Titik bidik berjarak 15 cm ke tiap bola sasaran sementara setengah lambung
+  // 20 cm, jadi TOLERANSI MELENCENG CUMA 5 CM (plus jari-jari bola). Itu sebabnya
+  // sisi sasaran dikunci sekali lalu tidak pernah berubah: pindah pasangan di
+  // tengah pendekatan menggeser haluan 30 cm — enam kali seluruh toleransi.
+  {
+    type: "DOCKING",
+    label: "Docking (Tabrak 2 dari 3 Bola Biru)",
+    icon: "⚓",
+    color: "text-blue-400",
+    bg: "bg-blue-500/10 border-blue-500/30",
+    fields: [
+      // ─── Geometri arena ────────────────────────────────────────────────
+      {
+        key: "ball_spacing_m",
+        label: "Jarak Antar Bola (m)",
+        type: "number",
+        default: 0.3,
+        // Jarak antar PUSAT bola. Dipakai menghitung toleransi yang dilaporkan
+        // saat step dimulai, dan memperkirakan bidikan saat cuma 1 bola terlihat.
+      },
+      {
+        key: "boat_beam_m",
+        label: "Lebar Lambung Kapal (m)",
+        type: "number",
+        default: 0.4,
+        // Kalau lambung <= jarak antar bola, dua bola MUSTAHIL kena sekaligus dan
+        // step ini memperingatkannya di log saat dimulai.
+      },
+      {
+        key: "ball_diameter_m",
+        label: "Diameter Bola (m) — UKUR INI",
+        type: "number",
+        default: 0,
+        // 0 = belum diukur. Kalau diisi: toleransi yang dilaporkan jadi jujur
+        // (lambung tidak perlu menutupi PUSAT bola untuk menyentuhnya), dan kapal
+        // masih bisa membidik saat cuma satu bola yang terlihat.
+      },
+
+      // ─── Pemilihan sasaran ─────────────────────────────────────────────
+      {
+        key: "prefer",
+        label: "Pilih Pasangan (auto / kiri / kanan)",
+        type: "text",
+        default: "auto",
+        // "auto"  = pasangan yang titik tengahnya paling dekat ke haluan saat
+        //           penguncian — perubahan haluan terkecil, peluang melenceng
+        //           paling kecil.
+        // "kiri"  = selalu bola KIRI + TENGAH.
+        // "kanan" = selalu bola TENGAH + KANAN.
+      },
+      {
+        key: "lock_confirm_sec",
+        label: "Konfirmasi Sebelum Kunci (s)",
+        type: "number",
+        default: 0.6,
+        // KETIGA bola harus terlihat selama ini sebelum sisi dikunci. Penguncian
+        // menunggu tiga bola karena dengan dua saja, (kiri,tengah) dan
+        // (tengah,kanan) terlihat identik — ketiganya kelas yang sama.
+      },
+      {
+        key: "min_detect_area_px2",
+        label: "Abaikan Bbox < (px²)",
+        type: "number",
+        default: 1500,
+      },
+
+      // ─── Fase 1: SEARCH ────────────────────────────────────────────────
+      {
+        key: "search_throttle",
+        label: "1. CARI — Throttle",
+        type: "number",
+        default: 0.22,
+      },
+      {
+        key: "search_steer",
+        label: "1. CARI — Belok (− kiri / + kanan)",
+        type: "number",
+        default: 0.2,
+      },
+      {
+        key: "search_timeout_sec",
+        label: "1. CARI — Menyerah Setelah (s)",
+        type: "number",
+        default: 30,
+      },
+
+      // ─── Fase 2: ALIGN ─────────────────────────────────────────────────
+      {
+        key: "approach_throttle",
+        label: "2. BIDIK — Throttle",
+        type: "number",
+        default: 0.2,
+        // Pelan disengaja: koreksi 5 cm butuh waktu, dan kapal yang melaju
+        // kencang melewati titik bidik sebelum sempat lurus.
+      },
+      {
+        key: "steer_gain",
+        label: "2. BIDIK — Sensitivitas Pemusatan",
+        type: "number",
+        default: 1.2,
+      },
+      {
+        key: "max_steer",
+        label: "2. BIDIK — Batas Kemudi",
+        type: "number",
+        default: 0.45,
+      },
+      {
+        key: "align_tolerance_px",
+        label: "2. BIDIK — Toleransi Lurus (px)",
+        type: "number",
+        default: 60,
+        // Lebih ketat daripada step lain — toleransi lapangannya cuma 5 cm.
+      },
+      {
+        key: "lost_grace_sec",
+        label: "2. BIDIK — Toleransi Bola Hilang (s)",
+        type: "number",
+        default: 0.8,
+      },
+
+      // ─── Fase 3: RAM ───────────────────────────────────────────────────
+      {
+        key: "ram_area_px2",
+        label: "3. TABRAK — Mulai Saat Bbox ≥ (px²)",
+        type: "number",
+        default: 30000,
+        // Sedekat ini, bola akan keluar frame (atau tenggelam di bawah haluan)
+        // sebelum benturannya terjadi. Meter terakhir memang ditempuh tanpa
+        // penglihatan — koreksi setelah titik ini cuma menggoyang buritan.
+      },
+      {
+        key: "ram_throttle",
+        label: "3. TABRAK — Throttle",
+        type: "number",
+        default: 0.3,
+      },
+      {
+        key: "ram_sec",
+        label: "3. TABRAK — Durasi (s)",
+        type: "number",
+        default: 3.0,
+      },
+
+      // ─── Pengaman ──────────────────────────────────────────────────────
+      {
+        key: "max_duration_sec",
+        label: "Batas Keras Seluruh Step (s)",
+        type: "number",
+        default: 120,
+      },
+    ],
+  },
+
   // BOX_APPROACH — cari satu box, dekati, lalu menghindar. Tanpa foto.
   //
   // Bedanya dengan BOX_CHANNEL: step itu mengurus DUA box sekaligus, menyusuri

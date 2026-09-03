@@ -99,6 +99,7 @@ class MissionEngine:
     STEP_TYPE_BOX_CHANNEL    = "BOX_CHANNEL"     # Susuri celah di antara box biru & hijau, berhenti & foto tiap box
     STEP_TYPE_STEER_UNTIL_BOX = "STEER_UNTIL_BOX"  # TIMED_STEER yang berhenti saat BOX (biru/hijau) terlihat
     STEP_TYPE_BOX_APPROACH   = "BOX_APPROACH"    # Cari box → dekati → menghindar. Tanpa foto, semua parameternya bisa di-tuning
+    STEP_TYPE_DOCKING        = "DOCKING"         # Docking: tabrak 2 dari 3 bola biru yang berjajar
 
     # Step yang dianggap "misi tracking buoy". Menyelesaikan salah satunya membuka
     # kunci PHOTO_BOX (lihat tracking_buoy_completed & _advance_step).
@@ -149,6 +150,16 @@ class MissionEngine:
     # APPROACH : box terlihat. Kapal memusatkannya sambil mendekat.
     # EVADE    : box sudah di tengah DAN sudah cukup dekat. Membanting ke arah yang
     #            diminta selama sekian detik, lalu step selesai.
+    # ---- Fase step DOCKING ----
+    # SEARCH  : bola biru belum cukup terlihat. Kapal menyapu mencari area docking.
+    # ACQUIRE : ketiga bola terlihat. Sisi sasaran DIPILIH dan DIKUNCI di sini.
+    # ALIGN   : mengemudi ke titik tengah pasangan yang sudah dikunci.
+    # RAM     : sasaran terlalu dekat / sudah di bawah haluan. Maju menabrak.
+    DOCK_SEARCH  = "SEARCH"
+    DOCK_ACQUIRE = "ACQUIRE"
+    DOCK_ALIGN   = "ALIGN"
+    DOCK_RAM     = "RAM"
+
     BAP_SCAN     = "SCAN"
     BAP_APPROACH = "APPROACH"
     # Hanya dilewati kalau step diminta memotret (field `photo`). Default step ini
@@ -685,6 +696,75 @@ class MissionEngine:
                                     #   bergantian tanpa pernah kedaluwarsa. Isi 0 untuk
                                     #   mematikan (tidak disarankan).
 
+    # ══════════════════════════════════════════════════════════════════════
+    #  DOCKING — tabrak 2 dari 3 bola biru yang berjajar
+    # ══════════════════════════════════════════════════════════════════════
+    # GEOMETRINYA yang menentukan seluruh rancangan step ini:
+    #
+    #   bola   : kiri -0,30 m │ tengah 0,00 m │ kanan +0,30 m   (rentang 0,60 m)
+    #   kapal  : lebar lambung 0,40 m → setengah lambung 0,20 m
+    #
+    #   Lambung (0,40) lebih sempit dari rentang bola (0,60), jadi ketiganya
+    #   MUSTAHIL kena sekaligus. Membidik titik tengah salah satu pasangan
+    #   BERSEBELAHAN menutup tepat dua bola:
+    #
+    #     Opsi KIRI  → bidik -0,15 → lambung menutup [-0,35 .. +0,05] → kiri+tengah
+    #     Opsi KANAN → bidik +0,15 → lambung menutup [-0,05 .. +0,35] → tengah+kanan
+    #
+    #   Titik bidik berjarak 0,15 m ke MASING-MASING bola sasaran, sementara
+    #   setengah lambung 0,20 m. SISA TOLERANSI MELENCENG CUMA 0,05 m — plus
+    #   jari-jari bola, karena lambung tidak perlu menutupi pusat bola untuk
+    #   menyentuhnya. Angka 5 cm itulah alasan step ini mengunci sasarannya
+    #   sekali lalu tidak berubah pikiran: pindah pasangan di tengah pendekatan
+    #   berarti menggeser haluan 30 cm, dan itu enam kali lebih besar daripada
+    #   seluruh toleransi yang tersedia.
+    DOCK_BALL_SPACING_M = 0.30      # step['ball_spacing_m']   jarak antar pusat bola
+    DOCK_BOAT_BEAM_M = 0.40         # step['boat_beam_m']      lebar lambung
+    DOCK_BALL_DIAMETER_M = 0.0      # step['ball_diameter_m']
+                                    #   0 = belum diukur. Kalau diisi, dipakai untuk
+                                    #   memperkirakan titik bidik saat cuma SATU bola
+                                    #   yang terlihat, dan untuk melaporkan toleransi
+                                    #   sesungguhnya saat step dimulai.
+
+    # ---- Pemilihan sasaran ----
+    DOCK_PREFER = "auto"            # step['prefer']  "auto" | "left"/"kiri" | "right"/"kanan"
+                                    #   "auto" memilih titik tengah yang PALING DEKAT
+                                    #   ke haluan saat penguncian — perubahan haluan
+                                    #   terkecil, jadi paling kecil peluang melenceng.
+                                    #   Isi eksplisit kalau arena punya sisi yang lebih
+                                    #   lapang atau juri menilai sisi tertentu.
+    DOCK_LOCK_CONFIRM_SEC = 0.6     # step['lock_confirm_sec']
+                                    #   Ketiga bola harus terlihat SELAMA ini sebelum
+                                    #   sasaran dikunci. Satu frame nyasar yang mengunci
+                                    #   sisi yang salah tidak bisa dibatalkan.
+    DOCK_MIN_DETECT_AREA_PX2 = 1500 # step['min_detect_area_px2']
+
+    # ---- Fase SEARCH ----
+    DOCK_SEARCH_THROTTLE = 0.22     # step['search_throttle']
+    DOCK_SEARCH_STEER = 0.2         # step['search_steer']   negatif = kiri
+    DOCK_SEARCH_TIMEOUT_SEC = 30.0  # step['search_timeout_sec']
+
+    # ---- Fase ALIGN ----
+    DOCK_APPROACH_THROTTLE = 0.2    # step['approach_throttle']
+    DOCK_STEER_GAIN = 1.2           # step['steer_gain']
+    DOCK_MAX_STEER = 0.45           # step['max_steer']
+    DOCK_ALIGN_TOLERANCE_PX = 60    # step['align_tolerance_px']
+                                    #   Sengaja jauh lebih ketat daripada step lain:
+                                    #   toleransi lapangannya cuma 5 cm.
+    DOCK_LOST_GRACE_SEC = 0.8       # step['lost_grace_sec']
+
+    # ---- Fase RAM ----
+    DOCK_RAM_AREA_PX2 = 30000       # step['ram_area_px2']
+                                    #   Luas bbola sasaran saat dianggap sudah terlalu
+                                    #   dekat untuk dikoreksi lagi. Bola bakal keluar
+                                    #   frame (atau tenggelam di bawah haluan) sebelum
+                                    #   benturannya terjadi, jadi meter terakhir memang
+                                    #   harus ditempuh tanpa penglihatan.
+    DOCK_RAM_THROTTLE = 0.3         # step['ram_throttle']
+    DOCK_RAM_SEC = 3.0              # step['ram_sec']
+
+    DOCK_MAX_DURATION_SEC = 120.0   # step['max_duration_sec']
+
     def __init__(self, asv, tracker, tracking_controller, speed_scheduler: Optional[SpeedScheduler] = None,
                  camera_width: int = REFERENCE_FRAME_WIDTH, camera_height: int = REFERENCE_FRAME_HEIGHT):
         self.asv = asv
@@ -742,6 +822,18 @@ class MissionEngine:
         self._bap_target_peran: str = ROLE_BLUE_BOX
         self._bap_shutter_diminta: bool = False
         self._bap_shutter_sejak: float = 0.0
+
+        # State step DOCKING (di-reset tiap kali step-nya dimulai)
+        self._dock_phase: str = self.DOCK_SEARCH
+        self._dock_phase_since: float = 0.0
+        self._dock_pilihan: Optional[str] = None   # "left" | "right", sekali kunci
+        self._dock_alasan: str = ""
+        self._dock_bidik_px: Optional[float] = None
+        self._dock_last_steer: float = 0.0
+        self._dock_last_seen_at: float = 0.0
+        self._dock_bertiga_sejak: Optional[float] = None
+        self._dock_ram_steer: float = 0.0
+        self._dock_rasio_pasangan: float = 0.0
         # Deteksi box milik frame yang sedang diproses — lihat catatan di update_frame().
         self._frame_boxes: Dict[str, List] = {}
 
@@ -1106,6 +1198,11 @@ class MissionEngine:
                 # atau sudah menghindar, dan APA yang memicu menghindarnya.
                 "bap_phase": self._bap_phase,
                 "bap_evade_reason": self._bap_evade_reason,
+                # DOCKING — sisi mana yang dikunci adalah satu-satunya keputusan
+                # yang tidak bisa dibatalkan di step ini, jadi harus terlihat operator.
+                "dock_phase": self._dock_phase,
+                "dock_pilihan": self._dock_pilihan,
+                "dock_alasan": self._dock_alasan,
             }
 
     # ------------------------------------------------------------------ #
@@ -1178,6 +1275,16 @@ class MissionEngine:
                     self._reset_boxch_state()
                     if self.asv and self.asv.is_connected() and self.asv.get_telemetry().mode != "MANUAL":
                         print("[MissionEngine] 🔄 Switch mode → MANUAL untuk BOX_CHANNEL...")
+                        self.asv.set_mode("MANUAL")
+
+                elif step_type == self.STEP_TYPE_DOCKING:
+                    # MANUAL + RC override: toleransi melencengnya cuma 5 cm, jadi
+                    # kemudi harus merespons per frame, bukan lewat velocity GUIDED
+                    # yang dihaluskan autopilot.
+                    self._reset_dock_state()
+                    self._dock_laporkan_geometri(step)
+                    if self.asv and self.asv.is_connected() and self.asv.get_telemetry().mode != "MANUAL":
+                        print("[MissionEngine] 🔄 Switch mode → MANUAL untuk DOCKING...")
                         self.asv.set_mode("MANUAL")
 
                 elif step_type == self.STEP_TYPE_BOX_APPROACH:
@@ -1282,6 +1389,10 @@ class MissionEngine:
             elif step_type == self.STEP_TYPE_PHOTO_BOX:
                 return self._handle_photo_box(step, frame, gate_x, detected_balls,
                                               self._frame_boxes)
+
+            # ---- DOCKING ----
+            elif step_type == self.STEP_TYPE_DOCKING:
+                return self._handle_docking(step, frame, gate_x, detected_balls)
 
             # ---- BOX_APPROACH ----
             elif step_type == self.STEP_TYPE_BOX_APPROACH:
@@ -2637,6 +2748,388 @@ class MissionEngine:
         if self._bap_phase != fase:
             self._bap_phase = fase
             self._bap_phase_since = time.time()
+
+    # ------------------------------------------------------------------ #
+    #  DOCKING — tabrak 2 dari 3 bola biru yang berjajar                  #
+    # ------------------------------------------------------------------ #
+
+    def docking(self, step: Dict, detected_balls: Optional[Dict] = None
+                ) -> Tuple[float, float, str]:
+        """
+        Manuver docking: menabrak DUA dari tiga bola biru yang berjajar.
+
+            SEARCH ──► ACQUIRE ──► ALIGN ──► RAM ──► step selesai
+                       (kunci sisi)
+
+        KENAPA HARUS MEMILIH, BUKAN MEMBIDIK TENGAH: lambung 0,40 m lebih sempit
+        daripada rentang ketiga bola 0,60 m, jadi ketiganya mustahil kena sekaligus.
+        Membidik bola TENGAH malah yang terburuk — lambung menutup [-0,20 .. +0,20]
+        sementara bola luar ada di ±0,30, jadi cuma SATU bola yang kena. Membidik
+        titik tengah salah satu pasangan bersebelahan menutup tepat DUA.
+
+        KENAPA SISINYA DIKUNCI SEKALI: titik bidik berjarak 0,15 m ke masing-masing
+        bola sasaran sementara setengah lambung 0,20 m, jadi toleransi melencengnya
+        cuma 0,05 m (lebih longgar sebesar jari-jari bola). Berpindah pasangan di
+        tengah pendekatan menggeser haluan 0,30 m — enam kali lipat seluruh toleransi
+        yang tersedia. Sekali dikunci, sisi itu tidak pernah berubah lagi.
+
+        IDENTITAS KIRI/TENGAH/KANAN berasal dari POSISI X di frame, bukan dari kelas:
+        ketiganya kelas yang sama persis (bola biru). Karena itu penguncian menunggu
+        sampai KETIGANYA terlihat — dengan dua bola saja, tidak ada cara membedakan
+        pasangan (kiri,tengah) dari (tengah,kanan).
+
+        Field step yang bisa di-tuning (semua opsional, di-parse aman):
+
+          --- Geometri arena ---
+          ball_spacing_m        jarak antar pusat bola (default 0.30)
+          boat_beam_m           lebar lambung (default 0.40)
+          ball_diameter_m       diameter bola; 0 = belum diukur
+
+          --- Pemilihan sasaran ---
+          prefer                "auto" (default) | "left"/"kiri" | "right"/"kanan"
+          lock_confirm_sec      lama ketiga bola harus terlihat sebelum dikunci
+          min_detect_area_px2   bbox di bawah ini bukan bola
+
+          --- Fase SEARCH ---
+          search_throttle, search_steer, search_timeout_sec
+
+          --- Fase ALIGN ---
+          approach_throttle, steer_gain, max_steer
+          align_tolerance_px    toleransi pemusatan sebelum boleh menabrak
+          lost_grace_sec        bola hilang sekejap → tahan kemudi terakhir
+
+          --- Fase RAM ---
+          ram_area_px2          sasaran sedekat ini → berhenti mengoreksi, tabrak
+          ram_throttle, ram_sec
+
+          --- Pengaman ---
+          max_duration_sec      batas keras seluruh step
+
+        :param detected_balls: {"blue": [...], ...} dari tracker.
+        :return: (steer_norm, thr_norm, label)
+        """
+        detected_balls = detected_balls or {}
+        sekarang = time.time()
+
+        batas_step = self._safe_float(step.get("max_duration_sec"), self.DOCK_MAX_DURATION_SEC)
+        if batas_step > 0 and self._step_start_time:
+            if (sekarang - self._step_start_time) >= batas_step:
+                print(f"[MissionEngine] ⏱️ DOCKING dihentikan — batas {batas_step:.0f}s "
+                      f"terlampaui di fase {self._dock_phase}.")
+                self._advance_step()
+                return 0.0, 0.0, "DOCKING | BATAS WAKTU"
+
+        # RAM didahulukan: meter terakhir memang ditempuh tanpa penglihatan, jadi
+        # deteksi yang muncul-hilang tidak boleh lagi mengubah apa pun.
+        if self._dock_phase == self.DOCK_RAM:
+            return self._dock_menabrak(step, sekarang)
+
+        bolas = self._dock_bola(step, detected_balls)
+        if not bolas:
+            return self._dock_mencari(step, sekarang)
+
+        self._dock_last_seen_at = sekarang
+
+        if self._dock_pilihan is None:
+            return self._dock_mengunci(step, sekarang, bolas)
+
+        return self._dock_membidik(step, sekarang, bolas)
+
+    def _handle_docking(self, step, frame, gate_x, detected_balls):
+        """Adapter dispatch update_frame → docking(); rekursi saat step selesai."""
+        idx_sebelum = self._current_step_idx
+        hasil = self.docking(step, detected_balls)
+        if self._current_step_idx != idx_sebelum:
+            return self.update_frame(frame, gate_x, detected_balls)
+        return hasil
+
+    def _dock_bola(self, step: Dict, detected_balls: Dict) -> List:
+        """
+        Sampai TIGA bola biru terbesar, diurutkan KIRI→KANAN.
+
+        Diambil yang terbesar (paling dekat) lalu diurutkan posisi, karena identitas
+        kiri/tengah/kanan di step ini murni soal urutan X — ketiganya kelas yang sama.
+        Deteksi keempat dan seterusnya pasti palsu: arena cuma punya tiga.
+        """
+        min_area = self._area_dari_step(step, "min_detect_area_px2",
+                                        self.DOCK_MIN_DETECT_AREA_PX2)
+        kandidat = [b for b in (detected_balls.get("blue") or [])
+                    if self._bbox_area(b) >= min_area]
+        kandidat.sort(key=self._bbox_area, reverse=True)
+        return sorted(kandidat[:3], key=lambda b: b[0])
+
+    def _dock_steer(self, step: Dict, error_px: float) -> float:
+        gain = self._safe_float(step.get("steer_gain"), self.DOCK_STEER_GAIN)
+        batas = min(1.0, abs(self._safe_float(step.get("max_steer"), self.DOCK_MAX_STEER)))
+        s = (gain * error_px) / max(1.0, self.camera_width / 2.0)
+        return max(-batas, min(batas, s))
+
+    def _dock_throttle(self, step: Dict, key: str, default: float) -> float:
+        return max(0.0, min(1.0, self._safe_float(step.get(key), default)))
+
+    def _dock_laporkan_geometri(self, step: Dict):
+        """
+        Cetak toleransi melenceng yang SEBENARNYA saat step dimulai.
+
+        Angkanya bergantung pada ukuran kapal dan arena yang bisa diubah operator,
+        dan 5 cm sangat berbeda artinya dari 15 cm. Menghitungnya di sini membuat
+        setelan yang mustahil (lambung lebih sempit dari jarak antar bola) ketahuan
+        di dermaga, bukan setelah kapal gagal menabrak apa pun.
+        """
+        jarak = self._safe_float(step.get("ball_spacing_m"), self.DOCK_BALL_SPACING_M)
+        lambung = self._safe_float(step.get("boat_beam_m"), self.DOCK_BOAT_BEAM_M)
+        diameter = max(0.0, self._safe_float(step.get("ball_diameter_m"),
+                                             self.DOCK_BALL_DIAMETER_M))
+        toleransi = (lambung / 2.0) - (jarak / 2.0) + (diameter / 2.0)
+        print(f"[MissionEngine] ⚓ DOCKING — bola tiap {jarak*100:.0f} cm, lambung "
+              f"{lambung*100:.0f} cm → membidik titik tengah pasangan menutup 2 bola.")
+        if toleransi <= 0:
+            print(f"[MissionEngine] ⛔ DOCKING: lambung terlalu sempit "
+                  f"({lambung*100:.0f} cm) untuk menjangkau dua bola berjarak "
+                  f"{jarak*100:.0f} cm. Manuver ini TIDAK MUNGKIN mengenai dua bola.")
+        else:
+            print(f"[MissionEngine] 📏 Toleransi melenceng ke samping: "
+                  f"{toleransi*100:.0f} cm"
+                  f"{' (belum termasuk jari-jari bola — isi ball_diameter_m)' if diameter <= 0 else ''}.")
+
+    def _dock_mencari(self, step: Dict, sekarang: float) -> Tuple[float, float, str]:
+        """Tidak ada bola biru terlihat: sapu, lalu menyerah kalau tidak ketemu."""
+        # Kedip deteksi saat sudah membidik: tahan kemudi terakhir. Meluruskan haluan
+        # di sini berarti kehilangan pembidikan yang toleransinya cuma 5 cm.
+        if self._dock_phase in (self.DOCK_ALIGN, self.DOCK_ACQUIRE):
+            jeda = self._safe_float(step.get("lost_grace_sec"), self.DOCK_LOST_GRACE_SEC)
+            if self._dock_last_seen_at > 0.0 and (sekarang - self._dock_last_seen_at) < jeda:
+                thr = self._dock_throttle(step, "approach_throttle",
+                                          self.DOCK_APPROACH_THROTTLE)
+                return self._dock_last_steer, thr, "DOCKING | bola hilang sekejap"
+            if self._dock_pilihan is not None:
+                # Sasaran sudah dikunci dan bola hilang lebih lama dari toleransi —
+                # pada jarak sedekat ini bola memang tenggelam di bawah haluan.
+                # Menabrak dengan haluan terakhir jauh lebih baik daripada mencari
+                # ulang dari nol dan kehilangan pembidikan yang sudah benar.
+                return self._dock_mulai_menabrak(step, sekarang, self._dock_last_steer,
+                                                 "bola hilang di jarak dekat")
+
+        self._dock_set_phase(self.DOCK_SEARCH)
+        lama = sekarang - self._dock_phase_since
+        batas = self._safe_float(step.get("search_timeout_sec"), self.DOCK_SEARCH_TIMEOUT_SEC)
+        if batas > 0 and lama >= batas:
+            print(f"[MissionEngine] ⏱️ DOCKING selesai — area docking tidak ketemu "
+                  f"dalam {lama:.0f}s.")
+            self._advance_step()
+            return 0.0, 0.0, "DOCKING | TIDAK KETEMU"
+
+        steer = max(-1.0, min(1.0, self._safe_float(step.get("search_steer"),
+                                                    self.DOCK_SEARCH_STEER)))
+        thr = self._dock_throttle(step, "search_throttle", self.DOCK_SEARCH_THROTTLE)
+        arah = "←" if steer < -0.05 else ("→" if steer > 0.05 else "↑")
+        return steer, thr, f"DOCKING | SEARCH {arah} {lama:.0f}/{batas:.0f}s"
+
+    def _dock_mengunci(self, step: Dict, sekarang: float, bolas: List
+                       ) -> Tuple[float, float, str]:
+        """Tunggu ketiga bola terlihat stabil, lalu pilih sisi dan KUNCI selamanya."""
+        setengah = self.camera_width / 2.0
+        thr = self._dock_throttle(step, "approach_throttle", self.DOCK_APPROACH_THROTTLE)
+        self._dock_set_phase(self.DOCK_ACQUIRE)
+
+        if len(bolas) < 3:
+            # Dua bola tidak cukup: (kiri,tengah) dan (tengah,kanan) terlihat sama
+            # persis. Dekati pusat kelompoknya supaya bola ketiga masuk frame.
+            self._dock_bertiga_sejak = None
+            pusat = sum(b[0] for b in bolas) / len(bolas)
+            steer = self._dock_steer(step, pusat - setengah)
+            self._dock_last_steer = steer
+            return steer, thr, f"DOCKING | ACQUIRE {len(bolas)}/3 bola"
+
+        if self._dock_bertiga_sejak is None:
+            self._dock_bertiga_sejak = sekarang
+        lama = sekarang - self._dock_bertiga_sejak
+        tunggu = max(0.0, self._safe_float(step.get("lock_confirm_sec"),
+                                           self.DOCK_LOCK_CONFIRM_SEC))
+        if lama < tunggu:
+            # Menuju bola TENGAH selama menunggu: dari sana kedua opsi sama-sama
+            # sedekat mungkin, apa pun yang nanti terpilih.
+            steer = self._dock_steer(step, bolas[1][0] - setengah)
+            self._dock_last_steer = steer
+            return steer, thr, f"DOCKING | ACQUIRE 3/3 {lama:.1f}/{tunggu:.1f}s"
+
+        mid_kiri = (bolas[0][0] + bolas[1][0]) / 2.0
+        mid_kanan = (bolas[1][0] + bolas[2][0]) / 2.0
+
+        diminta = str(step.get("prefer") or self.DOCK_PREFER).strip().lower()
+        if diminta in ("left", "kiri"):
+            self._dock_pilihan, self._dock_alasan = "left", "diminta operator"
+        elif diminta in ("right", "kanan"):
+            self._dock_pilihan, self._dock_alasan = "right", "diminta operator"
+        elif abs(mid_kiri - setengah) <= abs(mid_kanan - setengah):
+            self._dock_pilihan, self._dock_alasan = "left", "perubahan haluan terkecil"
+        else:
+            self._dock_pilihan, self._dock_alasan = "right", "perubahan haluan terkecil"
+
+        # Rasio jarak-antar-bola terhadap lebar bola, direkam SELAGI ketiganya
+        # terlihat. Nanti dipakai mengenali apakah dua bola yang tersisa itu
+        # bersebelahan atau justru pasangan LUAR — lihat _dock_titik_bidik.
+        self._dock_rasio_pasangan = self._dock_rasio(bolas[0], bolas[1], bolas[2])
+
+        bidik = mid_kiri if self._dock_pilihan == "left" else mid_kanan
+        self._dock_bidik_px = bidik
+        self._dock_set_phase(self.DOCK_ALIGN)
+        sisi = "KIRI+TENGAH" if self._dock_pilihan == "left" else "TENGAH+KANAN"
+        print(f"[MissionEngine] ⚓ DOCKING mengunci sasaran: {sisi} "
+              f"({self._dock_alasan}). Titik bidik x={bidik:.0f}px.")
+        return self._dock_membidik(step, sekarang, bolas)
+
+    @staticmethod
+    def _dock_rasio(kiri, tengah, kanan) -> float:
+        """
+        Jarak antar bola BERSEBELAHAN dibagi lebar rata-rata bola.
+
+        Rasio, bukan piksel mentah: keduanya membesar bersamaan saat kapal mendekat,
+        jadi perbandingannya tetap walau jaraknya berubah — tidak perlu tahu jarak
+        kapal ke bola sama sekali.
+        """
+        lebar = [(b[4] - b[2]) for b in (kiri, tengah, kanan)]
+        lebar_rata = sum(lebar) / 3.0
+        jarak_rata = ((tengah[0] - kiri[0]) + (kanan[0] - tengah[0])) / 2.0
+        return jarak_rata / max(1.0, lebar_rata)
+
+    def _dock_titik_bidik(self, step: Dict, bolas: List) -> Optional[float]:
+        """
+        Titik bidik untuk frame ini, sesuai sisi yang SUDAH dikunci.
+
+        Tiga bola terlihat: langsung titik tengah pasangan yang dipilih.
+
+        DUA bola terlihat — di sinilah jebakannya. Kalau yang hilang adalah bola
+        TENGAH, yang tersisa adalah pasangan LUAR, dan titik tengah keduanya justru
+        menunjuk tepat ke posisi bola tengah. Membidik ke sana membuat lambung
+        menutup [-0,20 .. +0,20] sementara bola luar ada di ±0,30 — cuma SATU bola
+        yang kena, padahal ketiganya terlihat sesaat sebelumnya. Pasangan luar
+        dikenali dari rasio jaraknya (dua kali lipat pasangan bersebelahan), lalu
+        posisi bola tengah direkonstruksi darinya.
+
+        SATU bola terlihat: butuh diameter bola untuk memperkirakan jaraknya. Tanpa
+        itu, kemudi terakhir yang dipertahankan — menebak di sini berarti menggeser
+        haluan lebih jauh daripada seluruh toleransi yang tersedia.
+        """
+        if len(bolas) >= 3:
+            return ((bolas[0][0] + bolas[1][0]) / 2.0 if self._dock_pilihan == "left"
+                    else (bolas[1][0] + bolas[2][0]) / 2.0)
+
+        if len(bolas) == 2:
+            a, b = bolas[0][0], bolas[1][0]
+            lebar_rata = ((bolas[0][4] - bolas[0][2]) + (bolas[1][4] - bolas[1][2])) / 2.0
+            rasio = (b - a) / max(1.0, lebar_rata)
+            acuan = self._dock_rasio_pasangan
+            if acuan and rasio > acuan * 1.5:
+                # Pasangan LUAR: bola tengah ada tepat di antaranya.
+                tengah = (a + b) / 2.0
+                return (a + tengah) / 2.0 if self._dock_pilihan == "left" else (tengah + b) / 2.0
+            # Pasangan bersebelahan. Yang mana, dipastikan lewat kesinambungan:
+            # pasangan yang keliru titik tengahnya melompat sejauh satu jarak bola.
+            mid = (a + b) / 2.0
+            if self._dock_bidik_px is not None and abs(mid - self._dock_bidik_px) > (b - a):
+                return None
+            return mid
+
+        if len(bolas) == 1:
+            offset = self._dock_offset_px(step, bolas[0])
+            if offset <= 0 or self._dock_bidik_px is None:
+                return None
+            kandidat = (bolas[0][0] - offset, bolas[0][0] + offset)
+            return min(kandidat, key=lambda x: abs(x - self._dock_bidik_px))
+
+        return None
+
+    def _dock_offset_px(self, step: Dict, bola) -> float:
+        """
+        Setengah jarak antar bola dalam piksel, dihitung dari lebar bola di layar.
+
+        Sama caranya dengan _boxch_offset_px: memakai benda berukuran diketahui di
+        frame ini sendiri, jadi hasilnya tetap sekian METER pada jarak berapa pun.
+        """
+        diameter = self._safe_float(step.get("ball_diameter_m"), self.DOCK_BALL_DIAMETER_M)
+        jarak = self._safe_float(step.get("ball_spacing_m"), self.DOCK_BALL_SPACING_M)
+        lebar_px = float(bola[4] - bola[2])
+        if diameter <= 0 or jarak <= 0 or lebar_px <= 0:
+            return 0.0
+        return (lebar_px / diameter) * (jarak / 2.0)
+
+    def _dock_membidik(self, step: Dict, sekarang: float, bolas: List
+                       ) -> Tuple[float, float, str]:
+        """Kemudikan ke titik bidik sampai sasaran terlalu dekat untuk dikoreksi."""
+        bidik = self._dock_titik_bidik(step, bolas)
+        if bidik is None:
+            thr = self._dock_throttle(step, "approach_throttle", self.DOCK_APPROACH_THROTTLE)
+            return self._dock_last_steer, thr, "DOCKING | ALIGN (bidikan ditahan)"
+
+        self._dock_bidik_px = bidik
+        self._dock_set_phase(self.DOCK_ALIGN)
+
+        setengah = self.camera_width / 2.0
+        error_px = bidik - setengah
+        steer = self._dock_steer(step, error_px)
+        self._dock_last_steer = steer
+
+        # Sudah terlalu dekat untuk mengoreksi apa pun: bola akan keluar frame
+        # (atau tenggelam di bawah haluan) sebelum benturannya terjadi.
+        luas_terbesar = max(self._bbox_area(b) for b in bolas)
+        ambang_ram = self._area_dari_step(step, "ram_area_px2", self.DOCK_RAM_AREA_PX2)
+        if luas_terbesar >= ambang_ram:
+            toleransi = self._px_dari_step(step, "align_tolerance_px",
+                                           self.DOCK_ALIGN_TOLERANCE_PX)
+            # Sudah lurus → tabrak lurus. Belum lurus → tabrak dengan kemudi terakhir,
+            # karena mempertahankan koreksi lebih baik daripada meluruskan haluan
+            # yang memang belum benar.
+            if abs(error_px) <= toleransi:
+                return self._dock_mulai_menabrak(step, sekarang, 0.0,
+                                                 f"lurus ({error_px:+.0f}px) & sudah dekat")
+            return self._dock_mulai_menabrak(step, sekarang, steer,
+                                             f"sudah dekat, sisa {error_px:+.0f}px")
+
+        thr = self._dock_throttle(step, "approach_throttle", self.DOCK_APPROACH_THROTTLE)
+        sisi = "KIRI+TENGAH" if self._dock_pilihan == "left" else "TENGAH+KANAN"
+        return steer, thr, (f"DOCKING | ALIGN {sisi} err={error_px:+.0f}px "
+                            f"({len(bolas)} bola)")
+
+    def _dock_mulai_menabrak(self, step: Dict, sekarang: float, steer: float,
+                             alasan: str) -> Tuple[float, float, str]:
+        self._dock_ram_steer = max(-1.0, min(1.0, steer))
+        self._dock_alasan = alasan
+        self._dock_set_phase(self.DOCK_RAM)
+        sisi = ("KIRI+TENGAH" if self._dock_pilihan == "left"
+                else "TENGAH+KANAN" if self._dock_pilihan == "right" else "?")
+        print(f"[MissionEngine] 💥 DOCKING menabrak {sisi} — {alasan}.")
+        return self._dock_menabrak(step, sekarang)
+
+    def _dock_menabrak(self, step: Dict, sekarang: float) -> Tuple[float, float, str]:
+        """Meter terakhir ditempuh tanpa penglihatan, lalu step selesai."""
+        durasi = max(0.0, self._safe_float(step.get("ram_sec"), self.DOCK_RAM_SEC))
+        lama = sekarang - self._dock_phase_since
+        if lama < durasi:
+            thr = self._dock_throttle(step, "ram_throttle", self.DOCK_RAM_THROTTLE)
+            return self._dock_ram_steer, thr, f"DOCKING | RAM {lama:.1f}/{durasi:.1f}s"
+
+        print(f"[MissionEngine] ✅ DOCKING selesai — manuver menabrak {durasi:.1f}s tuntas.")
+        self._advance_step()
+        return 0.0, 0.0, "DOCKING | SELESAI"
+
+    def _dock_set_phase(self, fase: str):
+        if self._dock_phase != fase:
+            self._dock_phase = fase
+            self._dock_phase_since = time.time()
+
+    def _reset_dock_state(self):
+        """Kembalikan state DOCKING ke awal. Dipanggil saat step ini dimulai."""
+        self._dock_phase = self.DOCK_SEARCH
+        self._dock_phase_since = time.time()
+        self._dock_pilihan = None
+        self._dock_alasan = ""
+        self._dock_bidik_px = None
+        self._dock_last_steer = 0.0
+        self._dock_last_seen_at = 0.0
+        self._dock_bertiga_sejak = None
+        self._dock_ram_steer = 0.0
+        self._dock_rasio_pasangan = 0.0
 
     def _reset_bap_state(self):
         """Kembalikan state BOX_APPROACH ke awal. Dipanggil saat step ini dimulai."""
@@ -4009,6 +4502,7 @@ class MissionEngine:
         self.BOXCH_ALIGN_THRESHOLD_PX = round(MissionEngine.BOXCH_ALIGN_THRESHOLD_PX * px_scale)
         self.BOXCH_CHANNEL_OFFSET_PX = round(MissionEngine.BOXCH_CHANNEL_OFFSET_PX * px_scale)
         self.BAP_CENTER_TOLERANCE_PX = round(MissionEngine.BAP_CENTER_TOLERANCE_PX * px_scale)
+        self.DOCK_ALIGN_TOLERANCE_PX = round(MissionEngine.DOCK_ALIGN_TOLERANCE_PX * px_scale)
 
         # AREA piksel² — skala LEBAR × TINGGI
         self.SEQ_MIN_PAIR_AREA_PX2 = round(MissionEngine.SEQ_MIN_PAIR_AREA_PX2 * area_scale)
@@ -4019,6 +4513,8 @@ class MissionEngine:
         self.BOXCH_MIN_AREA_PX2_GREEN = round(MissionEngine.BOXCH_MIN_AREA_PX2_GREEN * area_scale)
         self.BAP_TARGET_AREA_PX2 = round(MissionEngine.BAP_TARGET_AREA_PX2 * area_scale)
         self.BAP_MIN_DETECT_AREA_PX2 = round(MissionEngine.BAP_MIN_DETECT_AREA_PX2 * area_scale)
+        self.DOCK_RAM_AREA_PX2 = round(MissionEngine.DOCK_RAM_AREA_PX2 * area_scale)
+        self.DOCK_MIN_DETECT_AREA_PX2 = round(MissionEngine.DOCK_MIN_DETECT_AREA_PX2 * area_scale)
 
         if self.camera_width != MissionEngine.REFERENCE_FRAME_WIDTH or self.camera_height != MissionEngine.REFERENCE_FRAME_HEIGHT:
             print(f"[MissionEngine] 📐 Threshold piksel diskalakan dari referensi "
