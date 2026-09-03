@@ -258,7 +258,10 @@ def main():
         # tracker.process_frame() mengembalikan 5 nilai:
         #   processed_frame : frame dengan anotasi
         #   gate_x, gate_y  : midpoint fallback (digunakan saat SEARCHING)
-        #   detected_balls  : {"red": [...], "green": [...]} — digunakan Gate State Machine
+        #   detected_balls  : {"red": [...], "green": [...], "blue": [...]}. Hanya merah
+        #                     & hijau yang dipakai Gate State Machine; "blue" adalah
+        #                     kelas baru yang belum punya peran navigasi (lihat
+        #                     ROLE_BLUE_BUOY di vision/class_map.py).
         #   detected_boxes  : {"blue_box": [...], "green_box": [...]} — dipakai step PHOTO_BOX
         processed_frame, gate_x, gate_y, detected_balls, detected_boxes = tracker.process_frame(
             frame,

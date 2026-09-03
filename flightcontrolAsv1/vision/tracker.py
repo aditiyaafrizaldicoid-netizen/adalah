@@ -3,7 +3,9 @@ from ultralytics import YOLO
 
 from vision.class_map import (
     BOX_ROLES,
+    GATE_BUOY_ROLES,
     ROLE_BLUE_BOX,
+    ROLE_BLUE_BUOY,
     ROLE_GREEN_BOX,
     ROLE_GREEN_BUOY,
     ROLE_LABELS,
@@ -22,6 +24,7 @@ class BallTracker:
     # Warna BGR untuk visualisasi
     COLOR_GREEN_BALL  = (0, 220, 0)      # Bola hijau gerbang
     COLOR_RED_BALL    = (0, 0, 220)      # Bola merah gerbang
+    COLOR_BLUE_BALL   = (200, 70, 0)     # Bola biru (belum punya peran navigasi)
     COLOR_BLUE_BOX    = (255, 120, 0)    # Box biru (target foto)
     COLOR_GREEN_BOX   = (120, 220, 120)  # Box hijau (target foto)
     COLOR_GATE_LINE   = (0, 255, 255)    # Garis penghubung antar bola gate (kuning)
@@ -94,7 +97,7 @@ class BallTracker:
         Returns:
             (processed_frame, gate_center_x, gate_center_y, detected_balls, detected_boxes)
 
-            detected_balls: dict dengan key "red" dan "green", masing-masing berisi
+            detected_balls: dict dengan key "red", "green", dan "blue", masing-masing berisi
             list tuple (cx, cy, x1, y1, x2, y2) dari bola yang terdeteksi.
             Contoh: {"red": [(cx, cy, x1, y1, x2, y2), ...], "green": [...]}
 
@@ -120,12 +123,14 @@ class BallTracker:
         per_peran = {
             ROLE_GREEN_BUOY: [],
             ROLE_RED_BUOY: [],
+            ROLE_BLUE_BUOY: [],
             ROLE_BLUE_BOX: [],
             ROLE_GREEN_BOX: [],
         }
         warna_peran = {
             ROLE_GREEN_BUOY: self.COLOR_GREEN_BALL,
             ROLE_RED_BUOY: self.COLOR_RED_BALL,
+            ROLE_BLUE_BUOY: self.COLOR_BLUE_BALL,
             ROLE_BLUE_BOX: self.COLOR_BLUE_BOX,
             ROLE_GREEN_BOX: self.COLOR_GREEN_BOX,
         }
@@ -158,10 +163,16 @@ class BallTracker:
                 color = warna_peran[peran]
                 per_peran[peran].append((cx, cy, x1, y1, x2, y2))
 
-                # Hanya BOLA yang boleh menyumbang midpoint gerbang fallback. Box
-                # ikut di sini akan menarik gate_x ke arah target foto dan membelokkan
-                # kemudi saat kapal masih menyusuri gerbang buoy.
-                if peran not in BOX_ROLES:
+                # Hanya bola GERBANG (hijau & merah) yang boleh menyumbang midpoint
+                # fallback. Box ikut di sini akan menarik gate_x ke arah target foto
+                # dan membelokkan kemudi saat kapal masih menyusuri gerbang buoy.
+                #
+                # Ditulis sebagai DAFTAR-PUTIH, bukan "asal bukan box". Versi
+                # sebelumnya memakai `peran not in BOX_ROLES`, yang berarti setiap
+                # kelas BARU otomatis ikut menggeser kemudi begitu ditambahkan ke
+                # model — dan bola biru yang masuk pada 3 September 2026 akan
+                # melakukan persis itu tanpa satu baris pun diubah di sini.
+                if peran in GATE_BUOY_ROLES:
                     all_centers_x.append(cx)
                     all_centers_y.append(cy)
 
@@ -265,6 +276,11 @@ class BallTracker:
         detected_balls = {
             "red":   sorted_red,    # list (cx, cy, x1, y1, x2, y2), sorted foreground-first
             "green": sorted_green,  # list (cx, cy, x1, y1, x2, y2), sorted foreground-first
+            # Bola biru diteruskan apa adanya dan BELUM dipakai step mana pun. Ia ada
+            # di sini supaya fitur berikutnya tinggal membacanya, bukan supaya logika
+            # gerbang ikut melihatnya — lihat ROLE_BLUE_BUOY di vision/class_map.py.
+            "blue":  sorted(per_peran[ROLE_BLUE_BUOY],
+                            key=lambda b: (b[4] - b[2]) * (b[5] - b[3]), reverse=True),
         }
         # Box target step PHOTO_BOX. Diurutkan terbesar dulu dengan alasan yang sama
         # seperti bola: bbox terbesar = paling dekat ke kamera = yang sedang dihadapi.

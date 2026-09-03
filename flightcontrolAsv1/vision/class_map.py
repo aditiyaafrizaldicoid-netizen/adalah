@@ -40,6 +40,18 @@ from typing import Dict
 ROLE_GREEN_BUOY = "green"
 ROLE_RED_BUOY = "red"
 
+# Bola BIRU — kelas baru di model per 3 September 2026. Perannya di arena BELUM
+# ditentukan, jadi sengaja TIDAK ikut membentuk gerbang dan TIDAK punya sisi di
+# vision/gate_convention.py. Ia dideteksi, digambar, dan diteruskan ke mission
+# engine, lalu berhenti di situ sampai ada step yang benar-benar memakainya.
+#
+# Kenapa dipisah setegas ini: bola biru muncul di air yang sama dengan bola gerbang.
+# Kalau ia ikut terhitung sebagai penanda gerbang — atau bahkan cuma ikut menyumbang
+# titik tengah fallback — kemudi kapal akan tertarik ke arahnya di sepanjang lintasan
+# buoy, tanpa satu pun pesan error. Itu persis kelas bug yang modul ini ada untuk
+# mencegah, cuma lewat pintu yang berbeda.
+ROLE_BLUE_BUOY = "blue"
+
 # Box misi foto: target step PHOTO_BOX. Box biru secara konsep adalah target bawah
 # air dan box hijau target atas air, TAPI di arena box biru masih menyembul di atas
 # permukaan — jadi keduanya dideteksi dari kamera permukaan yang sama. Tidak ada
@@ -47,7 +59,15 @@ ROLE_RED_BUOY = "red"
 ROLE_BLUE_BOX = "blue_box"
 ROLE_GREEN_BOX = "green_box"
 
-BUOY_ROLES = (ROLE_GREEN_BUOY, ROLE_RED_BUOY)
+# Bola yang MEMBENTUK GERBANG. Hanya dua warna ini yang boleh menggerakkan kemudi
+# lewat Gate State Machine, titik tengah semu satu-bola, dan titik tengah fallback.
+# Bola biru TIDAK di sini, dan itu disengaja — lihat catatan di ROLE_BLUE_BUOY.
+GATE_BUOY_ROLES = (ROLE_GREEN_BUOY, ROLE_RED_BUOY)
+
+# Semua bola, termasuk yang belum punya peran navigasi. Dipakai untuk hal-hal yang
+# memang berlaku ke semua bola: pengumpulan deteksi dan penggambaran OSD.
+BUOY_ROLES = GATE_BUOY_ROLES + (ROLE_BLUE_BUOY,)
+
 BOX_ROLES = (ROLE_BLUE_BOX, ROLE_GREEN_BOX)
 ALL_ROLES = BUOY_ROLES + BOX_ROLES
 
@@ -55,6 +75,7 @@ ALL_ROLES = BUOY_ROLES + BOX_ROLES
 ROLE_LABELS: Dict[str, str] = {
     ROLE_GREEN_BUOY: "bola hijau",
     ROLE_RED_BUOY: "bola merah",
+    ROLE_BLUE_BUOY: "bola biru",
     ROLE_BLUE_BOX: "box biru",
     ROLE_GREEN_BOX: "box hijau",
 }
@@ -74,6 +95,10 @@ _NAME_TO_ROLE: Dict[str, str] = {
     "red": ROLE_RED_BUOY,
     "red_ball": ROLE_RED_BUOY,
     "bola_merah": ROLE_RED_BUOY,
+    "b_blue": ROLE_BLUE_BUOY,
+    "blue": ROLE_BLUE_BUOY,
+    "blue_ball": ROLE_BLUE_BUOY,
+    "bola_biru": ROLE_BLUE_BUOY,
     # box misi foto
     "box_biru": ROLE_BLUE_BOX,
     "box_blue": ROLE_BLUE_BOX,
