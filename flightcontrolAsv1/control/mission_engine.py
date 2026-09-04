@@ -1787,6 +1787,14 @@ class MissionEngine:
         """
         Pilih frame untuk foto ini: (frame, nama_kamera, imbuhan_label).
 
+        PEMICUNYA TETAP KAMERA ATAS. Fungsi ini berjalan SETELAH keputusan
+        "kondisinya sudah pas, jepret sekarang" diambil dari deteksi kamera
+        permukaan — persis seperti sebelum kamera bawah air ada. Kamera bawah air
+        TIDAK pernah dipakai mendeteksi apa pun dan tidak pernah menunda shutter:
+        di air keruh ia mungkin tidak melihat apa-apa, dan itu tidak boleh
+        menghalangi foto yang waktunya sudah tepat. Yang diambil adalah frame
+        terbarunya, apa pun isinya.
+
         BOX BIRU → kamera bawah air. Kalau kamera itu tidak terpasang, belum
         pernah memberi frame, atau frame terakhirnya sudah basi, foto TETAP
         diambil dari kamera permukaan — box biru masih menyembul di permukaan,

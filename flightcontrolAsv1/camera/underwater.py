@@ -36,6 +36,10 @@ class UnderwaterCamera:
 
     # Frame yang lebih tua dari ini dianggap TIDAK ADA.
     #
+    # Ini soal USIA frame, BUKAN isinya. Air keruh, gelap, atau kosong melompong
+    # tetap frame yang sah dan tetap difoto — kamera ini tidak pernah menilai
+    # apa yang terlihat. Yang ditolak hanya frame yang sudah kedaluwarsa.
+    #
     # Kamera yang membeku (kabel longgar, perangkat hilang) tetap menyimpan frame
     # terakhirnya di memori, dan frame itu akan tersimpan sebagai "foto box biru"
     # padahal isinya pemandangan menit-menit sebelumnya. Foto basi jauh lebih buruk
@@ -45,11 +49,15 @@ class UnderwaterCamera:
     # Jeda sebelum mencoba membuka ulang perangkat yang gagal.
     JEDA_COBA_ULANG_DETIK = 3.0
 
-    def __init__(self, index, width=1280, height=720, fps=5):
+    def __init__(self, index, width=1280, height=720, fps=5, umur_maks_detik=None):
         self.index = index
         self.width = int(width)
         self.height = int(height)
         self.fps = max(1, int(fps))
+        # Bisa dilonggarkan lewat .env: di air keruh dan cahaya minim, exposure
+        # otomatis bisa memperlambat kamera jauh di bawah fps yang diminta.
+        if umur_maks_detik is not None:
+            self.UMUR_MAKS_DETIK = float(umur_maks_detik)
 
         self._cap = None
         self._frame = None
@@ -208,9 +216,17 @@ def dari_env():
         except ValueError:
             return default
 
+    def _float_env(nama, default):
+        try:
+            return float(os.getenv(nama, "").strip() or default)
+        except ValueError:
+            return default
+
     return UnderwaterCamera(
         index=index,
         width=_int_env("ASV_UNDERWATER_WIDTH", 1280),
         height=_int_env("ASV_UNDERWATER_HEIGHT", 720),
         fps=_int_env("ASV_UNDERWATER_FPS", 5),
+        umur_maks_detik=_float_env("ASV_UNDERWATER_MAX_AGE_SEC",
+                                   UnderwaterCamera.UMUR_MAKS_DETIK),
     )

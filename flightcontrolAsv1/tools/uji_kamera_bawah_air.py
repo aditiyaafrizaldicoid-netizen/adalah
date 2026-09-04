@@ -270,5 +270,100 @@ class UjiKonfigurasiEnv(unittest.TestCase):
         self.assertEqual(dari_env().width, 1280)
 
 
+class UjiPemicuTetapDariKameraAtas(unittest.TestCase):
+    """
+    Sifat yang diminta operator, dikunci di sini.
+
+    Air di arena keruh. Kamera bawah air mungkin TIDAK melihat apa pun, dan itu
+    tidak boleh menghalangi foto yang waktunya sudah tepat. Keputusan "jepret
+    sekarang" datang MURNI dari deteksi kamera permukaan — persis seperti sebelum
+    kamera bawah air ada. Kamera bawah air hanya menyediakan frame.
+    """
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="uji_pemicu_")
+        self.e = MissionEngine(AsvPalsu(), None, Ctl(),
+                               camera_width=1280, camera_height=720)
+        self.e.CAPTURE_DIR = self.dir
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def potret(self, cam):
+        self.e.set_underwater_camera(cam)
+        self.e._capture_pending = True
+        self.e._capture_label = ROLE_BLUE_BOX
+        return self.e.capture_now(FRAME_PERMUKAAN)
+
+    def test_frame_bawah_air_KOSONG_tetap_difoto(self):
+        """Air keruh = frame gelap. Tetap frame yang sah, tetap disimpan."""
+        gelap = np.zeros((120, 160, 3), dtype=np.uint8)
+        path = self.potret(KameraBawahAirPalsu(gelap))
+        self.assertIsNotNone(path, "frame gelap bukan alasan membatalkan foto")
+        self.assertIn("bawahair", os.path.basename(path))
+
+    def test_isi_frame_tidak_pernah_dinilai(self):
+        """
+        Tidak ada ambang kecerahan, kontras, atau 'ada objek tidak' di jalur ini.
+        Apa pun isinya — putih polos sekalipun — disimpan apa adanya.
+        """
+        for isi in (0, 1, 127, 255):
+            f = np.full((120, 160, 3), isi, dtype=np.uint8)
+            with self.subTest(isi=isi):
+                self.assertIsNotNone(self.potret(KameraBawahAirPalsu(f)))
+
+    def test_shutter_TIDAK_menunggu_kamera_bawah_air(self):
+        """
+        capture_now selesai dalam panggilan yang sama, apa pun keadaan kamera
+        bawah air. Menunggu berarti melewatkan momen yang sudah pas.
+        """
+        for cam in (None,
+                    KameraBawahAirPalsu(None),
+                    KameraBawahAirPalsu(FRAME_BAWAH_AIR, umur=99),
+                    KameraBawahAirPalsu(FRAME_BAWAH_AIR)):
+            self.e.set_underwater_camera(cam)
+            self.e._capture_pending = True
+            self.e._capture_label = ROLE_BLUE_BOX
+            mulai = time.monotonic()
+            self.e.capture_now(FRAME_PERMUKAAN)
+            with self.subTest(cam=type(cam).__name__):
+                self.assertLess(time.monotonic() - mulai, 0.5,
+                                "capture_now menahan alur kontrol")
+                self.assertFalse(self.e._capture_pending,
+                                 "permintaan shutter tidak boleh menggantung")
+
+    def test_keputusan_jepret_sama_persis_dengan_atau_tanpa_kamera_bawah_air(self):
+        """
+        Momen shutter ditentukan deteksi kamera atas. Memasang kamera bawah air
+        tidak boleh menggeser momen itu satu frame pun.
+        """
+        def jalankan(cam):
+            e = MissionEngine(AsvPalsu(), None, Ctl(),
+                              camera_width=1280, camera_height=720)
+            e.CAPTURE_DIR = self.dir
+            e.set_underwater_camera(cam)
+            e.load_mission([{"type": "BOX_APPROACH", "photo": "moving",
+                             "target_area_px2": 50000, "center_tolerance_px": 100,
+                             "evade_sec": 5.0}, {"type": "FINISH"}])
+            e.start_mission()
+            # Box biru di tengah frame dan sudah cukup dekat → syarat terpenuhi.
+            box = (960, 540, 810, 390, 1110, 690)   # luas 300x300 = 90000 px²
+            label = []
+            for _ in range(3):
+                _, _, lbl = e.update_frame(None, None,
+                                           {"red": [], "green": [], "blue": []},
+                                           {"blue_box": [box], "green_box": []})
+                label.append(lbl)
+            return label
+
+        tanpa = jalankan(None)
+        dengan = jalankan(KameraBawahAirPalsu(FRAME_BAWAH_AIR))
+        self.assertEqual(
+            [l.split("|")[1].strip().split()[0] for l in tanpa],
+            [l.split("|")[1].strip().split()[0] for l in dengan],
+            "urutan fase berubah gara-gara kamera bawah air terpasang")
+        self.assertIn("SHOOT", tanpa[0], "syarat kamera atas seharusnya langsung memicu")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
