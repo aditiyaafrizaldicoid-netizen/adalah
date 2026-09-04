@@ -918,6 +918,12 @@ class MissionEngine:
         # bukan kotak deteksi dan label debug.
         self._capture_pending: bool = False
         self._capture_label: str = ""
+        # Kamera bawah air (camera/underwater.py). None = tidak terpasang, dan
+        # foto box biru tetap memakai kamera permukaan seperti sebelumnya.
+        self._underwater_camera = None
+        # Kamera yang benar-benar dipakai pada foto TERAKHIR — dilaporkan ke
+        # dashboard supaya operator tahu saat kamera bawah air diam-diam gagal.
+        self._foto_terakhir_kamera: str = ""
         # Identitas step yang fotonya sudah diminta — pakai _step_start_time yang unik
         # tiap kali sebuah step dimasuki, supaya TAKE_IMAGE memotret SEKALI saja dan
         # tidak sekali per frame (~15x/detik selama durasi step).
@@ -1200,6 +1206,10 @@ class MissionEngine:
                 "bap_evade_reason": self._bap_evade_reason,
                 # DOCKING — sisi mana yang dikunci adalah satu-satunya keputusan
                 # yang tidak bisa dibatalkan di step ini, jadi harus terlihat operator.
+                # Kamera bawah air: operator harus tahu SEBELUM start, dan tahu
+                # kalau foto box biru diam-diam jatuh ke kamera permukaan.
+                "underwater_ready": self.underwater_siap,
+                "last_photo_camera": self._foto_terakhir_kamera,
                 "dock_phase": self._dock_phase,
                 "dock_pilihan": self._dock_pilihan,
                 "dock_alasan": self._dock_alasan,
@@ -1717,6 +1727,17 @@ class MissionEngine:
         return 0.0, 0.0, "TAKE_IMAGE"
 
     # ── API foto misi untuk main.py ──────────────────────────────────────────
+    # Peran yang HARUS difoto dengan KAMERA BAWAH AIR.
+    #
+    # Box biru memang target bawah air menurut ketentuan lomba. Sebelum kamera
+    # bawah airnya terpasang, ia difoto dari permukaan karena bagiannya memang
+    # menyembul — itu solusi sementara, bukan yang diminta penilaian.
+    #
+    # Satu tempat, bukan pengecekan `if label == "blue_box"` yang tersebar: setiap
+    # step yang memotret (PHOTO_BOX, BOX_CHANNEL, BOX_APPROACH) melewati
+    # capture_now() yang sama, jadi aturannya cukup ditulis sekali di sini.
+    KAMERA_BAWAH_AIR_UNTUK = frozenset({ROLE_BLUE_BOX})
+
     CAPTURE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                "captures")
 
@@ -1738,9 +1759,66 @@ class MissionEngine:
         if not self._capture_pending:
             return None
         self._capture_pending = False   # sekali percobaan per step, apa pun hasilnya
+
+        frame_pakai, sumber, imbuhan = self._sumber_foto(frame, self._capture_label)
+        if frame_pakai is None:
+            print("[MissionEngine] ⚠️ Tidak ada frame dari kamera mana pun — "
+                  "foto dilewati.")
+            self._foto_terakhir_kamera = "gagal"
+            return None
+
+        self._foto_terakhir_kamera = sumber
+        label = f"{self._capture_label}{imbuhan}" if self._capture_label else self._capture_label
         telemetry = self.asv.get_telemetry_dict() if self.asv else {}
-        return save_geotagged_image(frame, telemetry, self.CAPTURE_DIR,
-                                    label=self._capture_label)
+        return save_geotagged_image(frame_pakai, telemetry, self.CAPTURE_DIR,
+                                    label=label, extra={"kamera": sumber})
+
+    def set_underwater_camera(self, cam):
+        """Pasang kamera bawah air. None = tidak terpasang di kapal ini."""
+        self._underwater_camera = cam
+
+    @property
+    def underwater_siap(self) -> bool:
+        """True kalau kamera bawah air terpasang DAN frame-nya masih segar."""
+        cam = self._underwater_camera
+        return bool(cam is not None and cam.is_ok())
+
+    def _sumber_foto(self, frame_permukaan, label):
+        """
+        Pilih frame untuk foto ini: (frame, nama_kamera, imbuhan_label).
+
+        BOX BIRU → kamera bawah air. Kalau kamera itu tidak terpasang, belum
+        pernah memberi frame, atau frame terakhirnya sudah basi, foto TETAP
+        diambil dari kamera permukaan — box biru masih menyembul di permukaan,
+        jadi foto permukaan tetap bukti yang berguna, dan tidak ada foto sama
+        sekali jauh lebih buruk.
+
+        TAPI kejatuhan itu TIDAK PERNAH DISEMBUNYIKAN: nama berkasnya berakhiran
+        "_permukaan", sidecar JSON-nya mencatat kameranya, dan status misi
+        melaporkannya ke dashboard. Foto permukaan yang menyamar sebagai foto
+        bawah air adalah bukti palsu — lebih merugikan daripada foto yang jelas
+        gagal.
+        """
+        if label not in self.KAMERA_BAWAH_AIR_UNTUK:
+            return frame_permukaan, "permukaan", ""
+
+        cam = self._underwater_camera
+        if cam is None:
+            print("[MissionEngine] ⚠️ Kamera bawah air tidak terpasang — "
+                  f"{ROLE_LABELS.get(label, label)} difoto dari permukaan.")
+            return frame_permukaan, "permukaan (cadangan)", "_permukaan"
+
+        frame_bawah = cam.ambil_frame()
+        if frame_bawah is None:
+            umur = cam.umur_frame_detik()
+            umur_txt = "belum pernah ada frame" if umur == float("inf") else f"frame basi {umur:.1f}s"
+            print(f"[MissionEngine] ⚠️ Kamera bawah air tidak siap ({umur_txt}) — "
+                  f"{ROLE_LABELS.get(label, label)} difoto dari permukaan.")
+            return frame_permukaan, "permukaan (cadangan)", "_permukaan"
+
+        print(f"[MissionEngine] 🌊 {ROLE_LABELS.get(label, label)} difoto dengan "
+              f"kamera BAWAH AIR.")
+        return frame_bawah, "bawah air", "_bawahair"
 
     # ------------------------------------------------------------------ #
     #  PHOTO_BOX — misi memotret box biru & box hijau                     #

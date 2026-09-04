@@ -208,6 +208,22 @@ def main():
 
     asv.set_manual_source_callback(_pada_perpindahan_kendali)
 
+    # ── Kamera bawah air (opsional) ──────────────────────────────────────────
+    # Dipakai KHUSUS untuk memotret box biru — target bawah air menurut ketentuan
+    # lomba. Tidak diaktifkan diam-diam: tanpa ASV_UNDERWATER_CAMERA_INDEX di .env,
+    # fitur ini mati total dan box biru tetap difoto dari kamera permukaan seperti
+    # sebelumnya. Kapal yang kamera bawah airnya belum terpasang tidak boleh
+    # berubah perilakunya hanya karena kodenya sudah ada.
+    from camera.underwater import dari_env as _kamera_bawah_air_dari_env
+    underwater_camera = _kamera_bawah_air_dari_env()
+    if underwater_camera is not None:
+        underwater_camera.start()
+        mission_engine.set_underwater_camera(underwater_camera)
+        ws_client.underwater_camera = underwater_camera
+    else:
+        print("[Main] ℹ️ Kamera bawah air tidak dikonfigurasi "
+              "(ASV_UNDERWATER_CAMERA_INDEX kosong) — box biru difoto dari permukaan.")
+
     ws_client.set_tracker(tracker)
     ws_client.set_tracking_controller(controller)
     ws_client.set_speed_scheduler(speed_scheduler)
@@ -413,6 +429,8 @@ def main():
     finally:
         video_streamer.stop()
         geofence.stop()
+        if underwater_camera is not None:
+            underwater_camera.stop()
         rc_source_switch.stop()
         capture_uploader.stop()
         ws_client.stop()

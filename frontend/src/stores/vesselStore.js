@@ -44,6 +44,12 @@ export const useVesselStore = defineStore("vessel", () => {
   // telemetri, bukan disimpan dari apa yang dikira sudah terkirim — kapal bisa
   // menolak perintahnya (mis. saat misi berjalan).
   const track = ref("B");
+
+  // Kamera bawah air: terpasang (ada di .env kapal) vs benar-benar memberi frame.
+  // Dipisah karena keduanya butuh tindakan berbeda — yang satu memasang kamera,
+  // yang lain memeriksa kabel.
+  const underwaterFitted = ref(false);
+  const underwaterOk = ref(false);
   const signalStrength = ref(0);
 
   // Flight Controller Status (dari Pixhawk via MAVLink)
@@ -139,6 +145,8 @@ export const useVesselStore = defineStore("vessel", () => {
     if (data.satellites !== undefined) satellites.value = data.satellites;
     if (Number.isFinite(data.gps_hdop)) gpsHdop.value = data.gps_hdop;
     if (data.track) track.value = String(data.track).toUpperCase();
+    if (data.underwater_camera_fitted !== undefined) underwaterFitted.value = !!data.underwater_camera_fitted;
+    if (data.underwater_camera_connected !== undefined) underwaterOk.value = !!data.underwater_camera_connected;
     if (data.signal_strength !== undefined) signalStrength.value = data.signal_strength;
 
     // Advanced Nav & Engines
@@ -211,6 +219,7 @@ export const useVesselStore = defineStore("vessel", () => {
     pitch, roll, yaw,
     batteryPct, batteryVolt,
     gpsFix, satellites, gpsHdop, signalStrength, track,
+    underwaterFitted, underwaterOk,
     xte, dtw, nextWp,
     thrusterL, thrusterR, rpmL, rpmR,
     isConnected, isArmed, mode, manualSource, rcSourceSwitch, rcSourceChannel,

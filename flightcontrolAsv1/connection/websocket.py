@@ -82,6 +82,8 @@ class ASVWebSocketClient:
 
         # Reference ke VideoStreamer, TrackingController & SpeedScheduler
         self.video_streamer = None
+        # Kamera bawah air (opsional) — dipasang main.py kalau ada di .env.
+        self.underwater_camera = None
         self.tracking_controller = None
         self.speed_scheduler = None
         self.tracker = None
@@ -1102,6 +1104,12 @@ class ASVWebSocketClient:
                         "mode": t.get("mode", "UNKNOWN"),
                         "is_connected": t.get("is_connected", False),
                         "camera_connected": self.video_streamer.is_camera_ok() if self.video_streamer else False,
+                        # Kamera bawah air: dilaporkan terpisah supaya operator
+                        # tahu SEBELUM start, bukan setelah foto box biru terlanjur
+                        # diambil dari permukaan.
+                        "underwater_camera_connected": bool(
+                            self.underwater_camera and self.underwater_camera.is_ok()),
+                        "underwater_camera_fitted": self.underwater_camera is not None,
                         "is_recording": self.video_streamer.is_recording if self.video_streamer else False,
                         "recording_filename": self.video_streamer.recording_filename if (self.video_streamer and self.video_streamer.is_recording) else "",
                         "recording_resolution": f"{self.video_streamer.record_width}x{self.video_streamer.record_height}" if (self.video_streamer and self.video_streamer.is_recording) else "",

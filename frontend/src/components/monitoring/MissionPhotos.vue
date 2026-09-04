@@ -6,9 +6,11 @@
  *   - IMB / Underwater → box BIRU  (target bawah air)
  *   - IMH / Surface    → box HIJAU (target atas air)
  *
- * Keduanya difoto kamera PERMUKAAN yang sama: box biru di arena masih menyembul di
- * atas air, dan kapal ini tidak punya kamera underwater. Label "underwater" di sini
- * merujuk pada TARGET yang dinilai, bukan pada kamera yang memotretnya.
+ * Box biru difoto KAMERA BAWAH AIR bila terpasang (ASV_UNDERWATER_CAMERA_INDEX di
+ * .env kapal); box hijau selalu dari kamera permukaan. Kalau kamera bawah airnya
+ * tidak terpasang, membeku, atau frame terakhirnya sudah basi, foto box biru tetap
+ * diambil dari permukaan — dan berkasnya berakhiran "_permukaan" supaya kejatuhan
+ * itu tidak pernah tersamar sebagai foto bawah air.
  *
  * Slot dibuat tetap — bukan daftar yang tumbuh — supaya operator bisa melihat sekali
  * lihat mana yang BELUM didapat. Daftar yang hanya menampilkan foto yang sudah ada
@@ -20,7 +22,10 @@
  * dinilai juri tidak boleh bergantung pada itu.
  */
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { Camera, RefreshCw, Download, ImageOff, MapPin } from "lucide-vue-next";
+import { Camera, RefreshCw, Download, ImageOff, MapPin, Waves } from "lucide-vue-next";
+import { useVesselStore } from "@/stores/vesselStore";
+
+const vessel = useVesselStore();
 import { API_BASE, apiUrl } from "@/config/api";
 import { useMissionStore } from "@/stores/missionStore";
 
@@ -130,6 +135,22 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
           class="text-[9px] font-bold text-(--text-secondary) bg-card px-1.5 py-0.5 rounded"
         >
           +{{ totalLain }} lain
+        </span>
+
+        <!-- Status kamera bawah air. Ditaruh di sini, bukan di panel diagnostik:
+             yang perlu tahu adalah orang yang sedang memikirkan foto box biru,
+             dan waktunya adalah SEBELUM misi dijalankan. -->
+        <span
+          v-if="vessel.underwaterFitted"
+          class="flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded"
+          :class="vessel.underwaterOk
+            ? 'bg-sky-500/10 text-sky-400' : 'bg-warning/10 text-warning'"
+          :title="vessel.underwaterOk
+            ? 'Box biru akan difoto kamera bawah air'
+            : 'Kamera bawah air tidak memberi frame — box biru akan difoto dari permukaan'"
+        >
+          <Waves class="w-3 h-3" />
+          {{ vessel.underwaterOk ? 'BAWAH AIR' : 'BAWAH AIR MATI' }}
         </span>
       </div>
       <button

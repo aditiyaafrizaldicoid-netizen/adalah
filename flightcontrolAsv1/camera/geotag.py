@@ -179,13 +179,18 @@ def draw_overlay(frame, fields: Dict[str, Any]):
 
 
 def save_geotagged_image(frame, telemetry: Dict[str, Any], out_dir: str,
-                         label: str = "", dt: Optional[datetime] = None) -> Optional[str]:
+                         label: str = "", dt: Optional[datetime] = None,
+                         extra: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """
     Simpan gambar ber-geo-tag + sidecar JSON berisi field yang sama.
 
     JSON-nya bukan pelengkap iseng: overlay bisa terbaca manusia tapi angkanya sudah
     dibulatkan untuk tampilan, sedangkan JSON menyimpan nilai mentah sehingga hasil
     lomba tetap bisa diaudit/diolah ulang tanpa membaca piksel.
+
+    `extra` ikut ditulis ke sidecar JSON. Dipakai mencatat KAMERA MANA yang
+    mengambil foto ini — bukti yang bertahan setelah lomba, sementara nama berkas
+    bisa saja tertukar saat disalin.
 
     Return path gambar, atau None kalau gagal (frame kosong / OpenCV bermasalah).
     Kegagalan TIDAK dilempar sebagai exception: misi yang sedang berjalan tidak boleh
@@ -216,8 +221,8 @@ def save_geotagged_image(frame, telemetry: Dict[str, Any], out_dir: str,
             return None
 
         with open(json_path, "w", encoding="utf-8") as f:
-            json.dump({"image": os.path.basename(img_path), **fields}, f,
-                      indent=2, ensure_ascii=False)
+            json.dump({"image": os.path.basename(img_path), **fields,
+                       **(extra or {})}, f, indent=2, ensure_ascii=False)
 
         print(f"[Geotag] 📸 Foto misi tersimpan: {img_path}")
         for line in overlay_lines(fields):
