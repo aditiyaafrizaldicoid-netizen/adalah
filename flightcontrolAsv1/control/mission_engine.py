@@ -154,11 +154,13 @@ class MissionEngine:
     # SEARCH  : bola biru belum cukup terlihat. Kapal menyapu mencari area docking.
     # ACQUIRE : ketiga bola terlihat. Sisi sasaran DIPILIH dan DIKUNCI di sini.
     # ALIGN   : mengemudi ke titik tengah pasangan yang sudah dikunci.
-    # RAM     : sasaran terlalu dekat / sudah di bawah haluan. Maju menabrak.
+    # BERHENTI: sudah tepat di depan bola. Throttle DIPUTUS (0) dan kapal
+    #           meluncur masuk dengan sisa momentum — inilah yang membuat
+    #           docking-nya halus alih-alih menabrak.
     DOCK_SEARCH  = "SEARCH"
     DOCK_ACQUIRE = "ACQUIRE"
     DOCK_ALIGN   = "ALIGN"
-    DOCK_RAM     = "RAM"
+    DOCK_STOP    = "BERHENTI"
 
     BAP_SCAN     = "SCAN"
     BAP_APPROACH = "APPROACH"
@@ -753,15 +755,30 @@ class MissionEngine:
                                     #   toleransi lapangannya cuma 5 cm.
     DOCK_LOST_GRACE_SEC = 0.8       # step['lost_grace_sec']
 
-    # ---- Fase RAM ----
-    DOCK_RAM_AREA_PX2 = 30000       # step['ram_area_px2']
-                                    #   Luas bbola sasaran saat dianggap sudah terlalu
-                                    #   dekat untuk dikoreksi lagi. Bola bakal keluar
-                                    #   frame (atau tenggelam di bawah haluan) sebelum
-                                    #   benturannya terjadi, jadi meter terakhir memang
-                                    #   harus ditempuh tanpa penglihatan.
-    DOCK_RAM_THROTTLE = 0.3         # step['ram_throttle']
-    DOCK_RAM_SEC = 3.0              # step['ram_sec']
+    # ---- Fase BERHENTI ----
+    DOCK_STOP_AREA_PX2 = 30000      # step['stop_area_px2']  (lama: ram_area_px2)
+                                    #   Luas bbola sasaran saat kapal dianggap SUDAH
+                                    #   TEPAT DI DEPAN bola. Lewat ambang ini kemudi
+                                    #   berhenti dikoreksi dan throttle diputus.
+    DOCK_DOCK_THROTTLE = 0.0        # step['dock_throttle']  (lama: ram_throttle)
+                                    #   BERHENTI TOTAL. Kapal meluncur masuk dengan
+                                    #   sisa momentum, tidak didorong.
+                                    #
+                                    #   BUG LAPANGAN yang melahirkan angka ini: nilai
+                                    #   lamanya 0.3 — LEBIH BESAR dari throttle
+                                    #   mendekat (0.2). Jadi tepat di detik terakhir,
+                                    #   saat bola paling dekat dan koreksi sudah
+                                    #   dihentikan, kapal justru MENAMBAH gas 50% lalu
+                                    #   menghantam. Fase ini dulu memang dirancang
+                                    #   untuk menabrak; sekarang untuk merapat.
+                                    #
+                                    #   Naikkan sedikit (mis. 0.05) HANYA kalau kapal
+                                    #   berhenti terlalu jauh sebelum menyentuh bola.
+                                    #   Nilai di atas throttle mendekat dijepit
+                                    #   otomatis — lihat _dock_throttle_akhir().
+    DOCK_HOLD_SEC = 3.0             # step['dock_hold_sec']  (lama: ram_sec)
+                                    #   Lama menahan diam sebelum step diselesaikan,
+                                    #   memberi waktu kapal meluncur & berhenti.
 
     DOCK_MAX_DURATION_SEC = 120.0   # step['max_duration_sec']
 
@@ -2930,9 +2947,11 @@ class MissionEngine:
           align_tolerance_px    toleransi pemusatan sebelum boleh menabrak
           lost_grace_sec        bola hilang sekejap → tahan kemudi terakhir
 
-          --- Fase RAM ---
-          ram_area_px2          sasaran sedekat ini → berhenti mengoreksi, tabrak
-          ram_throttle, ram_sec
+          --- Fase BERHENTI (throttle diputus) ---
+          stop_area_px2         sedekat ini → berhenti mengoreksi & putus throttle
+          dock_throttle         throttle merapat; 0 = berhenti total (bawaan)
+          dock_hold_sec         lama menahan sebelum step selesai
+          (nama lama ram_area_px2 / ram_throttle / ram_sec masih diterima)
 
           --- Pengaman ---
           max_duration_sec      batas keras seluruh step
@@ -2953,8 +2972,8 @@ class MissionEngine:
 
         # RAM didahulukan: meter terakhir memang ditempuh tanpa penglihatan, jadi
         # deteksi yang muncul-hilang tidak boleh lagi mengubah apa pun.
-        if self._dock_phase == self.DOCK_RAM:
-            return self._dock_menabrak(step, sekarang)
+        if self._dock_phase == self.DOCK_STOP:
+            return self._dock_berhenti(step, sekarang)
 
         bolas = self._dock_bola(step, detected_balls)
         if not bolas:
@@ -3039,7 +3058,7 @@ class MissionEngine:
                 # pada jarak sedekat ini bola memang tenggelam di bawah haluan.
                 # Menabrak dengan haluan terakhir jauh lebih baik daripada mencari
                 # ulang dari nol dan kehilangan pembidikan yang sudah benar.
-                return self._dock_mulai_menabrak(step, sekarang, self._dock_last_steer,
+                return self._dock_mulai_berhenti(step, sekarang, self._dock_last_steer,
                                                  "bola hilang di jarak dekat")
 
         self._dock_set_phase(self.DOCK_SEARCH)
@@ -3202,46 +3221,102 @@ class MissionEngine:
         steer = self._dock_steer(step, error_px)
         self._dock_last_steer = steer
 
-        # Sudah terlalu dekat untuk mengoreksi apa pun: bola akan keluar frame
-        # (atau tenggelam di bawah haluan) sebelum benturannya terjadi.
+        # Sudah tepat di depan bola: berhenti mengoreksi dan putus throttle.
+        # Bola akan keluar frame (atau tenggelam di bawah haluan) sebelum kapal
+        # benar-benar merapat, jadi jarak terakhir ditempuh tanpa penglihatan —
+        # dengan momentum, bukan dengan gas.
         luas_terbesar = max(self._bbox_area(b) for b in bolas)
-        ambang_ram = self._area_dari_step(step, "ram_area_px2", self.DOCK_RAM_AREA_PX2)
-        if luas_terbesar >= ambang_ram:
+        ambang = self._dock_area_berhenti(step)
+        if luas_terbesar >= ambang:
             toleransi = self._px_dari_step(step, "align_tolerance_px",
                                            self.DOCK_ALIGN_TOLERANCE_PX)
-            # Sudah lurus → tabrak lurus. Belum lurus → tabrak dengan kemudi terakhir,
-            # karena mempertahankan koreksi lebih baik daripada meluruskan haluan
-            # yang memang belum benar.
+            # Sudah lurus → meluncur lurus. Belum lurus → pertahankan koreksi
+            # terakhir, karena meluruskan haluan yang memang belum benar justru
+            # membuang bidikan yang sudah didapat.
             if abs(error_px) <= toleransi:
-                return self._dock_mulai_menabrak(step, sekarang, 0.0,
-                                                 f"lurus ({error_px:+.0f}px) & sudah dekat")
-            return self._dock_mulai_menabrak(step, sekarang, steer,
-                                             f"sudah dekat, sisa {error_px:+.0f}px")
+                return self._dock_mulai_berhenti(step, sekarang, 0.0,
+                                                 f"lurus ({error_px:+.0f}px) & sudah di depan bola")
+            return self._dock_mulai_berhenti(step, sekarang, steer,
+                                             f"sudah di depan bola, sisa {error_px:+.0f}px")
 
         thr = self._dock_throttle(step, "approach_throttle", self.DOCK_APPROACH_THROTTLE)
         sisi = "KIRI+TENGAH" if self._dock_pilihan == "left" else "TENGAH+KANAN"
         return steer, thr, (f"DOCKING | ALIGN {sisi} err={error_px:+.0f}px "
                             f"({len(bolas)} bola)")
 
-    def _dock_mulai_menabrak(self, step: Dict, sekarang: float, steer: float,
+    @staticmethod
+    def _nilai_alias(step: Dict, baru: str, lama: str):
+        """
+        Baca field dengan nama BARU, jatuh ke nama LAMA kalau belum diisi.
+
+        Field fase terakhir docking dulu bernama ram_*. Preset misi yang sudah
+        tersimpan masih memakai nama itu, dan mengabaikannya diam-diam berarti
+        kapal memakai default sementara panel menampilkan angka yang sudah
+        di-tuning operator — dua kenyataan berbeda tanpa satu pun pesan.
+        """
+        v = step.get(baru)
+        return step.get(lama) if v in (None, "") else v
+
+    def _dock_area_berhenti(self, step: Dict) -> float:
+        """Ambang luas 'sudah tepat di depan bola', dalam satuan referensi."""
+        nilai = self._safe_float(
+            self._nilai_alias(step, "stop_area_px2", "ram_area_px2"), -1.0)
+        if nilai <= 0:
+            return self.DOCK_STOP_AREA_PX2
+        return nilai * self._area_scale
+
+    def _dock_throttle_akhir(self, step: Dict) -> float:
+        """
+        Throttle fase BERHENTI — TIDAK PERNAH boleh melebihi throttle mendekat.
+
+        Penjepit ini ada karena satu bug lapangan: nilai bawaannya dulu 0.3
+        sementara throttle mendekat 0.2, sehingga kapal MENAMBAH gas tepat saat
+        paling dekat dengan bola lalu menghantam. Angka boleh salah diketik lagi
+        di panel; yang tidak boleh adalah kapal mempercepat diri di jarak paling
+        rawan. Docking yang halus tidak pernah butuh gas lebih besar daripada
+        saat mendekat.
+        """
+        mendekat = self._dock_throttle(step, "approach_throttle",
+                                       self.DOCK_APPROACH_THROTTLE)
+        diminta = max(0.0, min(1.0, self._safe_float(
+            self._nilai_alias(step, "dock_throttle", "ram_throttle"),
+            self.DOCK_DOCK_THROTTLE)))
+        if diminta > mendekat:
+            print(f"[MissionEngine] ⚠️ DOCKING: throttle merapat {diminta:.2f} lebih "
+                  f"besar dari throttle mendekat {mendekat:.2f} — dijepit ke "
+                  f"{mendekat:.2f}. Kapal tidak boleh menambah gas saat paling dekat.")
+            return mendekat
+        return diminta
+
+    def _dock_mulai_berhenti(self, step: Dict, sekarang: float, steer: float,
                              alasan: str) -> Tuple[float, float, str]:
         self._dock_ram_steer = max(-1.0, min(1.0, steer))
         self._dock_alasan = alasan
-        self._dock_set_phase(self.DOCK_RAM)
+        self._dock_set_phase(self.DOCK_STOP)
         sisi = ("KIRI+TENGAH" if self._dock_pilihan == "left"
                 else "TENGAH+KANAN" if self._dock_pilihan == "right" else "?")
-        print(f"[MissionEngine] 💥 DOCKING menabrak {sisi} — {alasan}.")
-        return self._dock_menabrak(step, sekarang)
+        print(f"[MissionEngine] 🛑 DOCKING berhenti di depan {sisi} — {alasan}. "
+              f"Throttle diputus, kapal meluncur merapat.")
+        return self._dock_berhenti(step, sekarang)
 
-    def _dock_menabrak(self, step: Dict, sekarang: float) -> Tuple[float, float, str]:
-        """Meter terakhir ditempuh tanpa penglihatan, lalu step selesai."""
-        durasi = max(0.0, self._safe_float(step.get("ram_sec"), self.DOCK_RAM_SEC))
+    def _dock_berhenti(self, step: Dict, sekarang: float) -> Tuple[float, float, str]:
+        """Throttle diputus; kapal meluncur merapat dengan sisa momentum."""
+        durasi = max(0.0, self._safe_float(
+            self._nilai_alias(step, "dock_hold_sec", "ram_sec"), self.DOCK_HOLD_SEC))
         lama = sekarang - self._dock_phase_since
-        if lama < durasi:
-            thr = self._dock_throttle(step, "ram_throttle", self.DOCK_RAM_THROTTLE)
-            return self._dock_ram_steer, thr, f"DOCKING | RAM {lama:.1f}/{durasi:.1f}s"
+        thr = self._dock_throttle_akhir(step)
 
-        print(f"[MissionEngine] ✅ DOCKING selesai — manuver menabrak {durasi:.1f}s tuntas.")
+        if thr <= 0.0 and self.asv and self.asv.is_connected():
+            # Bukan sekadar berhenti mengirim gas: perintah berhenti dikirim tegas
+            # supaya kapal benar-benar melambat, bukan meluncur terus dengan
+            # throttle terakhir yang masih tersimpan di penerima RC.
+            self.asv.stop_movement(silent=True)
+
+        if lama < durasi:
+            return self._dock_ram_steer, thr, \
+                f"DOCKING | BERHENTI {lama:.1f}/{durasi:.1f}s thr={thr:.2f}"
+
+        print(f"[MissionEngine] ✅ DOCKING selesai — merapat {durasi:.1f}s tuntas.")
         self._advance_step()
         return 0.0, 0.0, "DOCKING | SELESAI"
 
@@ -4645,7 +4720,7 @@ class MissionEngine:
         self.BOXCH_MIN_AREA_PX2_GREEN = round(MissionEngine.BOXCH_MIN_AREA_PX2_GREEN * area_scale)
         self.BAP_TARGET_AREA_PX2 = round(MissionEngine.BAP_TARGET_AREA_PX2 * area_scale)
         self.BAP_MIN_DETECT_AREA_PX2 = round(MissionEngine.BAP_MIN_DETECT_AREA_PX2 * area_scale)
-        self.DOCK_RAM_AREA_PX2 = round(MissionEngine.DOCK_RAM_AREA_PX2 * area_scale)
+        self.DOCK_STOP_AREA_PX2 = round(MissionEngine.DOCK_STOP_AREA_PX2 * area_scale)
         self.DOCK_MIN_DETECT_AREA_PX2 = round(MissionEngine.DOCK_MIN_DETECT_AREA_PX2 * area_scale)
 
         if self.camera_width != MissionEngine.REFERENCE_FRAME_WIDTH or self.camera_height != MissionEngine.REFERENCE_FRAME_HEIGHT:

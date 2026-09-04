@@ -745,9 +745,11 @@ export const STEP_TYPES = [
       // ─── Fase 1: SEARCH ────────────────────────────────────────────────
       {
         key: "search_throttle",
-        label: "1. CARI — Throttle",
+        label: "1. CARI — Throttle (paling cepat)",
         type: "number",
         default: 0.22,
+        // Tangga throttle docking menurun di tiap fase: CARI → BIDIK → BERHENTI.
+        // Kapal tidak boleh pernah menambah gas saat bola makin dekat.
       },
       {
         key: "search_steer",
@@ -765,11 +767,12 @@ export const STEP_TYPES = [
       // ─── Fase 2: ALIGN ─────────────────────────────────────────────────
       {
         key: "approach_throttle",
-        label: "2. BIDIK — Throttle",
+        label: "2. BIDIK — Throttle (lebih pelan)",
         type: "number",
         default: 0.2,
         // Pelan disengaja: koreksi 5 cm butuh waktu, dan kapal yang melaju
-        // kencang melewati titik bidik sebelum sempat lurus.
+        // kencang melewati titik bidik sebelum sempat lurus. Harus lebih kecil
+        // dari throttle CARI, dan lebih besar dari throttle BERHENTI.
       },
       {
         key: "steer_gain",
@@ -797,27 +800,39 @@ export const STEP_TYPES = [
         default: 0.8,
       },
 
-      // ─── Fase 3: RAM ───────────────────────────────────────────────────
+      // ─── Fase 3: BERHENTI ──────────────────────────────────────────────
       {
-        key: "ram_area_px2",
-        label: "3. TABRAK — Mulai Saat Bbox ≥ (px²)",
+        key: "stop_area_px2",
+        label: "3. BERHENTI — Mulai Saat Bbox ≥ (px²)",
         type: "number",
         default: 30000,
-        // Sedekat ini, bola akan keluar frame (atau tenggelam di bawah haluan)
-        // sebelum benturannya terjadi. Meter terakhir memang ditempuh tanpa
-        // penglihatan — koreksi setelah titik ini cuma menggoyang buritan.
+        // Kapal dianggap SUDAH TEPAT DI DEPAN bola. Lewat titik ini kemudi
+        // berhenti dikoreksi dan throttle diputus. Bola akan keluar frame (atau
+        // tenggelam di bawah haluan) sebelum kapal benar-benar merapat, jadi
+        // jarak terakhir ditempuh dengan momentum, bukan dengan gas.
       },
       {
-        key: "ram_throttle",
-        label: "3. TABRAK — Throttle",
+        key: "dock_throttle",
+        label: "3. BERHENTI — Throttle (0 = berhenti total)",
         type: "number",
-        default: 0.3,
+        default: 0,
+        // BUG LAPANGAN yang melahirkan angka ini: nilai lamanya 0.3 — LEBIH
+        // BESAR dari throttle mendekat (0.2). Jadi tepat di detik terakhir,
+        // saat bola paling dekat dan koreksi sudah dihentikan, kapal justru
+        // menambah gas 50% lalu menghantam.
+        //
+        // Naikkan sedikit (mis. 0.05) HANYA kalau kapal berhenti terlalu jauh
+        // sebelum menyentuh bola. Nilai di atas throttle mendekat dijepit
+        // otomatis oleh kapal — docking halus tidak pernah butuh gas lebih
+        // besar daripada saat mendekat.
       },
       {
-        key: "ram_sec",
-        label: "3. TABRAK — Durasi (s)",
+        key: "dock_hold_sec",
+        label: "3. BERHENTI — Tahan (s)",
         type: "number",
         default: 3.0,
+        // Lama menahan diam sebelum step diselesaikan — memberi waktu kapal
+        // meluncur dan benar-benar berhenti.
       },
 
       // ─── Pengaman ──────────────────────────────────────────────────────

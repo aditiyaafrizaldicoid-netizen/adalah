@@ -79,7 +79,7 @@ class UjiDocking(unittest.TestCase):
     def kunci(self, biru=None, **field):
         """Jalankan sampai sisi sasaran terkunci."""
         field.setdefault("lock_confirm_sec", 0)
-        field.setdefault("ram_area_px2", 10_000_000)   # jangan masuk RAM dulu
+        field.setdefault("stop_area_px2", 10_000_000)   # jangan masuk RAM dulu
         self.mulai(**field)
         self.jalankan(biru if biru is not None else tiga_bola())
         return self.engine._dock_pilihan
@@ -98,7 +98,7 @@ class UjiDocking(unittest.TestCase):
         self.assertIn("ACQUIRE 2/3", label)
 
     def test_penguncian_menunggu_konfirmasi(self):
-        self.mulai(lock_confirm_sec=0.3, ram_area_px2=10_000_000)
+        self.mulai(lock_confirm_sec=0.3, stop_area_px2=10_000_000)
         self.jalankan(tiga_bola())
         self.assertIsNone(self.engine._dock_pilihan, "satu frame belum boleh mengunci")
         time.sleep(0.35)
@@ -190,26 +190,26 @@ class UjiDocking(unittest.TestCase):
 
     # ── Fase RAM ───────────────────────────────────────────────────────────
 
-    def test_dekat_dan_lurus_menabrak_lurus(self):
-        self.mulai(lock_confirm_sec=0, prefer="kiri", ram_area_px2=1000,
-                   align_tolerance_px=500, ram_sec=5.0)
+    def test_dekat_dan_lurus_berhenti_lurus(self):
+        self.mulai(lock_confirm_sec=0, prefer="kiri", stop_area_px2=1000,
+                   align_tolerance_px=500, dock_hold_sec=5.0)
         steer, _, label = self.jalankan(tiga_bola(pusat=TENGAH_FRAME + 200, sisi=200))
-        self.assertIn("RAM", label)
+        self.assertIn("BERHENTI", label)
         self.assertEqual(steer, 0.0, "sudah lurus: koreksi sisa justru menggoyang buritan")
 
-    def test_dekat_tapi_belum_lurus_menabrak_dengan_kemudi_terakhir(self):
-        self.mulai(lock_confirm_sec=0, prefer="kiri", ram_area_px2=1000,
-                   align_tolerance_px=5, ram_sec=5.0)
+    def test_dekat_tapi_belum_lurus_menahan_kemudi_terakhir(self):
+        self.mulai(lock_confirm_sec=0, prefer="kiri", stop_area_px2=1000,
+                   align_tolerance_px=5, dock_hold_sec=5.0)
         steer, _, label = self.jalankan(tiga_bola(pusat=TENGAH_FRAME + 400, sisi=200))
-        self.assertIn("RAM", label)
+        self.assertIn("BERHENTI", label)
         self.assertNotEqual(steer, 0.0, "belum lurus: koreksi harus dipertahankan")
 
-    def test_bola_hilang_lama_setelah_dikunci_tetap_menabrak(self):
+    def test_bola_hilang_lama_setelah_dikunci_tetap_berhenti_merapat(self):
         """Di jarak dekat bola memang tenggelam di bawah haluan."""
-        self.kunci(prefer="kiri", lost_grace_sec=0.1, ram_sec=5.0)
+        self.kunci(prefer="kiri", lost_grace_sec=0.1, dock_hold_sec=5.0)
         time.sleep(0.15)
         _, _, label = self.jalankan([])
-        self.assertIn("RAM", label)
+        self.assertIn("BERHENTI", label)
 
     def test_kedip_deteksi_menahan_kemudi_bukan_meluruskan(self):
         self.kunci(tiga_bola(pusat=TENGAH_FRAME + 300), prefer="kanan",
@@ -219,8 +219,59 @@ class UjiDocking(unittest.TestCase):
         self.assertAlmostEqual(steer_hilang, steer_awal, places=6)
         self.assertIn("hilang sekejap", label)
 
-    def test_step_selesai_setelah_ram(self):
-        self.mulai(lock_confirm_sec=0, prefer="kiri", ram_area_px2=1000, ram_sec=0.2)
+    # ── Throttle: tiga tingkat yang TIDAK PERNAH naik saat mendekat ────────
+
+    def test_tiga_tingkat_throttle_menurun(self):
+        """
+        BUG LAPANGAN: throttle fase terakhir dulu 0.3 sementara mendekat 0.2, jadi
+        kapal MENAMBAH gas 50% tepat saat paling dekat dengan bola lalu menghantam.
+        """
+        # Ambang berhenti 20000 px²: bola 60px (3600 px²) masih "mendekat",
+        # bola 200px (40000 px²) sudah "tepat di depan".
+        self.mulai(search_throttle=0.3, approach_throttle=0.15,
+                   lock_confirm_sec=0, prefer="kiri", stop_area_px2=20000,
+                   dock_hold_sec=5.0)
+
+        _, thr_cari, label = self.jalankan([])
+        self.assertIn("SEARCH", label)
+        self.assertAlmostEqual(thr_cari, 0.3, places=6)
+
+        _, thr_dekat, label = self.jalankan(tiga_bola(sisi=60))
+        self.assertNotIn("BERHENTI", label, "belum waktunya berhenti")
+        self.assertAlmostEqual(thr_dekat, 0.15, places=6, msg="mendekat harus lebih pelan")
+
+        _, thr_akhir, label = self.jalankan(tiga_bola(sisi=200))
+        self.assertIn("BERHENTI", label)
+        self.assertEqual(thr_akhir, 0.0, "di depan bola harus BERHENTI TOTAL")
+
+        self.assertGreater(thr_cari, thr_dekat)
+        self.assertGreater(thr_dekat, thr_akhir)
+
+    def test_throttle_merapat_dijepit_ke_throttle_mendekat(self):
+        """Salah ketik di panel tidak boleh membuat kapal menggas saat paling dekat."""
+        self.mulai(lock_confirm_sec=0, prefer="kiri", stop_area_px2=1000,
+                   approach_throttle=0.2, dock_throttle=0.9, dock_hold_sec=5.0)
+        _, thr, label = self.jalankan(tiga_bola(sisi=200))
+        self.assertIn("BERHENTI", label)
+        self.assertLessEqual(thr, 0.2, "throttle merapat melebihi throttle mendekat")
+
+    def test_dorongan_kecil_tetap_boleh(self):
+        """Kapal yang berhenti terlalu jauh boleh diberi dorongan kecil."""
+        self.mulai(lock_confirm_sec=0, prefer="kiri", stop_area_px2=1000,
+                   approach_throttle=0.2, dock_throttle=0.05, dock_hold_sec=5.0)
+        _, thr, _ = self.jalankan(tiga_bola(sisi=200))
+        self.assertAlmostEqual(thr, 0.05, places=6)
+
+    def test_nama_field_LAMA_masih_diterima(self):
+        """Preset misi yang sudah tersimpan memakai ram_*; jangan diabaikan diam-diam."""
+        self.mulai(lock_confirm_sec=0, prefer="kiri", ram_area_px2=1000,
+                   approach_throttle=0.2, ram_throttle=0.04, ram_sec=5.0)
+        _, thr, label = self.jalankan(tiga_bola(sisi=200))
+        self.assertIn("BERHENTI", label, "ram_area_px2 lama harus tetap memicu")
+        self.assertAlmostEqual(thr, 0.04, places=6, msg="ram_throttle lama diabaikan")
+
+    def test_step_selesai_setelah_berhenti(self):
+        self.mulai(lock_confirm_sec=0, prefer="kiri", stop_area_px2=1000, dock_hold_sec=0.2)
         self.jalankan(tiga_bola(sisi=200))
         time.sleep(0.25)
         steer, thr, _ = self.jalankan([])
@@ -257,7 +308,7 @@ class UjiDocking(unittest.TestCase):
 
     def test_field_kosong_tidak_bikin_crash(self):
         self.mulai(search_throttle="", search_steer="", approach_throttle=None,
-                   steer_gain="", max_steer="", ram_area_px2="", ram_sec="abc",
+                   steer_gain="", max_steer="", stop_area_px2="", dock_hold_sec="abc",
                    lock_confirm_sec="", prefer="", ball_spacing_m="")
         for biru in ([], tiga_bola(), [bola(900)], tiga_bola(sisi=250), []):
             steer, thr, _ = self.jalankan(biru)
@@ -266,8 +317,8 @@ class UjiDocking(unittest.TestCase):
 
     def test_keluaran_selalu_dalam_batas_aman(self):
         self.mulai(search_throttle=9, search_steer=-9, approach_throttle=9,
-                   steer_gain=99, max_steer=9, ram_throttle=9, ram_sec=5,
-                   lock_confirm_sec=0, ram_area_px2=1000)
+                   steer_gain=99, max_steer=9, ram_throttle=9, dock_hold_sec=5,
+                   lock_confirm_sec=0, stop_area_px2=1000)
         for biru in ([], tiga_bola(pusat=100), tiga_bola(sisi=300), []):
             steer, thr, _ = self.jalankan(biru)
             self.assertTrue(-1.0 <= steer <= 1.0, f"steer di luar batas: {steer}")
