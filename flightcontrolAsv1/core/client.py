@@ -51,6 +51,11 @@ class ASVController:
         self._manual_source_lock = threading.RLock()
         self._remote_block_last_log = 0.0
 
+        # Dipanggil SETIAP KALI sumber kendali manual benar-benar berpindah.
+        # Dipasang main.py untuk menghentikan misi begitu kendali diserahkan ke
+        # remote — lihat set_manual_source_callback().
+        self._on_manual_source_change = None
+
         # Kapan terakhir base station mengemudikan kapal lewat joystick/keyboard
         # (MANUAL_CONTROL). Dipakai main.py untuk berhenti mengirim netral RC tiap
         # frame selama operator sedang memegang kemudi — lihat teleop_active().
@@ -302,7 +307,32 @@ class ASVController:
                       "karena mini PC sudah berhenti mengirim override.")
         elif previous != target:
             print(f"[ASVController] 🖥️ Kendali manual → {manual_source.label(target)}.")
+
+        if previous != target and self._on_manual_source_change:
+            # Kegagalan di callback TIDAK boleh membatalkan perpindahan kendali:
+            # gerbangnya sudah tertutup dan override sudah dilepas, jadi remote
+            # SUDAH memegang kapal. Melempar dari sini hanya akan meninggalkan
+            # sistem dalam keadaan setengah jalan.
+            try:
+                self._on_manual_source_change(previous, target)
+            except Exception as e:
+                print(f"[ASVController] ⚠️ Callback perpindahan sumber kendali "
+                      f"gagal: {e}")
         return True
+
+    def set_manual_source_callback(self, fn):
+        """
+        Daftarkan satu callback fn(sebelumnya, sekarang) untuk perpindahan sumber
+        kendali manual.
+
+        Dipasang DI SINI, bukan di masing-masing pemanggil, karena sumber kendali
+        bisa berpindah lewat DUA jalan yang sama sekali terpisah: sakelar fisik di
+        remote (control/rc_source_switch.py) dan tombol di dashboard (perintah
+        WebSocket set_manual_source). Keduanya bermuara ke method ini, jadi apa pun
+        yang harus terjadi pada perpindahan cukup dipasang sekali di sini —
+        memasangnya di tiap pemanggil berarti menunggu salah satunya terlupa.
+        """
+        self._on_manual_source_change = fn
 
     def _release_to_remote(self) -> bool:
         """Kirim pelepasan override berulang kali. True kalau minimal satu berhasil."""

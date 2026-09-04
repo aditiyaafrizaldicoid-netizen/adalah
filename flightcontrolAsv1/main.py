@@ -169,11 +169,44 @@ def main():
     # bawah: pemanggilan itu memicu fetch_and_apply_pid_config(), dan geofence
     # menumpang baris config yang sama. Kalau dipasang belakangan, batas yang
     # tersimpan di DB diam-diam terlewat setiap kali kapal boot.
+    from control import manual_source
     from control.geofence import GeofenceMonitor
     geofence = GeofenceMonitor(asv, mission_engine=mission_engine,
                                on_warning=ws_client.send_warning)
     ws_client.geofence = geofence
     geofence.start()
+
+    # ── Serah-terima kendali: remote mengambil alih = misi BERHENTI ──────────
+    #
+    # BUG LAPANGAN: sebelum ini, memindahkan sumber kendali ke remote hanya
+    # menutup gerbang perintah gerak (lihat ASVController._blocked_by_remote).
+    # Mesin misi TIDAK ikut berhenti — ia terus menjalankan state machine-nya,
+    # step-stepnya tetap kedaluwarsa dan berpindah sendiri, dan dashboard tetap
+    # menampilkan "RUNNING" beserta kemajuan langkah. Operator memegang kapal
+    # lewat remote sementara misi diam-diam terus berjalan di latar belakang, dan
+    # begitu kendali dikembalikan, misinya sudah berada di langkah yang sama
+    # sekali tidak diharapkan.
+    #
+    # Dipasang lewat callback di ASVController, bukan di sini per-jalur, karena
+    # sumber kendali bisa berpindah dari DUA arah: sakelar fisik di remote dan
+    # tombol di dashboard.
+    def _pada_perpindahan_kendali(sebelum, sekarang):
+        if sekarang != manual_source.REMOTE:
+            # Kembali ke mini PC TIDAK melanjutkan misi dengan sendirinya. Misi
+            # yang hidup lagi tanpa diminta adalah kapal yang tiba-tiba bergerak
+            # saat operator mengira sedang memegang kendali.
+            print("[Main] 🖥️ Kendali kembali ke mini PC — misi TIDAK dilanjutkan "
+                  "otomatis. Jalankan ulang dari dashboard bila perlu.")
+            return
+        if mission_engine.status == "RUNNING":
+            print("[Main] 🎮 Remote mengambil alih — misi DIHENTIKAN.")
+            mission_engine.abort_mission()
+            ws_client.send_warning(
+                "warning", "MISI_DIHENTIKAN_REMOTE",
+                "Kendali diambil alih remote — misi dihentikan. "
+                "Jalankan ulang dari dashboard setelah kendali dikembalikan.")
+
+    asv.set_manual_source_callback(_pada_perpindahan_kendali)
 
     ws_client.set_tracker(tracker)
     ws_client.set_tracking_controller(controller)
