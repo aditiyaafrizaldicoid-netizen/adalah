@@ -106,9 +106,26 @@ class UjiPemilihanSumber(unittest.TestCase):
     def test_kamera_tidak_terpasang_jatuh_ke_permukaan_dan_DITANDAI(self):
         frame, sumber, imbuhan = self.pilih(ROLE_BLUE_BOX)
         self.assertEqual(frame[0, 0, 0], 10)
-        self.assertIn("cadangan", sumber)
+        self.assertIn("tidak dipasang", sumber)
         self.assertEqual(imbuhan, "_permukaan",
                          "foto permukaan yang menyamar jadi foto bawah air = bukti palsu")
+
+    def test_tidak_dipasang_TIDAK_dilaporkan_sebagai_kegagalan(self):
+        """
+        Kapal yang sengaja berjalan tanpa kamera bawah air tidak boleh menandai
+        setiap fotonya sebagai kegagalan. Peringatan yang muncul terus-menerus
+        pada keadaan normal melatih operator mengabaikannya — lalu kegagalan yang
+        SUNGGUHAN ikut terlewat.
+        """
+        _, tidak_dipasang, _ = self.pilih(ROLE_BLUE_BOX)
+        self.assertNotIn("cadangan", tidak_dipasang)
+        self.assertNotIn("gagal", tidak_dipasang)
+
+        self.e.set_underwater_camera(KameraBawahAirPalsu(None))
+        _, rusak, _ = self.pilih(ROLE_BLUE_BOX)
+        self.assertIn("cadangan", rusak, "kamera yang dipasang tapi mati HARUS diperingatkan")
+        self.assertNotEqual(tidak_dipasang, rusak,
+                            "dua keadaan yang butuh tindakan berbeda harus terbaca berbeda")
 
     def test_frame_BASI_ditolak_dan_jatuh_ke_permukaan(self):
         """Kamera yang membeku tetap menyimpan frame terakhirnya di memori."""
@@ -158,11 +175,14 @@ class UjiBerkasTersimpan(unittest.TestCase):
         with open(path.replace(".jpg", ".json"), encoding="utf-8") as f:
             self.assertEqual(json.load(f)["kamera"], "bawah air")
 
-    def test_foto_cadangan_jujur_menyebut_permukaan(self):
+    def test_foto_permukaan_jujur_menyebut_kameranya(self):
+        """Nama berkas & sidecar JSON tetap menyatakan ini foto permukaan."""
         path = self.potret(ROLE_BLUE_BOX, None)
         self.assertIn("blue_box_permukaan", os.path.basename(path))
         with open(path.replace(".jpg", ".json"), encoding="utf-8") as f:
-            self.assertIn("cadangan", json.load(f)["kamera"])
+            kamera = json.load(f)["kamera"]
+        self.assertIn("permukaan", kamera)
+        self.assertIn("tidak dipasang", kamera)
 
     def test_box_hijau_nama_berkasnya_tidak_berubah(self):
         path = self.potret(ROLE_GREEN_BOX, KameraBawahAirPalsu(FRAME_BAWAH_AIR))
@@ -175,6 +195,8 @@ class UjiBerkasTersimpan(unittest.TestCase):
         self.potret(ROLE_BLUE_BOX, KameraBawahAirPalsu(FRAME_BAWAH_AIR))
         self.assertEqual(self.e.get_status_dict()["last_photo_camera"], "bawah air")
         self.potret(ROLE_BLUE_BOX, None)
+        self.assertIn("permukaan", self.e.get_status_dict()["last_photo_camera"])
+        self.potret(ROLE_BLUE_BOX, KameraBawahAirPalsu(None))
         self.assertIn("cadangan", self.e.get_status_dict()["last_photo_camera"])
 
     def test_kedua_kamera_gagal_tidak_menjatuhkan_misi(self):

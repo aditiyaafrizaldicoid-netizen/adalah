@@ -1829,17 +1829,26 @@ class MissionEngine:
 
         cam = self._underwater_camera
         if cam is None:
-            print("[MissionEngine] ⚠️ Kamera bawah air tidak terpasang — "
-                  f"{ROLE_LABELS.get(label, label)} difoto dari permukaan.")
-            return frame_permukaan, "permukaan (cadangan)", "_permukaan"
+            # TIDAK DIPASANG — ini pilihan operator di .env, bukan kegagalan.
+            # Dibedakan dari kasus "dipasang tapi gagal" di bawah dengan sengaja:
+            # memberi peringatan pada setiap foto selama berminggu-minggu kapal
+            # berjalan tanpa kamera bawah air hanya melatih orang mengabaikan
+            # peringatan — lalu kegagalan yang SUNGGUHAN ikut terlewat.
+            print(f"[MissionEngine] 🅿️ Kamera bawah air tidak dipasang — "
+                  f"{ROLE_LABELS.get(label, label)} difoto dari kamera permukaan.")
+            return (frame_permukaan,
+                    "permukaan (kamera bawah air tidak dipasang)", "_permukaan")
 
         frame_bawah = cam.ambil_frame()
         if frame_bawah is None:
+            # DIPASANG TAPI TIDAK MEMBERI FRAME — ada yang rusak. Ini yang memang
+            # pantas diperingatkan: operator mengira dapat foto bawah air.
             umur = cam.umur_frame_detik()
             umur_txt = "belum pernah ada frame" if umur == float("inf") else f"frame basi {umur:.1f}s"
-            print(f"[MissionEngine] ⚠️ Kamera bawah air tidak siap ({umur_txt}) — "
-                  f"{ROLE_LABELS.get(label, label)} difoto dari permukaan.")
-            return frame_permukaan, "permukaan (cadangan)", "_permukaan"
+            print(f"[MissionEngine] ⚠️ Kamera bawah air TIDAK SIAP ({umur_txt}) — "
+                  f"{ROLE_LABELS.get(label, label)} terpaksa difoto dari permukaan.")
+            return (frame_permukaan,
+                    "permukaan (cadangan — kamera bawah air gagal)", "_permukaan")
 
         print(f"[MissionEngine] 🌊 {ROLE_LABELS.get(label, label)} difoto dengan "
               f"kamera BAWAH AIR.")
