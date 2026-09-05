@@ -80,7 +80,7 @@ async function handleLogout() {
       <!-- Pembuka drawer sidebar — hanya muncul saat sidebar tidak tampil sendiri -->
       <button
         @click="ui.toggleSidebar()"
-        class="lg:hidden p-2 -ml-1 rounded-lg text-(--text-secondary) hover:text-(--text-primary) hover:bg-(--bg-hover) transition-colors shrink-0"
+        class="lg:hidden relative z-10 p-2 -ml-1 rounded-lg text-(--text-secondary) hover:text-(--text-primary) hover:bg-(--bg-hover) transition-colors shrink-0"
         aria-label="Buka menu"
       >
         <Menu class="w-5 h-5" />
@@ -109,7 +109,14 @@ async function handleLogout() {
       </div>
     </div>
 
-    <div class="flex items-center gap-2 sm:gap-6 shrink-0">
+    <!-- BUG LAPANGAN (di ponsel): grup ini dulu `shrink-0` dan lebarnya 465px di
+         layar 375px. Karena tidak boleh menyusut, ia meluber ke KIRI dan menimpa
+         tombol hamburger — menekan "Buka menu" sebenarnya menekan tombol ganti
+         tema yang menindihnya, sehingga menu Calibration & Mission Control tidak
+         pernah bisa dibuka dari HP. KILL SWITCH pun terdorong keluar layar.
+         Sekarang: boleh menyusut, dan isi yang tidak penting disembunyikan di
+         layar sempit sehingga tidak pernah ada yang perlu menyusut sampai rusak. -->
+    <div class="flex items-center gap-1.5 sm:gap-6 min-w-0">
       <!-- Theme Toggle -->
       <button @click="themeStore.toggleTheme()"
         class="p-2 rounded-lg transition-all duration-300 border border-(--border-primary)"
@@ -127,7 +134,7 @@ async function handleLogout() {
           <Battery class="w-5 h-5 text-success" />
           <span class="text-sm font-mono font-bold text-(--text-primary)">{{ vessel.batteryPct.toFixed(2) }}%</span>
         </div>
-        <div class="flex items-center gap-2">
+        <div class="hidden sm:flex items-center gap-2">
           <Clock class="w-5 h-5 text-primary" />
           <span class="text-sm font-mono font-bold text-(--text-primary)">{{ currentTime }}</span>
         </div>
@@ -138,7 +145,7 @@ async function handleLogout() {
       <!-- Sesi operator. Fallback "Masuk" tetap perlu: token bisa kedaluwarsa atau
            dibersihkan saat aplikasi terbuka, tanpa navigasi baru yang memicu guard. -->
       <div v-if="auth.isAuthenticated" class="flex items-center gap-2">
-        <div class="flex items-center gap-2 bg-(--bg-secondary) px-3 py-1.5 rounded-full border border-(--border-subtle)">
+        <div class="hidden sm:flex items-center gap-2 bg-(--bg-secondary) px-3 py-1.5 rounded-full border border-(--border-subtle)">
           <User class="w-4 h-4 text-primary" />
           <span class="text-xs font-bold text-(--text-primary)">{{ userLabel }}</span>
           <span class="text-[10px] font-bold uppercase tracking-widest text-(--text-muted)">
@@ -165,14 +172,18 @@ async function handleLogout() {
         @click="handleKillSwitch"
         :disabled="isKillActive"
         :class="[
-          'px-5 py-2 rounded-lg font-black text-xs flex items-center gap-2 transition-all active:scale-95 uppercase tracking-wider shadow-lg',
+          'px-2.5 sm:px-5 py-2 rounded-lg font-black text-xs flex items-center gap-2 transition-all active:scale-95 uppercase tracking-wider shadow-lg shrink-0',
           isKillActive
             ? 'bg-orange-600 text-white cursor-not-allowed shadow-orange-600/30 animate-pulse'
             : (mission.missionStatus === 'RUNNING' || vessel.isArmed) ? 'bg-danger hover:bg-red-600 text-white shadow-danger/30 animate-pulse'
               : 'bg-danger/80 hover:bg-danger text-white shadow-danger/20'
         ]">
-        <ShieldOff class="w-4 h-4" />
-        {{ killLabel }}
+        <ShieldOff class="w-4 h-4 shrink-0" />
+        <!-- Tulisannya disembunyikan di layar sempit, TOMBOLNYA tidak: ini
+             pemutus darurat, dan sebelumnya ia terdorong sampai separuh keluar
+             layar di HP. Ikon perisai sendiri sudah cukup dikenali, dan yang
+             tidak boleh adalah tombol ini jadi sulit ditekan saat dibutuhkan. -->
+        <span class="hidden sm:inline">{{ killLabel }}</span>
       </button>
     </div>
   </header>

@@ -50,6 +50,24 @@ onUnmounted(() => {
 // tooltip nama menu, jadi ikon tanpa label akan menjadi tebak-tebakan.
 const collapsed = computed(() => isCollapsed.value && isDesktop.value);
 
+/**
+ * Posisi drawer, diturunkan langsung dari state sebagai style.
+ *
+ * Sebelumnya disusun dari TIGA utility yang menulis properti yang sama:
+ * `lg:translate-x-0`, `translate-x-0`, dan `-translate-x-full`. Di Tailwind v4
+ * ketiganya menulis `translate` lewat variabel `--tw-translate-x`, sehingga siapa
+ * yang menang ditentukan urutan di CSS hasil build — bukan urutan di atribut
+ * class, dan bukan sesuatu yang terbaca dari berkas ini.
+ *
+ * CATATAN JUJUR: versi lama itu diuji dan ternyata BEKERJA. Ini penyederhanaan
+ * supaya perilakunya bisa dibaca langsung dari satu ekspresi, bukan perbaikan bug.
+ * Bug yang sebenarnya membuat menu tidak bisa dibuka di ponsel ada di Topbar —
+ * lihat catatan di layout/Topbar.vue.
+ */
+const gayaGeser = computed(() => ({
+  transform: (isDesktop.value || ui.sidebarOpen) ? 'translateX(0)' : 'translateX(-100%)',
+}));
+
 const isDark = computed(() => themeStore.theme === 'dark');
 
 const menuItems = [
@@ -84,10 +102,10 @@ const navigate = (path) => {
       'bg-(--bg-sidebar) border-r border-(--border-primary) transition-all duration-300 flex flex-col',
       // Layar sempit: drawer melayang di atas konten, digeser keluar layar saat tutup.
       // Layar lebar (lg+): kembali jadi kolom biasa dalam alur flex MainLayout.
-      'fixed inset-y-0 left-0 z-50 w-64 lg:static lg:z-auto lg:translate-x-0',
-      ui.sidebarOpen ? 'translate-x-0' : '-translate-x-full',
+      'fixed inset-y-0 left-0 z-50 w-64 lg:static lg:z-auto',
       collapsed ? 'lg:w-20' : 'lg:w-64',
     ]"
+    :style="gayaGeser"
   >
     <!-- Logo Section -->
     <div class="p-6 flex items-center justify-between border-b border-(--border-primary)">

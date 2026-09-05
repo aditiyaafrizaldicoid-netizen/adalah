@@ -49,11 +49,18 @@ watch(() => route.query.tab, (tab) => {
       <p class="text-(--text-secondary) text-xs mt-1 uppercase tracking-widest font-bold">Hardware Fine-Tuning & AI PID Control</p>
     </div>
 
-    <div class="flex-1 flex gap-6 overflow-hidden">
-      <!-- Sidebar Tabs -->
-      <div class="w-64 shrink-0 flex flex-col gap-2 overflow-y-auto pr-2">
+    <!-- BUG LAPANGAN (di ponsel): dulu selalu dua kolom bersebelahan — daftar tab
+         selebar TETAP 256px + jarak 24px di layar 375px menyisakan ~71px untuk
+         panel isinya. Halaman Calibration praktis tidak bisa dipakai dari HP:
+         terbuka, tapi isinya terjepit jadi sepotong pita.
+         Di layar sempit sekarang menumpuk — tab jadi baris yang bisa digeser
+         mendatar, isinya di bawah dengan lebar penuh. -->
+    <div class="flex-1 flex flex-col lg:flex-row gap-3 lg:gap-6 overflow-hidden min-h-0">
+      <!-- Daftar tab: baris geser di layar sempit, kolom di layar lebar -->
+      <div class="flex lg:flex-col gap-2 shrink-0 overflow-x-auto lg:overflow-x-visible
+                  lg:overflow-y-auto lg:w-64 pb-1 lg:pb-0 lg:pr-2">
         <button v-for="tab in tabs" :key="tab.id" @click="changeTab(tab.id)" :class="[
-          'flex items-center gap-4 px-5 py-4 rounded-xl font-bold text-sm transition-all border shrink-0',
+          'flex items-center gap-2 lg:gap-4 px-4 lg:px-5 py-3 lg:py-4 rounded-xl font-bold text-xs lg:text-sm transition-all border shrink-0 whitespace-nowrap',
           activeTab === tab.id
             ? 'bg-primary text-slate-900 border-primary shadow-lg shadow-primary/10'
             : 'bg-card/50 text-(--text-secondary) border-(--border-subtle)/50 hover:bg-(--bg-secondary) hover:text-(--text-primary)'
@@ -64,7 +71,7 @@ watch(() => route.query.tab, (tab) => {
       </div>
 
       <!-- Content Area (Modular Components) -->
-      <div class="flex-1 glass-card p-8 overflow-y-auto">
+      <div class="flex-1 glass-card p-4 sm:p-6 lg:p-8 overflow-y-auto min-h-0">
         <transition name="fade" mode="out-in">
           <div :key="activeTab">
             <PidTuningCard v-if="activeTab === 'pid'" />
