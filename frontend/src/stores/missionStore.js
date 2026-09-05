@@ -661,6 +661,189 @@ export const STEP_TYPES = [
   // KIRI, jadi SATU box yang terlihat sudah cukup untuk tahu di sebelah mana
   // celahnya. Kapal berhenti dan memusatkan tiap box sebelum menjepret, lalu
   // kembali menyusuri celah menuju box berikutnya.
+  // BALL_SEEK & BALL_STOP — dua langkah docking yang sederhana.
+  //
+  // DOCKING mengurus semuanya sekaligus: mengunci sisi, merekonstruksi bola tengah
+  // yang hilang, menjaga toleransi 5 cm. Kuat, tapi banyak yang harus benar sebelum
+  // satu percobaan bisa dinilai — dan kalau meleset, sulit tahu bagian mana yang
+  // salah. Dua step di bawah memecahnya jadi potongan yang masing-masing hanya
+  // melakukan SATU hal:
+  //
+  //     BALL_SEEK  dibatasi WAKTU   : cari bola → dekati sekian detik
+  //     BALL_STOP  dibatasi UKURAN  : dekati → berhenti saat bola sebesar ambang
+  //
+  // Dirangkai berurutan, keduanya memberi pendekatan bertahap: kasar dulu dengan
+  // batas waktu, lalu halus dengan batas jarak.
+  {
+    type: "BALL_SEEK",
+    label: "Bola: Cari → Dekati (durasi)",
+    icon: "🔎",
+    color: "text-sky-400",
+    bg: "bg-sky-500/10 border-sky-500/30",
+    fields: [
+      {
+        key: "search_throttle",
+        label: "1. CARI — Throttle",
+        type: "number",
+        default: 0.22,
+      },
+      {
+        key: "search_steer",
+        label: "1. CARI — Belok (− kiri / + kanan)",
+        type: "number",
+        default: 0.2,
+        // Arah SEKALIGUS ketajaman sapuan dalam satu angka bertanda.
+      },
+      {
+        key: "search_timeout_sec",
+        label: "1. CARI — Menyerah Setelah (s)",
+        type: "number",
+        default: 25,
+        // Tidak ketemu → step diselesaikan, bukan digantung. Kapal yang menyapu
+        // tanpa batas akan keluar arena.
+      },
+      {
+        key: "approach_throttle",
+        label: "2. DEKATI — Throttle",
+        type: "number",
+        default: 0.2,
+      },
+      {
+        key: "approach_sec",
+        label: "2. DEKATI — Durasi (s)",
+        type: "number",
+        default: 4.0,
+        // Hitungannya berjalan HANYA selama bola terlihat, dan diakumulasi lintas
+        // kedipan deteksi — jadi 4 detik berarti empat detik benar-benar mendekat,
+        // bukan empat detik sejak bola pertama kali terlihat.
+      },
+      {
+        key: "steer_gain",
+        label: "2. DEKATI — Sensitivitas Pemusatan",
+        type: "number",
+        default: 1.0,
+      },
+      {
+        key: "max_steer",
+        label: "2. DEKATI — Batas Kemudi",
+        type: "number",
+        default: 0.45,
+      },
+      {
+        key: "min_detect_area_px2",
+        label: "Abaikan Bbox < (px²)",
+        type: "number",
+        default: 1500,
+      },
+      {
+        key: "lost_grace_sec",
+        label: "Toleransi Bola Hilang (s)",
+        type: "number",
+        default: 1.0,
+      },
+      {
+        key: "max_duration_sec",
+        label: "Batas Keras Seluruh Step (s)",
+        type: "number",
+        default: 90,
+      },
+    ],
+  },
+
+  {
+    type: "BALL_STOP",
+    label: "Bola: Berhenti di Ukuran Tertentu",
+    icon: "🛑",
+    color: "text-rose-400",
+    bg: "bg-rose-500/10 border-rose-500/30",
+    fields: [
+      {
+        key: "search_throttle",
+        label: "1. CARI — Throttle",
+        type: "number",
+        default: 0.22,
+      },
+      {
+        key: "search_steer",
+        label: "1. CARI — Belok (− kiri / + kanan)",
+        type: "number",
+        default: 0.2,
+      },
+      {
+        key: "search_timeout_sec",
+        label: "1. CARI — Menyerah Setelah (s)",
+        type: "number",
+        default: 25,
+      },
+      {
+        key: "approach_throttle",
+        label: "2. DEKATI — Throttle",
+        type: "number",
+        default: 0.2,
+      },
+      {
+        key: "stop_area_px2",
+        label: "3. BERHENTI — Ukuran Bola (px²)",
+        type: "number",
+        default: 30000,
+        // INI yang menentukan pada JARAK berapa kapal berhenti. Bola yang makin
+        // besar di layar berarti makin dekat, jadi satu angka px² sudah cukup —
+        // tidak perlu tahu jarak sebenarnya. Perbesar = berhenti lebih dekat.
+        // Ditulis dalam satuan 1920x1080 dan diskalakan otomatis ke resolusi
+        // kamera; jangan dikonversi sendiri.
+      },
+      {
+        key: "stop_throttle",
+        label: "3. BERHENTI — Throttle (0 = berhenti total)",
+        type: "number",
+        default: 0,
+        // Nilai di atas throttle DEKATI dijepit otomatis oleh kapal. Kapal yang
+        // menambah gas justru saat paling dekat dengan bola adalah persis
+        // kesalahan yang membuat docking sebelumnya menabrak.
+        // Naikkan sedikit (mis. 0.05) HANYA kalau kapal berhenti terlalu jauh.
+      },
+      {
+        key: "hold_sec",
+        label: "3. BERHENTI — Tahan (s)",
+        type: "number",
+        default: 2.0,
+      },
+      {
+        key: "steer_gain",
+        label: "Sensitivitas Pemusatan",
+        type: "number",
+        default: 1.0,
+      },
+      {
+        key: "max_steer",
+        label: "Batas Kemudi",
+        type: "number",
+        default: 0.45,
+      },
+      {
+        key: "min_detect_area_px2",
+        label: "Abaikan Bbox < (px²)",
+        type: "number",
+        default: 1500,
+      },
+      {
+        key: "lost_grace_sec",
+        label: "Toleransi Bola Hilang (s)",
+        type: "number",
+        default: 1.0,
+        // Bola hilang lebih lama dari ini SELAGI MENDEKAT dianggap sudah sangat
+        // dekat — bola keluar frame atau tenggelam di bawah haluan — jadi kapal
+        // BERHENTI, bukan maju buta.
+      },
+      {
+        key: "max_duration_sec",
+        label: "Batas Keras Seluruh Step (s)",
+        type: "number",
+        default: 90,
+      },
+    ],
+  },
+
   // DOCKING — menabrak DUA dari tiga bola biru yang berjajar.
   //
   // Lambung 40 cm lebih sempit daripada rentang ketiga bola 60 cm, jadi ketiganya

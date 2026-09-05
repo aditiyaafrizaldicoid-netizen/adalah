@@ -100,6 +100,8 @@ class MissionEngine:
     STEP_TYPE_STEER_UNTIL_BOX = "STEER_UNTIL_BOX"  # TIMED_STEER yang berhenti saat BOX (biru/hijau) terlihat
     STEP_TYPE_BOX_APPROACH   = "BOX_APPROACH"    # Cari box → dekati → menghindar. Tanpa foto, semua parameternya bisa di-tuning
     STEP_TYPE_DOCKING        = "DOCKING"         # Docking: tabrak 2 dari 3 bola biru yang berjajar
+    STEP_TYPE_BALL_SEEK      = "BALL_SEEK"       # Cari bola biru, lalu dekati selama durasi tertentu
+    STEP_TYPE_BALL_STOP      = "BALL_STOP"       # Dekati bola biru, berhenti saat ukurannya mencapai ambang
 
     # Step yang dianggap "misi tracking buoy". Menyelesaikan salah satunya membuka
     # kunci PHOTO_BOX (lihat tracking_buoy_completed & _advance_step).
@@ -782,6 +784,66 @@ class MissionEngine:
 
     DOCK_MAX_DURATION_SEC = 120.0   # step['max_duration_sec']
 
+    # ══════════════════════════════════════════════════════════════════════
+    #  BALL_SEEK / BALL_STOP — dua langkah docking yang sederhana
+    # ══════════════════════════════════════════════════════════════════════
+    # DOCKING mengurus semuanya sekaligus: mengunci sisi, merekonstruksi bola
+    # tengah yang hilang, menjaga toleransi 5 cm. Kuat, tapi banyak yang harus
+    # benar sebelum satu percobaan bisa dinilai — dan kalau meleset, sulit tahu
+    # bagian mana yang salah.
+    #
+    # Dua step ini memecahnya jadi potongan yang masing-masing hanya melakukan
+    # SATU hal, dan bisa dirangkai:
+    #
+    #   BALL_SEEK  : cari bola biru → dekati selama waktu yang ditentukan
+    #   BALL_STOP  : dekati bola biru → berhenti saat ukurannya mencapai ambang
+    #
+    # Keduanya membidik bola yang sama dan memakai kemudi yang sama, jadi
+    # menaruh BALL_SEEK lalu BALL_STOP memberi pendekatan bertahap: kasar dulu
+    # dengan batas waktu, lalu halus dengan batas jarak.
+
+    # ---- Sasaran & deteksi (dipakai kedua step) ----
+    BALL_MIN_DETECT_AREA_PX2 = 1500  # step['min_detect_area_px2']
+    BALL_STEER_GAIN = 1.0            # step['steer_gain']
+    BALL_MAX_STEER = 0.45            # step['max_steer']
+    BALL_LOST_GRACE_SEC = 1.0        # step['lost_grace_sec']
+                                     #   Bola berkedip hilang → tahan kemudi terakhir
+                                     #   dulu, jangan langsung meluruskan haluan.
+
+    # ---- Fase mencari (dipakai kedua step) ----
+    BALL_SEARCH_THROTTLE = 0.22      # step['search_throttle']
+    BALL_SEARCH_STEER = 0.2          # step['search_steer']  negatif = kiri
+    BALL_SEARCH_TIMEOUT_SEC = 25.0   # step['search_timeout_sec']
+                                     #   Tidak ketemu selama ini → step DISELESAIKAN,
+                                     #   bukan digantung. Kapal yang menyapu tanpa
+                                     #   batas akan keluar arena.
+
+    # ---- BALL_SEEK: mendekat selama waktu tertentu ----
+    BALL_APPROACH_THROTTLE = 0.2     # step['approach_throttle']
+    BALL_APPROACH_SEC = 4.0          # step['approach_sec']
+                                     #   Lama mendekat SETELAH bola ketemu. Hitungannya
+                                     #   berjalan hanya selama bola terlihat — lihat
+                                     #   catatan di _ball_seek().
+
+    # ---- BALL_STOP: berhenti pada ukuran tertentu ----
+    BALL_STOP_AREA_PX2 = 30000       # step['stop_area_px2']
+                                     #   Luas bbox bola saat kapal dianggap sudah
+                                     #   cukup dekat. INI yang menentukan jaraknya.
+    BALL_STOP_THROTTLE = 0.0         # step['stop_throttle']
+                                     #   0 = berhenti total, kapal meluncur merapat.
+                                     #   Nilai di atas throttle mendekat dijepit
+                                     #   otomatis — kapal tidak boleh menambah gas
+                                     #   justru saat paling dekat dengan bola.
+    BALL_STOP_HOLD_SEC = 2.0         # step['hold_sec']
+                                     #   Lama menahan diam sebelum step diselesaikan.
+
+    BALL_MAX_DURATION_SEC = 90.0     # step['max_duration_sec']  batas keras
+
+    # ---- Fase ----
+    BALL_SEARCH = "SEARCH"
+    BALL_APPROACH = "APPROACH"
+    BALL_HOLD = "BERHENTI"
+
     def __init__(self, asv, tracker, tracking_controller, speed_scheduler: Optional[SpeedScheduler] = None,
                  camera_width: int = REFERENCE_FRAME_WIDTH, camera_height: int = REFERENCE_FRAME_HEIGHT):
         self.asv = asv
@@ -851,6 +913,13 @@ class MissionEngine:
         self._dock_bertiga_sejak: Optional[float] = None
         self._dock_ram_steer: float = 0.0
         self._dock_rasio_pasangan: float = 0.0
+
+        # State BALL_SEEK / BALL_STOP (di-reset tiap kali step-nya dimulai)
+        self._ball_phase: str = self.BALL_SEARCH
+        self._ball_phase_since: float = 0.0
+        self._ball_last_steer: float = 0.0
+        self._ball_last_seen_at: float = 0.0
+        self._ball_approach_akum: float = 0.0   # akumulasi waktu mendekat
         # Deteksi box milik frame yang sedang diproses — lihat catatan di update_frame().
         self._frame_boxes: Dict[str, List] = {}
 
@@ -1227,6 +1296,7 @@ class MissionEngine:
                 # kalau foto box biru diam-diam jatuh ke kamera permukaan.
                 "underwater_ready": self.underwater_siap,
                 "last_photo_camera": self._foto_terakhir_kamera,
+                "ball_phase": self._ball_phase,
                 "dock_phase": self._dock_phase,
                 "dock_pilihan": self._dock_pilihan,
                 "dock_alasan": self._dock_alasan,
@@ -1302,6 +1372,14 @@ class MissionEngine:
                     self._reset_boxch_state()
                     if self.asv and self.asv.is_connected() and self.asv.get_telemetry().mode != "MANUAL":
                         print("[MissionEngine] 🔄 Switch mode → MANUAL untuk BOX_CHANNEL...")
+                        self.asv.set_mode("MANUAL")
+
+                elif step_type in (self.STEP_TYPE_BALL_SEEK, self.STEP_TYPE_BALL_STOP):
+                    # MANUAL + RC override, sama seperti step berbasis kamera lain:
+                    # kemudi harus merespons per frame.
+                    self._reset_ball_state()
+                    if self.asv and self.asv.is_connected() and self.asv.get_telemetry().mode != "MANUAL":
+                        print(f"[MissionEngine] 🔄 Switch mode → MANUAL untuk {step_type}...")
                         self.asv.set_mode("MANUAL")
 
                 elif step_type == self.STEP_TYPE_DOCKING:
@@ -1416,6 +1494,13 @@ class MissionEngine:
             elif step_type == self.STEP_TYPE_PHOTO_BOX:
                 return self._handle_photo_box(step, frame, gate_x, detected_balls,
                                               self._frame_boxes)
+
+            # ---- BALL_SEEK / BALL_STOP ----
+            elif step_type == self.STEP_TYPE_BALL_SEEK:
+                return self._handle_ball(step, frame, gate_x, detected_balls, self._ball_seek)
+
+            elif step_type == self.STEP_TYPE_BALL_STOP:
+                return self._handle_ball(step, frame, gate_x, detected_balls, self._ball_stop)
 
             # ---- DOCKING ----
             elif step_type == self.STEP_TYPE_DOCKING:
@@ -2906,6 +2991,261 @@ class MissionEngine:
         if self._bap_phase != fase:
             self._bap_phase = fase
             self._bap_phase_since = time.time()
+
+    # ------------------------------------------------------------------ #
+    #  BALL_SEEK / BALL_STOP — dua langkah docking sederhana              #
+    # ------------------------------------------------------------------ #
+
+    def _handle_ball(self, step, frame, gate_x, detected_balls, fungsi):
+        """Adapter dispatch → handler bola; rekursi saat step selesai."""
+        idx_sebelum = self._current_step_idx
+        hasil = fungsi(step, detected_balls or {})
+        if self._current_step_idx != idx_sebelum:
+            return self.update_frame(frame, gate_x, detected_balls)
+        return hasil
+
+    def _ball_target(self, step: Dict, detected_balls: Dict):
+        """
+        Bola biru TERBESAR yang lolos ambang deteksi, atau None.
+
+        Terbesar = paling dekat ke kamera. Dipilih begitu, bukan yang pertama dari
+        YOLO: urutan keluaran YOLO tidak menjamin apa pun, dan mengunci bola jauh
+        saat ada yang dekat membuat kapal melewati sasaran yang benar.
+        """
+        min_area = self._area_dari_step(step, "min_detect_area_px2",
+                                        self.BALL_MIN_DETECT_AREA_PX2)
+        terbaik, luas_terbaik = None, 0.0
+        for b in (detected_balls.get("blue") or []):
+            luas = self._bbox_area(b)
+            if luas >= min_area and luas > luas_terbaik:
+                terbaik, luas_terbaik = b, luas
+        return terbaik
+
+    def _ball_steer(self, step: Dict, error_px: float) -> float:
+        gain = self._safe_float(step.get("steer_gain"), self.BALL_STEER_GAIN)
+        batas = min(1.0, abs(self._safe_float(step.get("max_steer"), self.BALL_MAX_STEER)))
+        s = (gain * error_px) / max(1.0, self.camera_width / 2.0)
+        return max(-batas, min(batas, s))
+
+    def _ball_throttle(self, step: Dict, key: str, default: float) -> float:
+        return max(0.0, min(1.0, self._safe_float(step.get(key), default)))
+
+    def _ball_set_phase(self, fase: str):
+        if self._ball_phase == fase:
+            return
+        # Waktu mendekat DIAKUMULASI, bukan di-reset tiap kali bola hilang sekejap.
+        # Kalau di-reset, bola yang berkedip membuat kapal mendekat berkali-kali
+        # selama durasi penuh — jauh lebih lama dari yang diminta operator.
+        if self._ball_phase == self.BALL_APPROACH and self._ball_phase_since:
+            self._ball_approach_akum += max(0.0, time.time() - self._ball_phase_since)
+        self._ball_phase = fase
+        self._ball_phase_since = time.time()
+
+    def _ball_lama_mendekat(self, sekarang: float) -> float:
+        """Total waktu yang sudah dihabiskan MENDEKAT, lintas kedipan deteksi."""
+        berjalan = (sekarang - self._ball_phase_since
+                    if self._ball_phase == self.BALL_APPROACH else 0.0)
+        return self._ball_approach_akum + max(0.0, berjalan)
+
+    def _reset_ball_state(self):
+        """Kembalikan state BALL_SEEK/BALL_STOP ke awal. Dipanggil saat step dimulai."""
+        self._ball_phase = self.BALL_SEARCH
+        self._ball_phase_since = time.time()
+        self._ball_last_steer = 0.0
+        self._ball_last_seen_at = 0.0
+        self._ball_approach_akum = 0.0
+
+    def _ball_batas_keras(self, step: Dict, sekarang: float, nama: str):
+        """True kalau step sudah harus dihentikan paksa."""
+        batas = self._safe_float(step.get("max_duration_sec"), self.BALL_MAX_DURATION_SEC)
+        if batas > 0 and self._step_start_time and (sekarang - self._step_start_time) >= batas:
+            print(f"[MissionEngine] ⏱️ {nama} dihentikan — batas {batas:.0f}s terlampaui "
+                  f"di fase {self._ball_phase}.")
+            self._advance_step()
+            return True
+        return False
+
+    def _ball_mencari(self, step: Dict, sekarang: float, nama: str
+                      ) -> Tuple[float, float, str]:
+        """Bola tidak terlihat: sapu ke arah yang diminta, lalu menyerah."""
+        # Kedip deteksi saat sedang mendekat: tahan kemudi terakhir. Meluruskan
+        # haluan tiap kali YOLO berkedip satu frame membuang bidikan yang sudah ada.
+        if self._ball_phase == self.BALL_APPROACH:
+            jeda = self._safe_float(step.get("lost_grace_sec"), self.BALL_LOST_GRACE_SEC)
+            if self._ball_last_seen_at > 0.0 and (sekarang - self._ball_last_seen_at) < jeda:
+                thr = self._ball_throttle(step, "approach_throttle",
+                                          self.BALL_APPROACH_THROTTLE)
+                return self._ball_last_steer, thr, f"{nama} | bola hilang sekejap"
+
+        self._ball_set_phase(self.BALL_SEARCH)
+        lama = sekarang - self._ball_phase_since
+        batas = self._safe_float(step.get("search_timeout_sec"), self.BALL_SEARCH_TIMEOUT_SEC)
+        if batas > 0 and lama >= batas:
+            print(f"[MissionEngine] ⏱️ {nama} selesai — bola biru tidak ketemu "
+                  f"dalam {lama:.0f}s.")
+            self._advance_step()
+            return 0.0, 0.0, f"{nama} | TIDAK KETEMU"
+
+        steer = max(-1.0, min(1.0, self._safe_float(step.get("search_steer"),
+                                                    self.BALL_SEARCH_STEER)))
+        thr = self._ball_throttle(step, "search_throttle", self.BALL_SEARCH_THROTTLE)
+        arah = "←" if steer < -0.05 else ("→" if steer > 0.05 else "↑")
+        return steer, thr, f"{nama} | CARI {arah} {lama:.0f}/{batas:.0f}s"
+
+    # ── FITUR 1 ────────────────────────────────────────────────────────────
+
+    def _ball_seek(self, step: Dict, detected_balls: Dict) -> Tuple[float, float, str]:
+        """
+        Cari bola biru, lalu DEKATI selama durasi yang ditentukan.
+
+            CARI ──► DEKATI (approach_sec detik) ──► step selesai
+
+        Yang membatasi langkah ini adalah WAKTU, bukan jarak. Pasangkan dengan
+        BALL_STOP sesudahnya kalau ingin pendekatan akhir yang dibatasi ukuran
+        bola: kasar dulu dengan waktu, lalu halus dengan jarak.
+
+        Hitungan waktunya berjalan HANYA selama bola terlihat, dan diakumulasi
+        lintas kedipan deteksi — jadi "dekati 4 detik" berarti empat detik benar-
+        benar mendekat, bukan empat detik sejak bola pertama kali terlihat.
+
+        Field step (semua opsional, di-parse aman):
+          search_throttle, search_steer, search_timeout_sec
+          approach_throttle, approach_sec
+          steer_gain, max_steer, min_detect_area_px2, lost_grace_sec
+          max_duration_sec
+        """
+        sekarang = time.time()
+        if self._ball_batas_keras(step, sekarang, "BALL_SEEK"):
+            return 0.0, 0.0, "BALL_SEEK | BATAS WAKTU"
+
+        bola = self._ball_target(step, detected_balls)
+        if bola is None:
+            return self._ball_mencari(step, sekarang, "BALL_SEEK")
+
+        self._ball_last_seen_at = sekarang
+        self._ball_set_phase(self.BALL_APPROACH)
+
+        setengah = self.camera_width / 2.0
+        error_px = float(bola[0]) - setengah
+        steer = self._ball_steer(step, error_px)
+        self._ball_last_steer = steer
+
+        durasi = max(0.0, self._safe_float(step.get("approach_sec"),
+                                           self.BALL_APPROACH_SEC))
+        lama = self._ball_lama_mendekat(sekarang)
+        if lama >= durasi:
+            print(f"[MissionEngine] ✅ BALL_SEEK selesai — mendekat {lama:.1f}s "
+                  f"(diminta {durasi:.1f}s).")
+            self._advance_step()
+            return 0.0, 0.0, "BALL_SEEK | SELESAI"
+
+        thr = self._ball_throttle(step, "approach_throttle", self.BALL_APPROACH_THROTTLE)
+        return steer, thr, (f"BALL_SEEK | DEKATI {lama:.1f}/{durasi:.1f}s "
+                            f"err={error_px:+.0f}px")
+
+    # ── FITUR 2 ────────────────────────────────────────────────────────────
+
+    def _ball_stop(self, step: Dict, detected_balls: Dict) -> Tuple[float, float, str]:
+        """
+        Dekati bola biru, BERHENTI saat ukurannya mencapai ambang.
+
+            CARI ──► DEKATI ──► BERHENTI (throttle diputus) ──► step selesai
+
+        Yang membatasi langkah ini adalah UKURAN BOLA DI LAYAR, bukan waktu.
+        Bola yang makin besar berarti makin dekat, jadi satu angka px² menentukan
+        pada jarak berapa kapal berhenti — tanpa perlu tahu jarak sebenarnya.
+
+        Throttle berhenti TIDAK PERNAH boleh melebihi throttle mendekat. Kapal
+        yang menambah gas justru saat paling dekat dengan bola adalah persis
+        kesalahan yang membuat docking sebelumnya menabrak.
+
+        Field step (semua opsional, di-parse aman):
+          search_throttle, search_steer, search_timeout_sec
+          approach_throttle
+          stop_area_px2, stop_throttle, hold_sec
+          steer_gain, max_steer, min_detect_area_px2, lost_grace_sec
+          max_duration_sec
+        """
+        sekarang = time.time()
+        if self._ball_batas_keras(step, sekarang, "BALL_STOP"):
+            return 0.0, 0.0, "BALL_STOP | BATAS WAKTU"
+
+        # BERHENTI didahulukan: begitu masuk fase ini, deteksi yang berkedip tidak
+        # boleh lagi mengubah apa pun — kapal memang sedang menunggu diam.
+        if self._ball_phase == self.BALL_HOLD:
+            return self._ball_menahan(step, sekarang)
+
+        bola = self._ball_target(step, detected_balls)
+        if bola is None:
+            # Kalau bola HILANG selagi mendekat lebih lama dari toleransi, kapal
+            # sudah sangat dekat — bola keluar frame atau tenggelam di bawah
+            # haluan. Berhenti jauh lebih baik daripada maju buta.
+            jeda = self._safe_float(step.get("lost_grace_sec"), self.BALL_LOST_GRACE_SEC)
+            if (self._ball_phase == self.BALL_APPROACH
+                    and self._ball_last_seen_at > 0.0
+                    and (sekarang - self._ball_last_seen_at) >= jeda):
+                return self._ball_mulai_berhenti(step, sekarang,
+                                                 "bola hilang di jarak dekat")
+            return self._ball_mencari(step, sekarang, "BALL_STOP")
+
+        self._ball_last_seen_at = sekarang
+        self._ball_set_phase(self.BALL_APPROACH)
+
+        setengah = self.camera_width / 2.0
+        error_px = float(bola[0]) - setengah
+        steer = self._ball_steer(step, error_px)
+        self._ball_last_steer = steer
+
+        luas = self._bbox_area(bola)
+        ambang = self._area_dari_step(step, "stop_area_px2", self.BALL_STOP_AREA_PX2)
+        if luas >= ambang:
+            return self._ball_mulai_berhenti(
+                step, sekarang, f"ukuran bola {luas/max(1.0, ambang):.0%} dari ambang")
+
+        thr = self._ball_throttle(step, "approach_throttle", self.BALL_APPROACH_THROTTLE)
+        return steer, thr, (f"BALL_STOP | DEKATI {luas/max(1.0, ambang):.0%} "
+                            f"err={error_px:+.0f}px")
+
+    def _ball_throttle_berhenti(self, step: Dict) -> float:
+        """
+        Throttle fase BERHENTI — dijepit agar tidak melebihi throttle mendekat.
+
+        Angka boleh salah diketik di panel; yang tidak boleh adalah kapal
+        mempercepat diri di jarak paling rawan.
+        """
+        mendekat = self._ball_throttle(step, "approach_throttle",
+                                       self.BALL_APPROACH_THROTTLE)
+        diminta = self._ball_throttle(step, "stop_throttle", self.BALL_STOP_THROTTLE)
+        if diminta > mendekat:
+            print(f"[MissionEngine] ⚠️ BALL_STOP: throttle berhenti {diminta:.2f} lebih "
+                  f"besar dari throttle mendekat {mendekat:.2f} — dijepit ke "
+                  f"{mendekat:.2f}.")
+            return mendekat
+        return diminta
+
+    def _ball_mulai_berhenti(self, step: Dict, sekarang: float, alasan: str
+                             ) -> Tuple[float, float, str]:
+        self._ball_set_phase(self.BALL_HOLD)
+        print(f"[MissionEngine] 🛑 BALL_STOP berhenti — {alasan}. Throttle diputus.")
+        return self._ball_menahan(step, sekarang)
+
+    def _ball_menahan(self, step: Dict, sekarang: float) -> Tuple[float, float, str]:
+        """Throttle diputus; kapal meluncur merapat lalu step selesai."""
+        durasi = max(0.0, self._safe_float(step.get("hold_sec"), self.BALL_STOP_HOLD_SEC))
+        lama = sekarang - self._ball_phase_since
+        thr = self._ball_throttle_berhenti(step)
+
+        if thr <= 0.0 and self.asv and self.asv.is_connected():
+            # Bukan sekadar berhenti mengirim gas: perintah berhenti dikirim tegas
+            # supaya kapal benar-benar melambat.
+            self.asv.stop_movement(silent=True)
+
+        if lama < durasi:
+            return 0.0, thr, f"BALL_STOP | BERHENTI {lama:.1f}/{durasi:.1f}s thr={thr:.2f}"
+
+        print(f"[MissionEngine] ✅ BALL_STOP selesai — menahan {durasi:.1f}s tuntas.")
+        self._advance_step()
+        return 0.0, 0.0, "BALL_STOP | SELESAI"
 
     # ------------------------------------------------------------------ #
     #  DOCKING — tabrak 2 dari 3 bola biru yang berjajar                  #
@@ -4731,6 +5071,8 @@ class MissionEngine:
         self.BAP_MIN_DETECT_AREA_PX2 = round(MissionEngine.BAP_MIN_DETECT_AREA_PX2 * area_scale)
         self.DOCK_STOP_AREA_PX2 = round(MissionEngine.DOCK_STOP_AREA_PX2 * area_scale)
         self.DOCK_MIN_DETECT_AREA_PX2 = round(MissionEngine.DOCK_MIN_DETECT_AREA_PX2 * area_scale)
+        self.BALL_STOP_AREA_PX2 = round(MissionEngine.BALL_STOP_AREA_PX2 * area_scale)
+        self.BALL_MIN_DETECT_AREA_PX2 = round(MissionEngine.BALL_MIN_DETECT_AREA_PX2 * area_scale)
 
         if self.camera_width != MissionEngine.REFERENCE_FRAME_WIDTH or self.camera_height != MissionEngine.REFERENCE_FRAME_HEIGHT:
             print(f"[MissionEngine] 📐 Threshold piksel diskalakan dari referensi "
