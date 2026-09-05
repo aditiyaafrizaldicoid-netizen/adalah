@@ -124,6 +124,17 @@ class RCSourceSwitch:
 
     # ------------------------------------------------------------------ #
 
+    def posisi_switch(self):
+        """
+        Posisi switch fisik yang sudah lolos debounce, atau None kalau belum
+        terbaca / sinyal RC hilang.
+
+        Dilaporkan ke dashboard supaya operator bisa melihat saat sumber kendali
+        AKTIF berbeda dari posisi switch — keadaan yang sah sekarang (perubahan
+        dari web bertahan), tapi menyesatkan kalau orang hanya melirik switch-nya.
+        """
+        return self._posisi_stabil if self._link_hidup else None
+
     def _loop(self):
         while self._is_running:
             try:
@@ -173,26 +184,43 @@ class RCSourceSwitch:
         if (sekarang - self._kandidat_sejak) < self.CONFIRM_SEC:
             return
 
-        if posisi != self._posisi_stabil:
-            self._posisi_stabil = posisi
-            print(f"[RCSource] 🎛️ Switch remote → {manual_source.label(posisi)} "
-                  f"(ch{self.channel}={pwm}us)")
+        # --- Switch menang saat DIGERAKKAN, bukan terus-menerus ---
+        #
+        # Versi sebelumnya membandingkan posisi switch dengan sumber kendali aktif
+        # SETIAP putaran (10x per detik) dan menyamakannya. Akibatnya perubahan dari
+        # dashboard hanya bertahan sekitar 100 ms sebelum ditarik balik — tombol di
+        # web terlihat rusak padahal perintahnya sampai dan dijalankan.
+        #
+        # Sekarang switch hanya menegaskan kehendaknya pada PERPINDAHAN posisi
+        # (termasuk pembacaan pertama setelah boot). Di antara perpindahan, sumber
+        # kendali boleh diatur dari dashboard dan akan bertahan.
+        #
+        # Keselamatannya tidak berkurang: operator yang memegang remote cukup
+        # menggerakkan switch untuk merebut kembali kendali seketika, dan itu tetap
+        # mengalahkan apa pun yang disetel dari web.
+        pertama = self._posisi_stabil is None
+        if posisi == self._posisi_stabil:
+            return
 
-        # --- Posisi switch selalu menang: samakan kalau berbeda ---
-        # Dibandingkan tiap putaran, bukan cuma saat switch bergerak. Itulah yang
-        # mengembalikan kendali kalau ada yang mengubahnya dari web.
-        if self.asv.get_manual_source() != posisi:
-            ok = self.asv.set_manual_source(posisi)
-            if ok:
-                self._warn(
-                    "info", "RC_SOURCE_SWITCHED",
-                    f"Sumber kendali dipindah ke {manual_source.label(posisi)} "
-                    f"lewat switch di remote (ch{self.channel}).")
-                if self._on_change:
-                    try:
-                        self._on_change(posisi)
-                    except Exception as e:
-                        print(f"[RCSource] Error pada callback perpindahan: {e}")
+        self._posisi_stabil = posisi
+        print(f"[RCSource] 🎛️ Switch remote → {manual_source.label(posisi)} "
+              f"(ch{self.channel}={pwm}us)")
+
+        if self.asv.get_manual_source() == posisi:
+            return   # sudah sama — tidak ada yang perlu dipindah
+
+        ok = self.asv.set_manual_source(posisi)
+        if ok:
+            asal = "posisi awal switch" if pertama else "switch di remote"
+            self._warn(
+                "info", "RC_SOURCE_SWITCHED",
+                f"Sumber kendali dipindah ke {manual_source.label(posisi)} "
+                f"lewat {asal} (ch{self.channel}).")
+            if self._on_change:
+                try:
+                    self._on_change(posisi)
+                except Exception as e:
+                    print(f"[RCSource] Error pada callback perpindahan: {e}")
 
     def _warn(self, level: str, code: str, message: str):
         """

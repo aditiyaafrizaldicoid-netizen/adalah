@@ -50,6 +50,12 @@ export const useVesselStore = defineStore("vessel", () => {
   // yang lain memeriksa kabel.
   const underwaterFitted = ref(false);
   const underwaterOk = ref(false);
+
+  // Posisi FISIK switch sumber kendali di remote ("minipc" | "remote" | null).
+  // Dilaporkan terpisah dari manualSource karena keduanya BOLEH berbeda: sumber
+  // kendali bisa diubah dari dashboard, dan switch baru merebutnya kembali saat
+  // digerakkan. Selisihnya harus terlihat operator, bukan disembunyikan.
+  const rcSwitchPosition = ref(null);
   const signalStrength = ref(0);
 
   // Flight Controller Status (dari Pixhawk via MAVLink)
@@ -147,6 +153,7 @@ export const useVesselStore = defineStore("vessel", () => {
     if (data.track) track.value = String(data.track).toUpperCase();
     if (data.underwater_camera_fitted !== undefined) underwaterFitted.value = !!data.underwater_camera_fitted;
     if (data.underwater_camera_connected !== undefined) underwaterOk.value = !!data.underwater_camera_connected;
+    if (data.rc_source_switch_position !== undefined) rcSwitchPosition.value = data.rc_source_switch_position;
     if (data.signal_strength !== undefined) signalStrength.value = data.signal_strength;
 
     // Advanced Nav & Engines
@@ -219,7 +226,7 @@ export const useVesselStore = defineStore("vessel", () => {
     pitch, roll, yaw,
     batteryPct, batteryVolt,
     gpsFix, satellites, gpsHdop, signalStrength, track,
-    underwaterFitted, underwaterOk,
+    underwaterFitted, underwaterOk, rcSwitchPosition,
     xte, dtw, nextWp,
     thrusterL, thrusterR, rpmL, rpmR,
     isConnected, isArmed, mode, manualSource, rcSourceSwitch, rcSourceChannel,

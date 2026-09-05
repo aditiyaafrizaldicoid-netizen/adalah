@@ -14,7 +14,7 @@
  * terlihat persis seperti tombol rusak.
  */
 import { computed, ref, watch, onUnmounted } from 'vue';
-import { Cpu, Radio, Loader2 } from 'lucide-vue-next';
+import { Cpu, Radio, Loader2 , AlertTriangle} from 'lucide-vue-next';
 import { useWebsocketStore } from '@/stores/websocketStore';
 import { useVesselStore } from '@/stores/vesselStore';
 
@@ -24,11 +24,25 @@ const vessel = useVesselStore();
 const isConnected = computed(() => ws.status === 'CONNECTED');
 const isRemote = computed(() => vessel.manualSource === 'remote');
 
-// Saat switch fisik di remote yang menentukan sumber kendali, POSISI SWITCH SELALU
-// MENANG — menekan tombol di bawah akan dikembalikan kapal dalam sepersekian detik.
-// Tanpa penjelasan ini tombolnya terlihat rusak, dan operator akan menekannya
-// berulang-ulang di saat yang justru genting.
+// Switch fisik di remote terpasang dan aktif.
+//
+// Dulu posisi switch menang TERUS-MENERUS (dibandingkan 10x per detik), sehingga
+// perubahan dari dashboard hanya bertahan ~100 ms sebelum ditarik balik — tombol
+// di sini terlihat rusak padahal perintahnya sampai dan dijalankan. Sekarang
+// switch hanya merebut kendali saat DIGERAKKAN, jadi tombol di bawah benar-benar
+// berfungsi dan pilihannya bertahan.
 const byRcSwitch = computed(() => vessel.rcSourceSwitch === true);
+
+// Sumber kendali aktif BERBEDA dari posisi switch fisik. Ini keadaan yang sah
+// sekarang, tapi menyesatkan kalau operator hanya melirik switch-nya — makanya
+// ditulis terang-terangan, bukan dibiarkan jadi kejutan saat switch digerakkan.
+const bedaDariSwitch = computed(() =>
+  byRcSwitch.value
+  && vessel.rcSwitchPosition
+  && vessel.rcSwitchPosition !== vessel.manualSource
+);
+
+const labelSumber = (s) => (s === 'remote' ? 'Remote RC' : 'Mini PC');
 
 // Perintah terkirim tapi kapal belum menjawab.
 const pending = ref(null);      // 'minipc' | 'remote' | null
@@ -104,9 +118,23 @@ function takeBackToMinipc() {
       class="flex items-start gap-2 p-2.5 rounded-lg bg-info/10 border border-info/30">
       <Radio class="w-3.5 h-3.5 text-info shrink-0 mt-0.5" />
       <span class="text-[10px] leading-relaxed text-(--text-secondary)">
-        Dikendalikan <b class="text-info">switch di remote</b><template v-if="vessel.rcSourceChannel">
-        (ch{{ vessel.rcSourceChannel }})</template>. Posisi switch selalu menang —
-        tombol di bawah hanya penunjuk keadaan, dan akan dikembalikan kapal kalau ditekan.
+        Switch di remote <b class="text-info">aktif</b><template v-if="vessel.rcSourceChannel">
+        (ch{{ vessel.rcSourceChannel }})</template>. Switch merebut kendali saat
+        <b>digerakkan</b>; di antara itu, tombol di bawah berfungsi penuh dan
+        pilihannya bertahan.
+      </span>
+    </div>
+
+    <!-- Sumber aktif tidak sama dengan posisi switch. Sah, tapi harus terlihat:
+         menggerakkan switch nanti akan langsung mengubahnya, dan operator yang
+         tidak tahu akan menganggapnya kejadian tiba-tiba. -->
+    <div v-if="bedaDariSwitch"
+      class="flex items-start gap-2 p-2.5 rounded-lg bg-warning/10 border border-warning/30">
+      <AlertTriangle class="w-3.5 h-3.5 text-warning shrink-0 mt-0.5" />
+      <span class="text-[10px] leading-relaxed text-(--text-secondary)">
+        Switch fisik ada di posisi <b class="text-warning">{{ labelSumber(vessel.rcSwitchPosition) }}</b>,
+        berbeda dari sumber kendali yang aktif sekarang. Menggerakkan switch akan
+        langsung mengambil alih.
       </span>
     </div>
 

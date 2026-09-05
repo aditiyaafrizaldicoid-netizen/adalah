@@ -1138,6 +1138,13 @@ class ASVWebSocketClient:
                         # remote. Saat true, tombol di dashboard hanya indikator.
                         "rc_source_switch": bool(
                             self.rc_source_switch and self.rc_source_switch.enabled),
+                        # Posisi FISIK switch. Dilaporkan terpisah dari manual_source
+                        # karena keduanya kini boleh berbeda: sumber kendali bisa
+                        # diatur dari dashboard, dan switch baru merebutnya kembali
+                        # saat digerakkan. Operator harus bisa melihat selisih itu.
+                        "rc_source_switch_position": (
+                            self.rc_source_switch.posisi_switch()
+                            if self.rc_source_switch else None),
                         "rc_source_channel": (
                             self.rc_source_switch.channel if self.rc_source_switch else 0),
                         # Batas yang BENAR-BENAR berlaku di kapal — peta menggambar
