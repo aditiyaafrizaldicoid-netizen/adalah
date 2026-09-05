@@ -89,6 +89,31 @@ const navigate = (path) => {
 </script>
 
 <template>
+  <!-- Tab segitiga di tepi kiri — HANYA layar sempit.
+       Jalan masuk KEDUA ke menu, sengaja tidak bergantung pada tombol hamburger
+       di Topbar. Hamburger hidup di dalam baris yang penuh berisi kontrol lain,
+       dan begitu isinya bertambah lagi ia bisa kembali tertimpa tanpa ada yang
+       menyadarinya sampai seseorang mencoba dari HP. Tab ini melayang sendiri di
+       tepi layar: tidak ada tetangga yang bisa menindihnya.
+       Area sentuhnya sengaja dibuat lebih besar dari segitiganya — clip-path
+       ikut memotong area sentuh, jadi bentuk runcing yang digambar langsung pada
+       tombol akan menyisakan sasaran yang sulit ditekan jempol. -->
+  <button
+    v-if="!ui.sidebarOpen"
+    @click="ui.openSidebar()"
+    class="lg:hidden fixed left-0 top-1/2 -translate-y-1/2 z-40 h-24 w-10
+           flex items-center justify-start active:scale-95 transition-transform"
+    aria-label="Buka menu navigasi"
+    title="Buka menu"
+  >
+    <span
+      class="absolute inset-y-0 left-0 w-7 bg-(--accent-primary) shadow-lg shadow-black/30"
+      style="clip-path: polygon(0 0, 100% 20%, 100% 80%, 0 100%)"
+      aria-hidden="true"
+    ></span>
+    <ChevronRight class="relative w-4 h-4 text-white drop-shadow ml-0.5" />
+  </button>
+
   <!-- Backdrop drawer (hanya layar sempit) -->
   <div
     v-if="ui.sidebarOpen"
