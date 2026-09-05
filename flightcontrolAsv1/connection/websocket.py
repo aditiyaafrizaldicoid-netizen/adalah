@@ -52,11 +52,6 @@ class ASVWebSocketClient:
     - FC Disc    : { "type": "FC_DISCONNECTED" }
     """
 
-    # Mode yang MENGAMBIL ALIH kemudi dari stik remote. Memindah ke salah satunya
-    # saat kendali ada di remote membuat kapal berhenti menurut siapa pun.
-    # MANUAL/HOLD/ACRO/STEERING sengaja TIDAK di sini: operator memang boleh
-    # mengembalikan kapal ke mode yang bisa dikemudikan remote dari dashboard.
-    MODE_OTONOM = frozenset({"AUTO", "GUIDED", "RTL", "SMART_RTL", "LOITER", "FOLLOW"})
 
     def __init__(self, asv: ASVController, ws_url: str = None, video_streamer=None):
         self.asv = asv
@@ -306,7 +301,7 @@ class ASVWebSocketClient:
             mode = cmd.get("mode", "")
             if not mode:
                 print("[WS] set_mode: parameter 'mode' tidak ada dalam cmd")
-            elif (mode.upper() in self.MODE_OTONOM
+            elif (not manual_source.bisa_dikemudikan_remote(mode)
                   and not self.asv.minipc_has_control()):
                 # Kendali sedang di remote. Memindahkan flight controller ke mode
                 # otonom di saat ini MENCABUT kemudi dari tangan operator: stik

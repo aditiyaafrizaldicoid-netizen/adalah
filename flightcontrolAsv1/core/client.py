@@ -297,8 +297,13 @@ class ASVController:
             previous = self._manual_source
             self._manual_source = target   # (1) tutup gerbang dulu
 
+        # Mode dipulihkan untuk KEDUA arah. Siapa pun yang baru memegang kemudi —
+        # stik remote maupun joystick dashboard — sama-sama tidak bisa menggerakkan
+        # kapal selama FC tertinggal di mode otonom.
+        self._pulihkan_mode_kendali_manual(target)
+
         if target == manual_source.REMOTE:
-            released = self._release_to_remote()   # (2) baru lepaskan override
+            released = self._release_to_remote()   # baru lepaskan override
             print(f"[ASVController] 🎮 Kendali manual → {manual_source.label(target)} "
                   f"(override RC {'dilepaskan' if released else 'GAGAL dilepaskan'}).")
             if not released:
@@ -333,6 +338,47 @@ class ASVController:
         memasangnya di tiap pemanggil berarti menunggu salah satunya terlupa.
         """
         self._on_manual_source_change = fn
+
+    def _pulihkan_mode_kendali_manual(self, target: str) -> bool:
+        """
+        Pastikan flight controller berada di mode yang bisa dikemudikan tangan.
+
+        BUG LAPANGAN: memindahkan sumber kendali saja tidak cukup. Kalau FC sedang
+        di GUIDED — dan misi memang menyetelnya ke sana — tidak ada masukan tangan
+        yang menggerakkan rover: FC menunggu perintah navigasi, bukan stik. Jadi:
+
+          → ke REMOTE : override dilepas dengan benar, stik tetap tidak berfungsi
+          → ke MINIPC : gerbang dibuka, joystick dashboard tetap tidak berfungsi
+
+        Dua-duanya tampak persis seperti kapal rusak, tanpa satu pun error atau log.
+        Karena itu pemulihan mode berlaku untuk KEDUA arah.
+
+        Dijalankan SEBELUM override dilepas (arah remote): mengganti mode selagi
+        override masih aktif membuat kapal tetap dikemudikan mini PC selama
+        peralihan, bukan sesaat tidak dikemudikan siapa pun.
+
+        Mode yang MEMANG bisa dikemudikan tangan dibiarkan apa adanya — operator
+        yang sengaja memilih ACRO atau STEERING tidak boleh dipaksa ke MANUAL.
+        """
+        try:
+            mode = self.get_telemetry().mode
+        except Exception as e:
+            print(f"[ASVController] ⚠️ Mode FC tidak terbaca ({e}) — "
+                  f"pemulihan mode dilewati.")
+            return False
+
+        if manual_source.bisa_dikemudikan_remote(mode):
+            return False
+
+        print(f"[ASVController] 🔧 Mode FC '{mode}' tidak bisa dikemudikan tangan — "
+              f"dikembalikan ke {manual_source.MODE_PULIH_REMOTE} untuk "
+              f"{manual_source.label(target)}.")
+        ok = self.set_mode(manual_source.MODE_PULIH_REMOTE)
+        if not ok:
+            print(f"[ASVController] ⚠️ Gagal mengembalikan mode ke "
+                  f"{manual_source.MODE_PULIH_REMOTE} — kapal mungkin tetap tidak "
+                  f"merespon. Ganti mode manual dari transmitter.")
+        return ok
 
     def _release_to_remote(self) -> bool:
         """Kirim pelepasan override berulang kali. True kalau minimal satu berhasil."""

@@ -44,6 +44,34 @@ MINIPC = "minipc"
 REMOTE = "remote"
 VALID = (MINIPC, REMOTE)
 
+# ── Mode flight controller yang BENAR-BENAR bisa dikemudikan stik remote ────────
+#
+# Melepaskan override RC saja TIDAK cukup membuat remote menguasai kapal. Kalau
+# flight controller sedang berada di mode otonom (GUIDED/AUTO/RTL/…), stik remote
+# memang tidak menggerakkan rover — FC sedang menunggu perintah navigasi, bukan
+# masukan stik. Kapalnya tampak "tidak merespon" padahal semua berjalan normal.
+#
+# Ini pernah terjadi persis begitu: misi menyetel GUIDED, operator memindah sakelar
+# ke remote, override dilepas dengan benar — dan kapal tetap diam karena tidak ada
+# satu pun kode yang mengembalikan modenya.
+#
+# SATU tabel dipakai dua arah:
+#   - core/client.py memakainya untuk MENGEMBALIKAN mode saat kendali → remote;
+#   - connection/websocket.py memakainya untuk MENOLAK perpindahan ke mode di luar
+#     daftar ini selagi remote memegang kendali.
+# Dua daftar terpisah pasti melenceng satu sama lain cepat atau lambat.
+MODE_BISA_DIREMOTE = frozenset({"MANUAL", "ACRO", "STEERING", "HOLD"})
+
+# Mode yang dipulihkan saat kendali diserahkan ke remote dan mode saat itu tidak
+# ada di daftar atas. MANUAL, bukan HOLD: operator yang baru mengambil alih
+# menginginkan kapal yang menurut stik, bukan kapal yang mengunci posisi.
+MODE_PULIH_REMOTE = "MANUAL"
+
+
+def bisa_dikemudikan_remote(mode) -> bool:
+    """True kalau stik remote benar-benar bisa menggerakkan kapal di mode ini."""
+    return str(mode or "").strip().upper() in MODE_BISA_DIREMOTE
+
 # Sinonim yang mungkin dikirim base station / operator, dipetakan ke nilai kanonik.
 _ALIASES = {
     "minipc": MINIPC,

@@ -42,7 +42,12 @@ class MisiPalsu:
         self.status = "ABORTED"
 
 
-def kontroler():
+class TelemetriPalsu:
+    def __init__(self, mode):
+        self.mode = mode
+
+
+def kontroler(mode="MANUAL", set_mode_ok=True):
     """ASVController tanpa koneksi MAVLink — hanya bagian sumber kendali."""
     import threading
     a = ASVController.__new__(ASVController)
@@ -54,6 +59,21 @@ def kontroler():
     # Pelepasan diulang beberapa kali dengan jeda; untuk uji cukup sekali.
     a.RELEASE_REPEAT = 1
     a.RELEASE_INTERVAL_SEC = 0
+
+    a._mode_fc = mode
+    a.mode_diminta = []
+
+    def _get_telemetry():
+        return TelemetriPalsu(a._mode_fc)
+
+    def _set_mode(m):
+        a.mode_diminta.append(m)
+        if set_mode_ok:
+            a._mode_fc = m
+        return set_mode_ok
+
+    a.get_telemetry = _get_telemetry
+    a.set_mode = _set_mode
     return a
 
 
@@ -160,6 +180,90 @@ class UjiSerahKendali(unittest.TestCase):
         from connection import websocket
         sumber = inspect.getsource(websocket.ASVWebSocketClient._handle_set_manual_source)
         self.assertIn("set_manual_source", sumber)
+
+
+class UjiPemulihanMode(unittest.TestCase):
+    """
+    Melepaskan override RC saja TIDAK cukup membuat kapal menurut.
+
+    Kalau flight controller tertinggal di mode otonom (GUIDED — dan misi memang
+    menyetelnya ke sana), tidak ada masukan tangan yang menggerakkan rover:
+    stik remote diam, joystick dashboard diam. Tampak persis seperti kapal rusak,
+    tanpa satu pun error.
+    """
+
+    def test_ke_remote_dari_GUIDED_mode_dipulihkan(self):
+        a = kontroler(mode="GUIDED")
+        a.set_manual_source("remote")
+        self.assertEqual(a.mode_diminta, ["MANUAL"])
+        self.assertEqual(a._mode_fc, "MANUAL")
+
+    def test_ke_MINIPC_dari_GUIDED_juga_dipulihkan(self):
+        """Joystick dashboard sama tidak berfungsinya di GUIDED."""
+        a = kontroler(mode="GUIDED")
+        a.set_manual_source("remote")
+        a.mode_diminta.clear()
+        a._mode_fc = "GUIDED"          # misal misi menyetelnya lagi
+        a.set_manual_source("minipc")
+        self.assertEqual(a.mode_diminta, ["MANUAL"])
+
+    def test_mode_yang_SUDAH_bisa_distik_tidak_diganggu(self):
+        """Operator yang sengaja memilih ACRO/STEERING jangan dipaksa ke MANUAL."""
+        for mode in ("MANUAL", "ACRO", "STEERING", "HOLD"):
+            with self.subTest(mode=mode):
+                a = kontroler(mode=mode)
+                a.set_manual_source("remote")
+                self.assertEqual(a.mode_diminta, [], f"{mode} tidak perlu diubah")
+                self.assertEqual(a._mode_fc, mode)
+
+    def test_semua_mode_otonom_dipulihkan(self):
+        for mode in ("GUIDED", "AUTO", "RTL", "SMART_RTL", "LOITER", "FOLLOW"):
+            with self.subTest(mode=mode):
+                a = kontroler(mode=mode)
+                a.set_manual_source("remote")
+                self.assertEqual(a.mode_diminta, ["MANUAL"])
+
+    def test_mode_dipulihkan_SEBELUM_override_dilepas(self):
+        """
+        Mengganti mode selagi override masih aktif membuat kapal tetap dikemudikan
+        mini PC selama peralihan — bukan sesaat tidak dikemudikan siapa pun.
+        """
+        a = kontroler(mode="GUIDED")
+        urutan = []
+        set_mode_asli = a.set_mode
+        a.set_mode = lambda m: (urutan.append("mode"), set_mode_asli(m))[1]
+        rilis_asli = a._motion.release_all_rc
+        a._motion.release_all_rc = lambda verbose=False: (urutan.append("rilis"),
+                                                          rilis_asli(verbose))[1]
+        a.set_manual_source("remote")
+        self.assertEqual(urutan, ["mode", "rilis"])
+
+    def test_set_mode_gagal_tidak_membatalkan_perpindahan(self):
+        """Gerbang sudah tertutup; membatalkan di sini meninggalkan keadaan separuh."""
+        a = kontroler(mode="GUIDED", set_mode_ok=False)
+        self.assertTrue(a.set_manual_source("remote"))
+        self.assertEqual(a.get_manual_source(), manual_source.REMOTE)
+
+    def test_telemetri_tak_terbaca_tidak_bikin_crash(self):
+        a = kontroler(mode="GUIDED")
+        def _meledak():
+            raise RuntimeError("FC putus")
+        a.get_telemetry = _meledak
+        self.assertTrue(a.set_manual_source("remote"))
+        self.assertEqual(a.get_manual_source(), manual_source.REMOTE)
+
+    def test_satu_tabel_dipakai_kedua_modul(self):
+        """
+        Daftar mode hidup di control/manual_source.py. Dua daftar terpisah —
+        satu untuk memulihkan, satu untuk menolak — pasti melenceng cepat atau
+        lambat, dan melencengnya tidak menimbulkan error.
+        """
+        import inspect
+        from connection import websocket
+        sumber = inspect.getsource(websocket)
+        self.assertIn("bisa_dikemudikan_remote", sumber)
+        self.assertFalse(hasattr(websocket.ASVWebSocketClient, "MODE_OTONOM"),
+                         "daftar mode duplikat muncul lagi")
 
 
 if __name__ == "__main__":
