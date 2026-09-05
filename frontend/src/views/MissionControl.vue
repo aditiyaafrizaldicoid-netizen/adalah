@@ -214,10 +214,20 @@ onUnmounted(stopAutoScroll);
       <!-- Start / Pause / Resume -->
       <button v-if="mission.missionStatus === 'IDLE' || mission.missionStatus === 'ABORTED' || mission.missionStatus === 'FINISHED'"
         @click="mission.startMission()"
-        :disabled="!mission.steps.length"
+        :disabled="!mission.bisaMulaiMisi"
+        :title="mission.alasanTidakBisaMulai || 'Jalankan misi'"
         class="flex items-center gap-2 bg-success text-slate-900 font-black px-5 py-2.5 rounded-xl hover:bg-emerald-400 transition-all shadow-lg shadow-success/20 disabled:opacity-40 disabled:cursor-not-allowed text-xs uppercase">
         <Play class="w-4 h-4 fill-current" /> START MISSION
       </button>
+
+      <!-- Alasan tombol mati ditulis terang-terangan. Tombol yang redup tanpa
+           keterangan membuat operator menekannya berkali-kali lalu mengira
+           dashboard-nya yang rusak — bukan mengira ada yang perlu dibetulkan. -->
+      <p v-if="mission.alasanTidakBisaMulai && mission.steps.length"
+        class="flex items-center gap-1.5 text-[10px] text-warning self-center max-w-xs">
+        <AlertTriangle class="w-3.5 h-3.5 shrink-0" />
+        <span>{{ mission.alasanTidakBisaMulai }}</span>
+      </p>
 
       <button v-else-if="mission.missionStatus === 'RUNNING'"
         @click="mission.pauseMission()"

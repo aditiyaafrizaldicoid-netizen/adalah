@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { ref, computed, onMounted } from "vue";
 import { useWebsocketStore } from "./websocketStore";
+import { useVesselStore } from "./vesselStore";
 import { apiUrl } from "@/config/api";
 import { authHeaders } from "@/utils/session";
 
@@ -1460,8 +1461,50 @@ export const useMissionStore = defineStore("mission", () => {
     wsStore.sendCommand({ action: "start_mission", steps: stepsPayload });
   }
 
+  /**
+   * Alasan misi TIDAK boleh dimulai sekarang, atau "" kalau boleh.
+   *
+   * Dipakai untuk MENONAKTIFKAN tombol START, bukan sekadar menampilkan pesan
+   * setelah ditekan — lihat catatan panjang di startMission().
+   */
+  const alasanTidakBisaMulai = computed(() => {
+    if (!steps.value.length) return "Pipeline misi masih kosong.";
+    if (useVesselStore().manualSource !== "minipc") {
+      return "Kendali sedang dipegang remote RC. Kembalikan sumber kendali ke "
+        + "Mini PC dulu lewat panel Manual Control.";
+    }
+    return "";
+  });
+
+  const bisaMulaiMisi = computed(() => alasanTidakBisaMulai.value === "");
+
   async function startMission() {
-    if (!steps.value.length) return;
+    if (!steps.value.length) return false;
+
+    // GERBANG KENDALI — jangan kirim APA PUN kalau kapal masih dipegang remote.
+    //
+    // BUG LAPANGAN: dulu ketiga perintah di bawah dikirim tanpa syarat. Kapal
+    // hanya menolak yang KETIGA (start_mission), sementara dua yang pertama
+    // lolos begitu saja karena _blocked_by_remote() di kapal cuma menjaga
+    // perintah GERAK:
+    //
+    //   arm                  → kapal benar-benar ARMED, baling-baling hidup
+    //   set_mode GUIDED      → flight controller keluar dari MANUAL, sehingga
+    //                          stik remote berhenti menggerakkan kapal
+    //   start_mission        → ditolak kapal
+    //   missionStatus=RUNNING→ dashboard menampilkan misi yang tidak pernah jalan
+    //
+    // Hasilnya: kapal armed, mode salah, tidak menurut remote MAUPUN mini PC,
+    // dan layar berkata misi sedang berjalan. Cukup satu kali salah pencet.
+    const vessel = useVesselStore();
+    if (vessel.manualSource !== "minipc") {
+      vessel.addWarning(
+        "warning", "MISSION_BLOCKED_REMOTE",
+        "Misi tidak dijalankan: kendali sedang dipegang remote RC. Kembalikan "
+        + "sumber kendali ke Mini PC dulu.");
+      return false;
+    }
+
     const wsStore = useWebsocketStore();
     const stepsPayload = steps.value.map((s, i) => ({ ...s, id: i + 1 }));
 
@@ -1471,6 +1514,7 @@ export const useMissionStore = defineStore("mission", () => {
     wsStore.sendCommand({ action: "start_mission", steps: stepsPayload });
     missionStatus.value = "RUNNING";
     _startLocalTimer();
+    return true;
   }
 
 
@@ -1637,6 +1681,8 @@ export const useMissionStore = defineStore("mission", () => {
     // Step builder
     addStep, removeStep, moveStep, updateStep, clearSteps,
     // Mission control
+    bisaMulaiMisi,
+    alasanTidakBisaMulai,
     startMission, pauseMission, resumeMission, abortMission, resetMission, loadAndStartMission,
     // Status updater
     updateMissionStatus,

@@ -52,6 +52,12 @@ class ASVWebSocketClient:
     - FC Disc    : { "type": "FC_DISCONNECTED" }
     """
 
+    # Mode yang MENGAMBIL ALIH kemudi dari stik remote. Memindah ke salah satunya
+    # saat kendali ada di remote membuat kapal berhenti menurut siapa pun.
+    # MANUAL/HOLD/ACRO/STEERING sengaja TIDAK di sini: operator memang boleh
+    # mengembalikan kapal ke mode yang bisa dikemudikan remote dari dashboard.
+    MODE_OTONOM = frozenset({"AUTO", "GUIDED", "RTL", "SMART_RTL", "LOITER", "FOLLOW"})
+
     def __init__(self, asv: ASVController, ws_url: str = None, video_streamer=None):
         self.asv = asv
         # Default lama adalah IP mentah dari jaringan yang sudah tidak ada
@@ -298,11 +304,27 @@ class ASVWebSocketClient:
         # --- MODE ---
         elif action == "set_mode":
             mode = cmd.get("mode", "")
-            if mode:
+            if not mode:
+                print("[WS] set_mode: parameter 'mode' tidak ada dalam cmd")
+            elif (mode.upper() in self.MODE_OTONOM
+                  and not self.asv.minipc_has_control()):
+                # Kendali sedang di remote. Memindahkan flight controller ke mode
+                # otonom di saat ini MENCABUT kemudi dari tangan operator: stik
+                # remote berhenti menggerakkan kapal, sementara mini PC juga tidak
+                # mengemudikannya karena misinya sendiri ditolak.
+                #
+                # _blocked_by_remote() tidak menjangkau ini — ia hanya menjaga
+                # perintah GERAK. Perpindahan mode lolos begitu saja, dan itulah
+                # yang membuat "tidak sengaja menekan START saat masih mode RC"
+                # berakhir dengan kapal yang tidak menurut siapa pun.
+                print(f"[WS] ⛔ set_mode {mode} DITOLAK — kendali sedang di REMOTE RC.")
+                self._send_warning(
+                    "warning", "MODE_BLOCKED_REMOTE",
+                    f"Mode {mode} tidak diterapkan: kendali sedang dipegang remote RC. "
+                    f"Kembalikan sumber kendali ke Mini PC dulu.")
+            else:
                 print(f"[WS] set_mode: Switching to {mode}...")
                 self.asv.set_mode(mode)
-            else:
-                print("[WS] set_mode: parameter 'mode' tidak ada dalam cmd")
 
         # --- NAVIGASI (GUIDED MODE) ---
         elif action == "move_forward":
