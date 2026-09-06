@@ -291,6 +291,46 @@ class UjiKonfigurasiEnv(unittest.TestCase):
         os.environ["ASV_UNDERWATER_WIDTH"] = "besar"
         self.assertEqual(dari_env().width, 1280)
 
+    def test_path_perangkat_diterima(self):
+        """
+        Nomor /dev/videoN bisa BERTUKAR antar boot. Kalau tertukar, kamera bawah
+        air menjadi kamera DETEKSI — kapal mencari bola di air keruh, dan tidak
+        ada satu pun error. Path /dev/v4l/by-id/... terikat perangkat fisiknya.
+        """
+        os.environ["ASV_UNDERWATER_CAMERA_INDEX"] = "/dev/v4l/by-id/usb-abc-video-index0"
+        c = dari_env()
+        self.assertEqual(c.index, "/dev/v4l/by-id/usb-abc-video-index0")
+
+    def test_nilai_yang_bukan_angka_maupun_path_ditolak(self):
+        for buruk in ("video1", "kamera bawah", "0x2"):
+            with self.subTest(nilai=buruk):
+                os.environ["ASV_UNDERWATER_CAMERA_INDEX"] = buruk
+                self.assertIsNone(dari_env(), "salah ketik jangan jadi kamera index 0")
+
+
+class UjiPerangkatKamera(unittest.TestCase):
+    """camera/device.py — dipakai bersama kamera permukaan & bawah air."""
+
+    def test_angka_dan_path_dikenali(self):
+        from camera import device
+        self.assertEqual(device.parse("2", default=0), 2)
+        self.assertEqual(device.parse("/dev/video2", default=0), "/dev/video2")
+        self.assertEqual(device.parse("", default=0), 0)
+        self.assertEqual(device.parse("ngawur", default=0), 0)
+
+    def test_perangkat_kembar_terdeteksi(self):
+        """
+        Dua kamera yang menunjuk perangkat sama akan berebut, dan yang kalah bisa
+        saja justru kamera deteksi — kapal buta gara-gara memasang kamera foto.
+        """
+        from camera import device
+        self.assertTrue(device.sama(0, 0))
+        self.assertFalse(device.sama(0, 2))
+        self.assertTrue(device.sama("/dev/video0", "/dev/video0"))
+        self.assertFalse(device.sama("/dev/video0", "/dev/video2"))
+        self.assertFalse(device.sama(0, "/dev/video0"),
+                         "angka vs path tidak bisa dipastikan tanpa membuka perangkat")
+
 
 class UjiPemicuTetapDariKameraAtas(unittest.TestCase):
     """

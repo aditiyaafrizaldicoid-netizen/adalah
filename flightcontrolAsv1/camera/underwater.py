@@ -25,6 +25,8 @@ import os
 import threading
 import time
 
+from camera import device
+
 try:
     import cv2
 except ImportError:  # pragma: no cover - hanya di mesin tanpa OpenCV
@@ -50,6 +52,8 @@ class UnderwaterCamera:
     JEDA_COBA_ULANG_DETIK = 3.0
 
     def __init__(self, index, width=1280, height=720, fps=5, umur_maks_detik=None):
+        # `index` boleh berupa ANGKA (mis. 2) atau PATH perangkat
+        # (mis. /dev/v4l/by-id/usb-...-video-index0). Lihat dari_env().
         self.index = index
         self.width = int(width)
         self.height = int(height)
@@ -127,6 +131,22 @@ class UnderwaterCamera:
             if not cap.isOpened():
                 cap.release()
                 return False
+
+            # MJPG DULU, sebelum resolusi. Ini bukan preferensi kualitas melainkan
+            # soal BANDWIDTH USB, dan urutannya penting: V4L2 memilih format
+            # berdasarkan permintaan terakhir, jadi menyetel resolusi lebih dulu
+            # bisa mengunci format mentah pada resolusi itu.
+            #
+            # Kamera ini berbagi kontroler USB dengan kamera permukaan yang
+            # menyuapi SELURUH deteksi YOLO. Stream mentah (YUYV) 1280x720 memakan
+            # ~1,8 MB per frame; dua kamera sekaligus melampaui kapasitas USB 2.0,
+            # dan yang gagal bisa saja justru kamera deteksinya — kapal jadi buta
+            # gara-gara memasang kamera foto. MJPG sudah terkompresi di kameranya.
+            try:
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            except Exception:
+                pass  # backend tanpa dukungan FOURCC; bukan alasan gagal
+
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
             cap.set(cv2.CAP_PROP_FPS, self.fps)
@@ -137,7 +157,17 @@ class UnderwaterCamera:
             except Exception:
                 pass  # tidak semua backend mendukung; bukan alasan gagal
             self._cap = cap
-            print(f"[Underwater] ✅ Kamera bawah air index {self.index} terbuka.")
+            fourcc = int(cap.get(cv2.CAP_PROP_FOURCC) or 0)
+            nama_fourcc = "".join(chr((fourcc >> (8 * i)) & 0xFF) for i in range(4)) \
+                if fourcc else "?"
+            print(f"[Underwater] ✅ Kamera bawah air {self.index} terbuka "
+                  f"({int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x"
+                  f"{int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}, format {nama_fourcc}).")
+            if nama_fourcc not in ("MJPG", "?"):
+                print(f"[Underwater] ⚠️ Kamera menolak MJPG dan memakai {nama_fourcc}. "
+                      f"Stream mentah bisa menghabiskan bandwidth USB dan mengganggu "
+                      f"kamera permukaan — turunkan ASV_UNDERWATER_WIDTH/HEIGHT kalau "
+                      f"deteksi ikut tersendat.")
             return True
         except Exception as e:
             self._log_gagal(f"gagal membuka index {self.index}: {e}")
@@ -203,11 +233,10 @@ def dari_env():
     raw = os.getenv("ASV_UNDERWATER_CAMERA_INDEX", "").strip()
     if raw == "":
         return None
-    try:
-        index = int(raw)
-    except ValueError:
-        print(f"[Underwater] ⚠️ ASV_UNDERWATER_CAMERA_INDEX='{raw}' bukan angka — "
-              f"kamera bawah air tidak diaktifkan.")
+
+    # Angka ATAU path perangkat — lihat camera/device.py untuk alasannya.
+    index = device.parse(raw, default=None, nama_env="ASV_UNDERWATER_CAMERA_INDEX")
+    if index is None:
         return None
 
     def _int_env(nama, default):

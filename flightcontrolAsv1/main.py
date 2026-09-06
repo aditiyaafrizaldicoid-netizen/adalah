@@ -214,8 +214,28 @@ def main():
     # fitur ini mati total dan box biru tetap difoto dari kamera permukaan seperti
     # sebelumnya. Kapal yang kamera bawah airnya belum terpasang tidak boleh
     # berubah perilakunya hanya karena kodenya sudah ada.
+    from camera import device as _kamera_device
     from camera.underwater import dari_env as _kamera_bawah_air_dari_env
+
+    kamera_permukaan = _kamera_device.parse(
+        os.getenv("ASV_SURFACE_CAMERA_INDEX", ""), default=0,
+        nama_env="ASV_SURFACE_CAMERA_INDEX")
     underwater_camera = _kamera_bawah_air_dari_env()
+
+    # Kedua kamera TIDAK BOLEH menunjuk perangkat yang sama. Kalau sampai sama,
+    # keduanya berebut satu perangkat: yang kalah gagal dibuka, dan yang kalah bisa
+    # saja justru kamera deteksi — kapal jadi buta gara-gara memasang kamera foto.
+    # Ditolak di sini, bukan dibiarkan gagal sendiri di dalam OpenCV dengan pesan
+    # yang tidak menyebut sebabnya.
+    if underwater_camera is not None and _kamera_device.sama(
+            underwater_camera.index, kamera_permukaan):
+        print(f"[Main] ⛔ Kamera bawah air menunjuk perangkat yang SAMA dengan kamera "
+              f"permukaan ({kamera_permukaan}). Kamera bawah air TIDAK diaktifkan — "
+              f"box biru akan difoto dari permukaan. Perbaiki "
+              f"ASV_UNDERWATER_CAMERA_INDEX di .env; pakai path /dev/v4l/by-id/... "
+              f"supaya tidak tertukar antar boot.")
+        underwater_camera = None
+
     if underwater_camera is not None:
         underwater_camera.start()
         mission_engine.set_underwater_camera(underwater_camera)
@@ -408,8 +428,15 @@ def main():
     video_upload_url = os.getenv("ASV_VIDEO_URL", "http://localhost:3000/api/v1/video/upload")
     flip_cam = os.getenv("ASV_CAM_FLIP", "0").lower() in ("1", "true", "yes")
 
+    # Kamera PERMUKAAN — yang menyuapi seluruh deteksi YOLO.
+    #
+    # Dulu dikunci ke index 0. Dengan dua kamera terpasang, nomor /dev/videoN bisa
+    # bertukar antar boot dan kamera bawah air bisa menempati index 0 — kapal lalu
+    # mencari bola di pemandangan bawah air yang keruh, tanpa satu pun error.
+    # Sekarang bisa dipatok ke path stabil lewat .env; default 0 supaya kapal yang
+    # sudah berjalan tidak berubah perilakunya.
     video_streamer = VideoStreamer(
-        camera_index=0,
+        camera_index=kamera_permukaan,
         width=camera_width,
         height=camera_height,
         fps=25,  # Ditingkatkan ke 15 FPS agar pergerakan video lebih halus
