@@ -1937,7 +1937,21 @@ class MissionEngine:
 
         print(f"[MissionEngine] 🌊 {ROLE_LABELS.get(label, label)} difoto dengan "
               f"kamera BAWAH AIR.")
-        return frame_bawah, "bawah air", "_bawahair"
+        # Imbuhan nama berkas KOSONG saat berhasil.
+        #
+        # BUG LAPANGAN: dulu berakhiran "_bawahair", dan backend mengambil label
+        # penilaian dari nama berkas (labelFromStem: "20260906_1345_blue_box" →
+        # "blue_box"). Akhiran itu mengubah labelnya jadi "blue_box_bawahair",
+        # yang tidak cocok dengan slot "Underwater" di dashboard — foto terkirim
+        # dan tersimpan, tapi slotnya tampak kosong. Persis terlihat seperti foto
+        # yang gagal dikirim.
+        #
+        # Kamera yang dipakai tetap tercatat di sidecar JSON, dan itu yang
+        # ditampilkan dashboard sebagai lencana. Akhiran "_permukaan" pada kasus
+        # cadangan SENGAJA dipertahankan: kalau foto bawah air tidak pernah
+        # terjadi, slot "Underwater" MEMANG harus kosong, bukan diisi foto
+        # permukaan yang menyamar.
+        return frame_bawah, "bawah air", ""
 
     # ------------------------------------------------------------------ #
     #  PHOTO_BOX — misi memotret box biru & box hijau                     #

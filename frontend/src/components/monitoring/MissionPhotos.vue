@@ -58,6 +58,21 @@ function fullUrl(c) {
   return `${API_BASE}${c.url}`;
 }
 
+/** Kamera yang mengambil foto ini, dari sidecar JSON yang ikut dikirim backend. */
+const kameraFoto = (c) => (c && c.geotag && c.geotag.kamera) || "";
+
+/**
+ * Foto box biru yang terpaksa diambil dari PERMUKAAN.
+ *
+ * Sengaja TIDAK mengisi slot Underwater — kalau foto bawah air tidak pernah
+ * terjadi, slot itu memang harus kosong, bukan diisi foto permukaan yang
+ * menyamar. Tapi keberadaannya harus dijelaskan, kalau tidak slot kosong
+ * terbaca sebagai "foto gagal terkirim".
+ */
+const cadanganBiru = computed(
+  () => captures.value.find((c) => c.label === "blue_box_permukaan") || null
+);
+
 /** Ringkasan geo-tag satu baris untuk ditempel di bawah thumbnail. */
 function geoRingkas(c) {
   const g = c.geotag;
@@ -178,6 +193,15 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
               {{ slot.judul }}
             </span>
             <span class="text-[9px] font-mono text-(--text-muted)">{{ slot.kode }}</span>
+            <!-- Kamera yang benar-benar mengambil foto ini. Dibaca dari sidecar,
+                 bukan disimpulkan dari nama slot — slot "Underwater" adalah
+                 sasaran penilaian, bukan janji tentang lensa yang dipakai. -->
+            <span v-if="slot.foto && kameraFoto(slot.foto)"
+              class="text-[9px] font-bold px-1.5 py-0.5 rounded"
+              :class="kameraFoto(slot.foto).startsWith('bawah air')
+                ? 'bg-sky-500/15 text-sky-400' : 'bg-(--bg-card) text-(--text-muted)'">
+              {{ kameraFoto(slot.foto).startsWith('bawah air') ? 'BAWAH AIR' : 'PERMUKAAN' }}
+            </span>
           </div>
           <a
             v-if="slot.foto"
@@ -219,6 +243,12 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
           <span class="text-[9px] font-bold uppercase tracking-widest opacity-60">
             Belum ada foto
           </span>
+          <button v-if="slot.label === 'blue_box' && cadanganBiru"
+            @click="preview = cadanganBiru"
+            class="px-2 text-[9px] leading-snug text-center text-warning hover:underline">
+            Kamera bawah air tidak memberi frame — ada foto permukaan sebagai
+            cadangan. Ketuk untuk melihat.
+          </button>
         </div>
 
         <!-- Geo-tag ringkas -->

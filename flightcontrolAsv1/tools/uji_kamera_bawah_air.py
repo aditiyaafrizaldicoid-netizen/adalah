@@ -88,7 +88,7 @@ class UjiPemilihanSumber(unittest.TestCase):
         frame, sumber, imbuhan = self.pilih(ROLE_BLUE_BOX)
         self.assertEqual(frame[0, 0, 0], 200, "frame yang dipakai bukan dari bawah air")
         self.assertEqual(sumber, "bawah air")
-        self.assertEqual(imbuhan, "_bawahair")
+        self.assertEqual(imbuhan, "", "nama berkas harus tetap 'blue_box' murni")
 
     def test_box_hijau_TETAP_kamera_permukaan(self):
         self.e.set_underwater_camera(KameraBawahAirPalsu(FRAME_BAWAH_AIR))
@@ -168,12 +168,38 @@ class UjiBerkasTersimpan(unittest.TestCase):
         self.e._capture_label = label
         return self.e.capture_now(FRAME_PERMUKAAN)
 
-    def test_foto_bawah_air_diberi_nama_dan_dicatat(self):
+    def test_foto_bawah_air_memakai_label_penilaian_yang_UTUH(self):
+        """
+        Backend mengambil label penilaian dari NAMA BERKAS
+        (20260906_1345_blue_box → blue_box), dan dashboard mencocokkannya persis.
+
+        BUG LAPANGAN: akhiran "_bawahair" mengubah labelnya jadi
+        "blue_box_bawahair", sehingga slot "Underwater" tampak KOSONG padahal
+        fotonya terkirim dan tersimpan di server — persis terlihat seperti foto
+        yang gagal dikirim.
+        """
         path = self.potret(ROLE_BLUE_BOX, KameraBawahAirPalsu(FRAME_BAWAH_AIR))
         self.assertIsNotNone(path)
-        self.assertIn("blue_box_bawahair", os.path.basename(path))
+        stem = os.path.basename(path).replace(".jpg", "")
+        label = "_".join(stem.split("_")[2:])     # cerminan labelFromStem di backend
+        self.assertEqual(label, "blue_box",
+                         f"label penilaian jadi '{label}', slot dashboard tidak cocok")
         with open(path.replace(".jpg", ".json"), encoding="utf-8") as f:
-            self.assertEqual(json.load(f)["kamera"], "bawah air")
+            self.assertEqual(json.load(f)["kamera"], "bawah air",
+                             "kamera tetap tercatat di sidecar")
+
+    def test_foto_CADANGAN_sengaja_TIDAK_mengisi_slot_underwater(self):
+        """
+        Kalau foto bawah air tidak pernah terjadi, slot "Underwater" MEMANG harus
+        kosong. Mengisinya dengan foto permukaan membuat penilaian membaca bukti
+        yang tidak ada.
+        """
+        path = self.potret(ROLE_BLUE_BOX, None)
+        stem = os.path.basename(path).replace(".jpg", "")
+        label = "_".join(stem.split("_")[2:])
+        self.assertNotEqual(label, "blue_box",
+                            "foto permukaan tidak boleh mengisi slot Underwater")
+        self.assertEqual(label, "blue_box_permukaan")
 
     def test_foto_permukaan_jujur_menyebut_kameranya(self):
         """Nama berkas & sidecar JSON tetap menyatakan ini foto permukaan."""
@@ -362,7 +388,7 @@ class UjiPemicuTetapDariKameraAtas(unittest.TestCase):
         gelap = np.zeros((120, 160, 3), dtype=np.uint8)
         path = self.potret(KameraBawahAirPalsu(gelap))
         self.assertIsNotNone(path, "frame gelap bukan alasan membatalkan foto")
-        self.assertIn("bawahair", os.path.basename(path))
+        self.assertIn("blue_box", os.path.basename(path))
 
     def test_isi_frame_tidak_pernah_dinilai(self):
         """
