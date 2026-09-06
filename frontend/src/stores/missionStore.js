@@ -1829,6 +1829,70 @@ export const useMissionStore = defineStore("mission", () => {
     steps.value = preset.steps.map((s) => ({ ...s, id: Date.now() + Math.random() }));
   }
 
+  /**
+   * Nama salinan yang BELUM dipakai: "X (salinan)", lalu "X (salinan 2)", dst.
+   *
+   * Dua preset bernama sama tidak bisa dibedakan di daftar — dan yang dipilih
+   * saat lomba adalah yang kebetulan lebih dulu muncul. Angka ditambahkan hanya
+   * kalau memang perlu, supaya salinan pertama tetap enak dibaca.
+   */
+  function _namaSalinanBaru(dasar) {
+    const dipakai = new Set(dbPresets.value.map((p) => p.name));
+    const pertama = `${dasar} (salinan)`;
+    if (!dipakai.has(pertama)) return pertama;
+    for (let i = 2; i < 1000; i++) {
+      const kandidat = `${dasar} (salinan ${i})`;
+      if (!dipakai.has(kandidat)) return kandidat;
+    }
+    return `${dasar} (salinan ${Date.now()})`;
+  }
+
+  /**
+   * Salin satu preset menjadi preset BARU, tanpa menyentuh editor.
+   *
+   * SENGAJA TIDAK memuat preset itu ke editor lebih dulu. Menyalin lewat
+   * "muat lalu simpan-sebagai" akan MEMBUANG alur misi yang sedang disusun
+   * operator dan belum sempat disimpan — kehilangan yang tidak bisa dibatalkan,
+   * gara-gara menekan tombol yang niatnya justru mengamankan sesuatu.
+   *
+   * Langkahnya diambil langsung dari preset sumber, bukan dari steps.value.
+   *
+   * :return: {ok, name, reason}
+   */
+  async function copyPreset(preset, namaBaru = "") {
+    const sumber = Array.isArray(preset?.steps) ? preset.steps : [];
+    if (!sumber.length) {
+      return { ok: false, name: "", reason: "Preset ini tidak punya langkah untuk disalin." };
+    }
+
+    const nama = String(namaBaru || "").trim() || _namaSalinanBaru(preset.name || "Preset");
+    if (dbPresets.value.some((p) => p.name === nama)) {
+      return { ok: false, name: nama, reason: `Nama "${nama}" sudah dipakai preset lain.` };
+    }
+
+    try {
+      const res = await fetch(apiUrl("/api/v1/mission-presets"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        // Salinan dalam supaya perubahan pada salinan tidak pernah menyentuh
+        // objek langkah milik preset sumber yang masih dipegang daftar di layar.
+        body: JSON.stringify({ name: nama, steps: JSON.stringify(sumber) }),
+      });
+      if (!res.ok) {
+        return {
+          ok: false, name: nama,
+          reason: res.status === 401
+            ? "Sesi kedaluwarsa — login ulang."
+            : `Gagal menyimpan salinan (HTTP ${res.status}).`,
+        };
+      }
+      await fetchPresets();
+      return { ok: true, name: nama, reason: "" };
+    } catch {
+      return { ok: false, name: nama, reason: "Backend tidak terhubung." };
+    }
+  }
+
   // Fetch presets from DB on init; steps mulai kosong
   fetchPresets();
 
@@ -1870,6 +1934,7 @@ export const useMissionStore = defineStore("mission", () => {
     // Status updater
     updateMissionStatus,
     // Presets & Database
+    copyPreset,
     loadPreset, fetchPresets, saveCurrentAsPreset, deletePreset,
     // Waypoints
     addWaypoint, removeWaypoint, clearWaypoints, loadWaypointsAsMission, stepElapsedSec

@@ -8,7 +8,9 @@ import {
   ListOrdered, Cpu, Zap, Navigation, Camera, Anchor, CheckCircle2, Clock,
   AlertTriangle, FolderOpen, GripVertical, CircleStop, PauseCircle, Save,
   WifiOff, Send
-} from 'lucide-vue-next';
+,
+  Copy,
+  Loader2} from 'lucide-vue-next';
 
 const mission = useMissionStore();
 const vessel = useVesselStore();
@@ -48,6 +50,33 @@ const uploadBtnClass = computed(() => {
 const showStepPicker = ref(false);
 const editingStepIdx = ref(null);
 const showSavePresetModal = ref(false);
+
+// ─── Salin preset ───────────────────────────────────────────────────────────
+const menyalin = ref(null);       // id preset yang sedang disalin
+const pesanSalin = ref("");
+const salinGagal = ref(false);
+let timerPesanSalin = null;
+
+async function salinPreset(p) {
+  if (menyalin.value) return;
+  menyalin.value = p.id;
+  const hasil = await mission.copyPreset(p);
+  menyalin.value = null;
+
+  salinGagal.value = !hasil.ok;
+  pesanSalin.value = hasil.ok
+    ? `Tersalin sebagai "${hasil.name}".`
+    : hasil.reason;
+
+  // Pesan dibersihkan sendiri: daftar preset dibuka lewat hover, dan pesan lama
+  // yang menempel akan terbaca sebagai hasil dari klik berikutnya.
+  if (timerPesanSalin) clearTimeout(timerPesanSalin);
+  timerPesanSalin = setTimeout(() => { pesanSalin.value = ""; }, 4000);
+}
+
+onUnmounted(() => {
+  if (timerPesanSalin) clearTimeout(timerPesanSalin);
+});
 const presetNameInput = ref('');
 
 async function handleSavePreset() {
@@ -318,11 +347,26 @@ onUnmounted(stopAutoScroll);
                     {{ p.steps.length }} steps <span v-if="p.isDb" class="text-emerald-400 font-bold ml-1">• DB</span>
                   </span>
                 </button>
+                <!-- Salin preset. Sengaja TIDAK memuatnya ke editor lebih dulu:
+                     menyalin lewat "muat lalu simpan-sebagai" akan membuang alur
+                     misi yang sedang disusun dan belum sempat disimpan. -->
+                <button @click.stop="salinPreset(p)" :disabled="menyalin === p.id"
+                  title="Salin preset ini jadi preset baru"
+                  class="p-1 rounded text-(--text-muted) hover:text-primary hover:bg-primary/10 transition-colors ml-2 disabled:opacity-40">
+                  <Loader2 v-if="menyalin === p.id" class="w-3.5 h-3.5 animate-spin" />
+                  <Copy v-else class="w-3.5 h-3.5" />
+                </button>
                 <button v-if="p.isDb" @click.stop="mission.deletePreset(p.dbId)" title="Hapus preset dari database"
-                  class="p-1 rounded text-(--text-muted) hover:text-danger hover:bg-danger/10 transition-colors ml-2">
+                  class="p-1 rounded text-(--text-muted) hover:text-danger hover:bg-danger/10 transition-colors ml-1">
                   <Trash2 class="w-3.5 h-3.5" />
                 </button>
               </div>
+
+              <p v-if="pesanSalin"
+                class="px-3 py-2 text-[10px] leading-snug rounded-lg"
+                :class="salinGagal ? 'text-warning bg-warning/10' : 'text-success bg-success/10'">
+                {{ pesanSalin }}
+              </p>
             </div>
           </div>
 
