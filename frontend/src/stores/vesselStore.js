@@ -122,7 +122,38 @@ export const useVesselStore = defineStore("vessel", () => {
   });
 
   // Actions to update telemetry
+  /**
+   * Field telemetri yang PERNAH benar-benar dikirim kapal.
+   *
+   * Beberapa pembacaan di halaman Monitoring dan Juri (XTE, jarak ke waypoint,
+   * RPM, thruster) tidak pernah dikirim kapal sama sekali — nilainya bukan
+   * "nol", melainkan TIDAK ADA. Menampilkannya sebagai 0 membuat juri membaca
+   * "RPM 0" dan "Thruster 0 %" sebagai kapal yang mati, atau sebagai ukuran
+   * yang sah padahal tidak pernah diukur.
+   *
+   * Dengan penanda ini, tampilannya bisa menulis "—" untuk yang belum ada, dan
+   * otomatis menyala sendiri kalau nanti kapal mulai mengirimnya.
+   */
+  const fieldDiterima = ref(new Set());
+
+  /** True kalau kapal pernah benar-benar mengirim field ini. */
+  const punyaData = (nama) => fieldDiterima.value.has(nama);
+
   function updateTelemetry(data) {
+    // Pesan TELEMETRY tanpa payload akan melempar di baris-baris `data.x` di
+    // bawah, DI DALAM penangan onmessage WebSocket — pesan itu hilang beserta
+    // segala yang mestinya diproses sesudahnya. Dijaga di sini, satu tempat.
+    if (!data || typeof data !== "object") return;
+
+    const belumTercatat = Object.keys(data).filter(
+      (k) => data[k] !== undefined && data[k] !== null && !fieldDiterima.value.has(k)
+    );
+    // Set diganti, bukan dimutasi: mutasi tidak memicu reaktivitas Vue. Hanya
+    // terjadi pada beberapa pesan pertama, jadi ongkosnya tidak berarti.
+    if (belumTercatat.length) {
+      fieldDiterima.value = new Set([...fieldDiterima.value, ...belumTercatat]);
+    }
+
     // Number.isFinite, bukan `!== undefined`: saat kapal belum punya fix, kapal
     // mengirim lat/lng bernilai null, dan `null !== undefined && null !== 0`
     // dua-duanya benar — posisi kapal jadi null, penanda di peta hilang, dan
@@ -227,6 +258,7 @@ export const useVesselStore = defineStore("vessel", () => {
     batteryPct, batteryVolt,
     gpsFix, satellites, gpsHdop, signalStrength, track,
     underwaterFitted, underwaterOk, rcSwitchPosition,
+    punyaData,
     xte, dtw, nextWp,
     thrusterL, thrusterR, rpmL, rpmR,
     isConnected, isArmed, mode, manualSource, rcSourceSwitch, rcSourceChannel,

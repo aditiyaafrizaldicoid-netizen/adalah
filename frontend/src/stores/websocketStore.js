@@ -197,7 +197,7 @@ export const useWebsocketStore = defineStore("websocket", () => {
    * Contoh:
    *   sendCommand({ action: "arm" })
    *   sendCommand({ action: "set_mode", mode: "MANUAL" })
-   *   sendCommand({ action: "drive_vectored", throttle_left: 1600, throttle_right: 1600, servo_left: 1500, servo_right: 1500 })
+   *   sendCommand({ action: "manual_control", x: 500, r: -200 })
    *   sendCommand({ action: "set_channel_map", channel_map: { thruster_left_ch: 1, ... } })
    */
   function sendCommand(cmd) {

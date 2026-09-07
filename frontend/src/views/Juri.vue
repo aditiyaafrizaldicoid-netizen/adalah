@@ -43,6 +43,17 @@ import GridMap from "@/components/mapping/GridMap.vue";
 import MjpegImg from "@/components/monitoring/MjpegImg.vue";
 
 const vessel = useVesselStore();
+
+/**
+ * Ditampilkan untuk pembacaan yang TIDAK PERNAH dikirim kapal.
+ *
+ * Sebelumnya nilainya jatuh ke 0, sehingga halaman juri menulis "RPM Kiri 0",
+ * "Thruster Kanan 0 %", dan "Sinyal 0 %" — angka yang terbaca sebagai
+ * pengukuran sah atau sebagai kapal yang mati, padahal tidak satu pun pernah
+ * diukur. Tanda ini menyala sendiri jadi angka begitu kapal benar-benar
+ * mulai mengirimnya.
+ */
+const TIDAK_ADA = "—";
 const mission = useMissionStore();
 const scoring = useScoringStore();
 const wsStore = useWebsocketStore();
@@ -102,21 +113,21 @@ const statusPills = computed(() => [
 
 // Baris telemetri detail — murni tampilan, tidak ada yang bisa diklik.
 const navRows = computed(() => [
-  { label: "Cross Track Error", value: `${vessel.xte.toFixed(2)} m` },
-  { label: "Distance to Waypoint", value: `${vessel.dtw.toFixed(2)} m` },
-  { label: "Next Waypoint", value: `#${vessel.nextWp}` },
+  { label: "Cross Track Error", value: vessel.punyaData("xte") ? `${vessel.xte.toFixed(2)} m` : TIDAK_ADA },
+  { label: "Distance to Waypoint", value: vessel.punyaData("dtw") ? `${vessel.dtw.toFixed(2)} m` : TIDAK_ADA },
+  { label: "Next Waypoint", value: vessel.punyaData("next_wp") ? `#${vessel.nextWp}` : TIDAK_ADA },
   { label: "Pitch", value: `${vessel.pitch.toFixed(2)}°` },
   { label: "Roll", value: `${vessel.roll.toFixed(2)}°` },
   { label: "Yaw", value: `${vessel.yaw.toFixed(2)}°` },
 ]);
 
 const engineRows = computed(() => [
-  { label: "Thruster Kiri", value: `${vessel.thrusterL.toFixed(0)} %` },
-  { label: "Thruster Kanan", value: `${vessel.thrusterR.toFixed(0)} %` },
-  { label: "RPM Kiri", value: `${vessel.rpmL.toFixed(0)}` },
-  { label: "RPM Kanan", value: `${vessel.rpmR.toFixed(0)}` },
+  { label: "Thruster Kiri", value: vessel.punyaData("thruster_l") ? `${vessel.thrusterL.toFixed(0)} %` : TIDAK_ADA },
+  { label: "Thruster Kanan", value: vessel.punyaData("thruster_r") ? `${vessel.thrusterR.toFixed(0)} %` : TIDAK_ADA },
+  { label: "RPM Kiri", value: vessel.punyaData("rpm_l") ? `${vessel.rpmL.toFixed(0)}` : TIDAK_ADA },
+  { label: "RPM Kanan", value: vessel.punyaData("rpm_r") ? `${vessel.rpmR.toFixed(0)}` : TIDAK_ADA },
   { label: "Baterai", value: `${vessel.batteryPct.toFixed(0)} % · ${vessel.batteryVolt.toFixed(2)} V` },
-  { label: "Sinyal", value: `${vessel.signalStrength} %` },
+  { label: "Sinyal", value: vessel.punyaData("signal_strength") ? `${vessel.signalStrength} %` : TIDAK_ADA },
 ]);
 
 // Komponen skor yang DIHITUNG dari telemetri — ikut hidup di panel ini.

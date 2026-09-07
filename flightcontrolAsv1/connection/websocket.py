@@ -1117,6 +1117,16 @@ class ASVWebSocketClient:
                         # sebagai lintasan yang sungguh ditempuh.
                         "gps_fix": t.get("gps_fix_type", 0),
                         "gps_hdop": t.get("gps_eph", 0.0),
+                        # Kekuatan sinyal RC dari RC_CHANNELS. Sebelumnya TIDAK
+                        # pernah dikirim, jadi dashboard & halaman juri selalu
+                        # menampilkan "Sinyal 0 %" — terbaca seperti link RC mati
+                        # padahal datanya memang tidak pernah sampai.
+                        # MAVLink memakai 0..254; 255 berarti TIDAK DIKETAHUI dan
+                        # sengaja tidak diterjemahkan jadi 100% supaya "tidak tahu"
+                        # tidak menyamar sebagai "sempurna".
+                        "signal_strength": (
+                            None if t.get("rc_rssi", 255) == 255
+                            else round(t.get("rc_rssi", 0) / 254.0 * 100)),
                         "is_armed": t.get("is_armed", False),
                         "mode": t.get("mode", "UNKNOWN"),
                         "is_connected": t.get("is_connected", False),
