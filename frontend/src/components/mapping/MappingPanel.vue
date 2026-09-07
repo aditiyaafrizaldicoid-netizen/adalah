@@ -1,11 +1,25 @@
 <script setup>
+/**
+ * Seluruh isi halaman Mapping, dipindahkan menjadi kartu di Dashboard.
+ *
+ * Dulu ini halaman tersendiri di sidebar. Dijadikan komponen supaya
+ * perpindahannya UTUH — peta, pengalih mode, editor waypoint/arena/geofence,
+ * sampai unduh GeoJSON — bukan ditulis ulang di Dashboard dan berisiko
+ * kehilangan satu-dua perilaku tanpa ada yang menyadarinya.
+ *
+ * Bedanya dengan versi halaman:
+ *   - tingginya dibatasi (dulu setinggi layar), karena sekarang ia satu kartu
+ *     di antara kartu lain dan Dashboard yang mengurus gulirnya;
+ *   - TrajectoryPanel dibuang — Dashboard sudah menampilkannya di kolom kanan,
+ *     dan dua panel yang sama di satu layar hanya membingungkan.
+ */
+
 import { ref, computed } from 'vue';
 import { useRouter } from 'vue-router';
-import GridMap from '../components/mapping/GridMap.vue';
-import WaypointEditor from '../components/mapping/WaypointEditor.vue';
-import ArenaEditor from '../components/mapping/ArenaEditor.vue';
-import GeofenceEditor from '../components/mapping/GeofenceEditor.vue';
-import TrajectoryPanel from '../components/monitoring/TrajectoryPanel.vue';
+import GridMap from './GridMap.vue';
+import WaypointEditor from './WaypointEditor.vue';
+import ArenaEditor from './ArenaEditor.vue';
+import GeofenceEditor from './GeofenceEditor.vue';
 import { useMissionStore } from '@/stores/missionStore';
 import { useArenaStore } from '@/stores/arenaStore';
 import {
@@ -90,7 +104,7 @@ function setMode(mode) {
 </script>
 
 <template>
-  <div class="h-full flex flex-col overflow-hidden">
+  <div class="h-[70vh] min-h-[420px] lg:h-[620px] flex flex-col overflow-hidden rounded-2xl border border-(--border-subtle) bg-(--bg-secondary)">
     <!-- Toolbar -->
     <div class="h-14 bg-secondary/80 backdrop-blur-xl border-b border-(--border-subtle)/50 flex items-center justify-between px-6 shrink-0">
       <div class="flex items-center gap-4">
@@ -155,8 +169,6 @@ function setMode(mode) {
           class="glass-card p-4 max-h-[calc(100vh-12rem)] overflow-y-auto">
           <GeofenceEditor />
         </div>
-
-        <TrajectoryPanel />
       </div>
 
       <!-- Map Mode Switcher (bottom-left) -->

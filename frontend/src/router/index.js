@@ -31,10 +31,12 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    // Halaman Mapping dipindahkan ke Dashboard (di bawah stream kamera).
+    // Rutenya dipertahankan sebagai pengalihan, bukan dihapus: tautan lama,
+    // bookmark, dan tab yang masih terbuka akan berakhir di halaman kosong
+    // kalau rutenya hilang begitu saja.
     path: "/mapping",
-    name: "Mapping",
-    component: () => import("../views/Mapping.vue"),
-    meta: { requiresAuth: true },
+    redirect: { name: "Dashboard" },
   },
   {
     path: "/mission",

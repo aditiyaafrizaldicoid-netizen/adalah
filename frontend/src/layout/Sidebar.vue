@@ -4,7 +4,6 @@ import { useRouter, useRoute } from "vue-router";
 import {
   LayoutDashboard,
   Activity,
-  Map as MapIcon,
   Flag,
   Settings2,
   Trophy,
@@ -74,7 +73,6 @@ const menuItems = [
   { name: "Dashboard", path: "/", icon: LayoutDashboard },
   { name: "Manual Control", path: "/manual", icon: Gamepad2 },
   { name: "Monitoring", path: "/monitoring", icon: Activity },
-  { name: "Mapping", path: "/mapping", icon: MapIcon },
   { name: "Mission Control", path: "/mission", icon: Flag },
   { name: "Calibration", path: "/calibration", icon: Settings2 },
   { name: "Scoring", path: "/scoring", icon: Trophy },

@@ -32,6 +32,7 @@ import ControlSourceControl from "../components/monitoring/ControlSourceControl.
 import GeotagPanel from "../components/monitoring/GeotagPanel.vue";
 import VideoCard from "../components/monitoring/VideoCard.vue";
 import MissionPhotos from "../components/monitoring/MissionPhotos.vue";
+import MappingPanel from "../components/mapping/MappingPanel.vue";
 import TrajectoryPanel from "../components/monitoring/TrajectoryPanel.vue";
 import TrackSelector from "../components/monitoring/TrackSelector.vue";
 import { VIDEO_STREAM_URL } from "@/config/api";
@@ -243,6 +244,11 @@ const wsStore = useWebsocketStore();
           aspect="aspect-video"
           objectFit="object-cover"
         />
+
+        <!-- Peta misi — dulu halaman tersendiri (menu Mapping), sekarang di sini
+             tepat di bawah stream kamera. Isinya utuh: peta, pengalih mode,
+             editor waypoint/arena/geofence, dan unduh GeoJSON. -->
+        <MappingPanel />
       </div>
 
       <!-- Right Sidebar: Arming Control + Alerts -->
