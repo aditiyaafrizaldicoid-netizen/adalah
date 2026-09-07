@@ -1066,6 +1066,7 @@ class MissionEngine:
     def load_mission(self, steps: List[Dict[str, Any]]) -> bool:
         """Load mission steps dari JSON array. Return True jika valid."""
         with self._lock:
+            self._batalkan_permintaan_foto("load_mission")
             if self._status == self.STATUS_RUNNING:
                 print("[MissionEngine] Tidak bisa load mission saat RUNNING!")
                 return False
@@ -1089,6 +1090,7 @@ class MissionEngine:
     def start_mission(self, steps: Optional[List[Dict[str, Any]]] = None) -> bool:
         """Mulai eksekusi mission (bisa sekaligus load steps jika diberikan)."""
         with self._lock:
+            self._batalkan_permintaan_foto("start_mission")
             if steps:
                 self._steps = list(steps)
                 self._current_step_idx = 0
@@ -1200,6 +1202,7 @@ class MissionEngine:
     def abort_mission(self):
         """Batalkan mission dan stop kapal."""
         with self._lock:
+            self._batalkan_permintaan_foto("abort_mission")
             self._status = self.STATUS_ABORTED
             self._stop_elapsed_timer()
             self.asv.stop_movement()
@@ -1209,6 +1212,7 @@ class MissionEngine:
     def reset_mission(self):
         """Reset semua state ke IDLE."""
         with self._lock:
+            self._batalkan_permintaan_foto("reset_mission")
             self._status = self.STATUS_IDLE
             self._current_step_idx = 0
             self._buoy_pass_count = 0
@@ -1344,6 +1348,8 @@ class MissionEngine:
             # Inisialisasi timer & state saat baru masuk ke langkah ini
             if self._step_start_time is None:
                 self._step_start_time = time.time() - self._paused_step_elapsed
+                # Step baru tidak boleh mewarisi permintaan foto milik step lama.
+                self._batalkan_permintaan_foto("step berganti")
                 if step_type == self.STEP_TYPE_TRACKING_BUOY:
                     if hasattr(self.tracking_controller, 'reset'):
                         self.tracking_controller.reset()
@@ -1847,6 +1853,32 @@ class MissionEngine:
     def capture_pending(self) -> bool:
         """True kalau step TAKE_IMAGE sedang menunggu satu frame kamera untuk difoto."""
         return self._capture_pending
+
+    def _batalkan_permintaan_foto(self, sebab: str = ""):
+        """
+        Padamkan permintaan shutter yang belum sempat dilayani.
+
+        BUG LAPANGAN: _capture_pending dinyalakan step yang memotret, lalu
+        DITUNGGU sampai main.py menyerahkan frame kamera yang bersih. Kalau step
+        itu berakhir sebelum frame tersebut datang — misi dibatalkan operator,
+        remote mengambil alih, geofence memutus, atau batas waktu step habis —
+        benderanya tetap menyala.
+
+        Bendera itu lalu terbawa ke step BERIKUTNYA, bahkan ke MISI berikutnya.
+        Frame pertama yang masuk langsung disimpan sebagai foto, memakai label
+        target lama. Dikonfirmasi: membatalkan TAKE_IMAGE lalu menjalankan misi
+        yang sama sekali tidak punya step foto tetap menghasilkan berkas
+        '..._dermaga.jpg' di dashboard, tanpa satu pun error.
+
+        Dipanggil di SETIAP batas — awal step, mulai/muat/batal/reset misi —
+        bukan diserahkan ke tiap jalur keluar untuk mengingatnya sendiri.
+        """
+        if self._capture_pending:
+            print(f"[MissionEngine] 🚫 Permintaan foto '{self._capture_label}' "
+                  f"dibatalkan{f' ({sebab})' if sebab else ''} — belum sempat diambil.")
+        self._capture_pending = False
+        self._capture_requested_at = None
+        self._capture_label = ""
 
     def capture_now(self, frame) -> Optional[str]:
         """
