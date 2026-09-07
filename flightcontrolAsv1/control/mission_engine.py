@@ -1054,6 +1054,8 @@ class MissionEngine:
 
         self._elapsed_thread: Optional[threading.Thread] = None
         self._elapsed_running: bool = False
+        # Nomor generasi timer elapsed — lihat _start_elapsed_timer().
+        self._elapsed_gen: int = 0
 
     # ------------------------------------------------------------------ #
     #  Public API                                                         #
@@ -5611,16 +5613,42 @@ class MissionEngine:
                 print(f"[MissionEngine] Callback error: {e}")
 
     def _start_elapsed_timer(self):
+        """
+        Jalankan penghitung waktu misi, memastikan HANYA ADA SATU yang menghitung.
+
+        BUG LAPANGAN: dulu tiap pemanggilan langsung membuat thread baru. Thread
+        LAMA belum tentu sudah keluar — loop-nya baru memeriksa benderanya setelah
+        sleep(1) selesai — sehingga pause lalu resume dalam waktu kurang dari satu
+        detik meninggalkan dua thread hidup sekaligus. Keduanya menambah
+        _elapsed_sec dan keduanya menyiarkan status tiap detik.
+
+        Dikonfirmasi: tiga siklus pause/resume menghasilkan EMPAT thread, dan
+        waktu misi berjalan empat kali lebih cepat dari waktu sungguhan — 8 detik
+        tercatat dalam 2,2 detik nyata. Durasi lomba di dashboard jadi karangan,
+        dan lalu lintas WebSocket ikut berlipat.
+
+        Dipakai nomor generasi, bukan join(): join menahan pemanggil sampai satu
+        detik penuh, dan pemanggilnya adalah penangan perintah WebSocket. Dengan
+        generasi, thread lama keluar sendiri pada bangun berikutnya dan tidak
+        pernah sempat menambah hitungan lagi.
+        """
+        self._elapsed_gen += 1
+        generasi = self._elapsed_gen
         self._elapsed_running = True
-        self._elapsed_thread = threading.Thread(target=self._elapsed_loop, daemon=True)
+        self._elapsed_thread = threading.Thread(
+            target=self._elapsed_loop, args=(generasi,), daemon=True)
         self._elapsed_thread.start()
 
     def _stop_elapsed_timer(self):
         self._elapsed_running = False
 
-    def _elapsed_loop(self):
-        while self._elapsed_running:
+    def _elapsed_loop(self, generasi: int):
+        while self._elapsed_running and generasi == self._elapsed_gen:
             time.sleep(1)
+            # Diperiksa SETELAH tidur dan SEBELUM menambah: thread yang sudah
+            # digantikan tidak boleh sempat menghitung satu detik pun.
+            if generasi != self._elapsed_gen or not self._elapsed_running:
+                return
             if self._status == self.STATUS_RUNNING:
                 self._elapsed_sec += 1
                 # Broadcast setiap detik agar frontend sync waktu elapsed
