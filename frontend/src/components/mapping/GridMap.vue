@@ -6,8 +6,10 @@ import { useGeofenceStore } from '@/stores/geofenceStore';
 import { useArenaStore } from '@/stores/arenaStore';
 import { useTrajectoryStore } from '@/stores/trajectoryStore';
 import { useTrajectoryLayer } from '@/composables/useTrajectoryLayer';
-import 'leaflet/dist/leaflet.css';
-import L from 'leaflet';
+import 'mapbox-gl/dist/mapbox-gl.css';
+import mapboxgl from 'mapbox-gl';
+import { MAPBOX_TOKEN, GAYA_BAWAAN } from '@/config/mapbox';
+import { lingkaranGeoJSON, koleksiKosong } from '@/utils/geo';
 import { formatDay, formatDate, formatTime, formatCoordA, formatCoordB } from '@/utils/geotag';
 
 const props = defineProps({
@@ -27,102 +29,241 @@ const trajLayer = useTrajectoryLayer();
 
 const mapContainer = ref(null);
 let map = null;
+/**
+ * Gaya peta dimuat ASINKRON. addSource/addLayer sebelum itu selesai akan
+ * melempar "Style is not done loading", sementara watcher store bisa menyala
+ * kapan saja — termasuk sebelum peta siap. Satu bendera ini yang menjaganya.
+ */
+let petaSiap = false;
 let asvMarker = null;
+let asvTampil = true;
 // Jejak kapal TIDAK lagi ditumpuk di komponen ini. Dulu koordinatnya hidup di
 // variabel milik instance ini, jadi berpindah halaman menghapus seluruh lintasan,
 // dan selama peta tidak terbuka tidak ada satu titik pun yang terekam. Sekarang
 // datanya ada di trajectoryStore (hidup selama aplikasi hidup) dan digambar oleh
 // useTrajectoryLayer, sehingga Mapping dan Juri melihat lintasan yang sama persis.
 let waypointMarkers = [];
-let waypointPolyline = null;
-
-// Arena layers
-let arenaLayers = [];        // all active arena Leaflet layers
-let draftTrailPolyline = null; // preview polyline while drawing trail
+let arenaMarkers = [];
+let popupHover = [];
 
 // Default starting point (e.g., somewhere in Indonesia or specific lake)
 const defaultLat = -7.9215169;
 const defaultLng = 112.5973649;
 
+// ── Sumber & layer ──────────────────────────────────────────────────────────
+// Mapbox GL tidak punya objek gambar seperti L.polyline/L.circle yang bisa
+// ditambah-buang satu per satu. Yang ada: SOURCE (data GeoJSON) dan LAYER (cara
+// menggambarnya). Jadi semuanya dibuat SEKALI di sini, lalu isinya diganti
+// dengan setData — bukan layer-nya yang dibongkar pasang tiap kali data berubah.
+const SRC = {
+  waypointGaris: 'waypoint-garis',
+  draftTrail: 'draft-trail',
+  arenaTrail: 'arena-trail',
+  arenaTrailUjung: 'arena-trail-ujung',
+  geofenceAktif: 'geofence-aktif',
+  geofenceDraft: 'geofence-draft',
+};
+
+/** Ganti isi sebuah source, aman dipanggil sebelum peta siap. */
+function tulisSource(id, data) {
+  if (!map || !petaSiap) return;
+  const src = map.getSource(id);
+  if (src) src.setData(data);
+}
+
+/** Buat elemen DOM untuk penanda dari potongan HTML. */
+function elemenDari(html) {
+  const kotak = document.createElement('div');
+  kotak.innerHTML = html.trim();
+  return kotak.firstElementChild;
+}
+
+/**
+ * Tooltip melayang saat kursor menyentuh sebuah layer.
+ *
+ * Pengganti bindTooltip milik Leaflet, yang tidak ada padanannya di Mapbox GL:
+ * Popup di sini harus dipasang dan dilepas sendiri lewat kejadian mouse.
+ */
+function pasangTooltipLayer(idLayer, ambilTeks) {
+  const popup = new mapboxgl.Popup({
+    closeButton: false,
+    closeOnClick: false,
+    className: 'peta-tooltip',
+  });
+  popupHover.push(popup);
+
+  map.on('mousemove', idLayer, (e) => {
+    const teks = e.features?.length ? ambilTeks(e.features[0]) : '';
+    if (!teks) return;
+    popup.setLngLat(e.lngLat).setText(teks).addTo(map);
+  });
+  map.on('mouseleave', idLayer, () => popup.remove());
+}
+
+/** Tooltip untuk penanda DOM (pelampung), yang bukan bagian dari layer. */
+function pasangTooltipElemen(el, lngLat, teks) {
+  const popup = new mapboxgl.Popup({
+    closeButton: false,
+    closeOnClick: false,
+    offset: 14,
+    className: 'peta-tooltip',
+  });
+  popupHover.push(popup);
+  el.addEventListener('mouseenter', () => popup.setLngLat(lngLat).setText(teks).addTo(map));
+  el.addEventListener('mouseleave', () => popup.remove());
+  return popup;
+}
+
+/**
+ * Tanpa token, Mapbox MELEMPAR saat peta dibuat — bukan sekadar gagal memuat
+ * tile. Lemparan di dalam onMounted mematikan seluruh pohon komponen: Dashboard
+ * dan Panel Juri ikut kosong, padahal telemetri, kamera FPV, dan tombol misi di
+ * halaman yang sama tidak ada hubungannya dengan peta. Maka peta yang tidak bisa
+ * hidup harus GAGAL SENDIRIAN, dan mengatakan apa yang kurang.
+ */
+const tokenAda = !!MAPBOX_TOKEN;
+
 onMounted(() => {
-  // Initialize Leaflet Map
-  map = L.map(mapContainer.value, {
-    center: [vessel.lat || defaultLat, vessel.lng || defaultLng],
-    zoom: 18,
-    zoomControl: false, // We'll add our own custom controls
-    attributionControl: false
+  if (!tokenAda) return;
+  mapboxgl.accessToken = MAPBOX_TOKEN;
+
+  map = new mapboxgl.Map({
+    container: mapContainer.value,
+    style: GAYA_BAWAAN,
+    center: [vessel.lng || defaultLng, vessel.lat || defaultLat], // [lng, lat] — kebalikan Leaflet
+    zoom: 17, // zoom Mapbox satu tingkat lebih "dekat" dari Leaflet pada skala yang sama
+    attributionControl: false, // dipasang ulang di bawah dalam bentuk ringkas
   });
 
-  // Base Layers
-  const satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-    maxZoom: 20,
-    attribution: 'Tiles &copy; Esri'
-  });
-
-  const darkGrid = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-    maxZoom: 20,
-    attribution: '&copy; CARTO'
-  });
-
-  satellite.addTo(map); // Default to satellite
+  // Atribusi WAJIB ADA — syarat layanan Mapbox, bukan pilihan gaya. Bentuk
+  // ringkas ("i" kecil) dipakai supaya tidak menutupi panel telemetri, dan
+  // ditaruh di kiri-bawah agar tidak bertumpuk dengan tombol zoom di kanan-bawah.
+  map.addControl(new mapboxgl.AttributionControl({ compact: true }), 'bottom-left');
 
   // Custom ASV Icon (Sleek Monohull / Speedboat Shape)
-  const asvIcon = L.divIcon({
-    className: 'asv-custom-marker',
-    html: `<div class="asv-icon-wrapper drop-shadow-2xl">
+  const asvEl = elemenDari(`<div class="asv-icon-wrapper drop-shadow-2xl">
              <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
                <!-- Glowing Water Wake (Jejak Air) -->
                <path d="M 30 80 L 70 80 L 50 100 Z" fill="#ef4444" opacity="0.8"/>
-               
+
                <!-- Sleek Boat Hull (Bodi Kapal Melengkung) -->
                <path d="M50 5 C 85 20, 80 50, 80 80 L 20 80 C 20 50, 15 20, 50 5 Z" fill="#0f172a" stroke="#ef4444" stroke-width="4" stroke-linejoin="round" />
-               
+
                <!-- Cockpit / Cabin Deck -->
                <path d="M 35 40 Q 50 30 65 40 L 70 65 L 30 65 Z" fill="#1e293b" stroke="#ef4444" stroke-width="2" />
-               
+
                <!-- Radar / GPS Dome (Kuning) -->
                <circle cx="50" cy="55" r="6" fill="#facc15" />
-               
+
                <!-- Front Bow Line (Garis Haluan) -->
                <line x1="50" y1="5" x2="50" y2="35" stroke="#ef4444" stroke-width="2" opacity="0.6" />
              </svg>
-           </div>`,
-    iconSize: [48, 48],
-    iconAnchor: [24, 24]
-  });
+           </div>`);
 
-  asvMarker = L.marker([vessel.lat || defaultLat, vessel.lng || defaultLng], { icon: asvIcon, zIndexOffset: 1000 }).addTo(map);
-
-  // Lintasan kapal — datanya dari trajectoryStore, sudah berisi titik yang
-  // terekam SEBELUM peta ini dibuka.
-  trajLayer.pasang(map);
-  trajLayer.setTampil(props.visibleLayers.includes('trail'));
-
-  // Waypoints Polyline
-  waypointPolyline = L.polyline([], {
-    color: '#facc15', // Yellow warning color for planning
-    weight: 3,
-    opacity: 0.8
-  }).addTo(map);
-
-  // Draft trail preview polyline
-  draftTrailPolyline = L.polyline([], {
-    color: '#60a5fa',
-    weight: 2,
-    dashArray: '6, 6',
-    opacity: 0.7,
-  }).addTo(map);
+  asvMarker = new mapboxgl.Marker({
+    element: asvEl,
+    // Haluan kapal adalah arah SEBENARNYA di bumi, jadi ikonnya ikut berputar
+    // bersama peta saat operator memutar sudut pandang. Dengan 'viewport' ikon
+    // akan tetap menunjuk ke atas layar dan menunjukkan haluan yang salah.
+    rotationAlignment: 'map',
+  })
+    .setLngLat([vessel.lng || defaultLng, vessel.lat || defaultLat])
+    .setRotation(vessel.heading || 0)
+    .addTo(map);
 
   // Map Click Event — routed by mapMode prop
   map.on('click', (e) => {
     if (props.mapMode === 'arena') {
-      arenaStore.placeElement(e.latlng.lat, e.latlng.lng);
+      arenaStore.placeElement(e.lngLat.lat, e.lngLat.lng);
     } else if (props.mapMode === 'waypoint') {
-      mission.addWaypoint(e.latlng.lat, e.latlng.lng);
+      mission.addWaypoint(e.lngLat.lat, e.lngLat.lng);
       renderWaypoints();
     } else if (props.mapMode === 'geofence') {
-      geofence.setCenter(e.latlng.lat, e.latlng.lng);
+      geofence.setCenter(e.lngLat.lat, e.lngLat.lng);
     }
+  });
+
+  map.on('load', () => {
+    petaSiap = true;
+
+    for (const id of Object.values(SRC)) {
+      map.addSource(id, { type: 'geojson', data: koleksiKosong() });
+    }
+
+    // Urutan penambahan = urutan tumpukan. Isi geofence paling bawah supaya
+    // tidak menutupi apa pun; lintasan kapal ditambahkan paling akhir (oleh
+    // trajLayer.pasang) supaya bukti gerak kapal tidak pernah tertimbun.
+    map.addLayer({
+      id: 'geofence-aktif-isi', type: 'fill', source: SRC.geofenceAktif,
+      paint: { 'fill-color': '#f97316', 'fill-opacity': 0.06 },
+    });
+    map.addLayer({
+      id: 'geofence-aktif-garis', type: 'line', source: SRC.geofenceAktif,
+      paint: { 'line-color': '#f97316', 'line-width': 2 },
+    });
+    map.addLayer({
+      id: 'geofence-draft-isi', type: 'fill', source: SRC.geofenceDraft,
+      paint: { 'fill-color': '#38bdf8', 'fill-opacity': 0.04 },
+    });
+    map.addLayer({
+      id: 'geofence-draft-garis', type: 'line', source: SRC.geofenceDraft,
+      // [3,3] pada tebal 2 = 6 px putus / 6 px kosong, sama seperti
+      // dashArray "6, 6" milik Leaflet. Satuannya kelipatan tebal garis.
+      paint: { 'line-color': '#38bdf8', 'line-width': 2, 'line-dasharray': [3, 3] },
+    });
+
+    map.addLayer({
+      id: 'arena-trail-layer', type: 'line', source: SRC.arenaTrail,
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': ['get', 'warna'], 'line-width': 3, 'line-opacity': 0.85 },
+    });
+    map.addLayer({
+      id: 'arena-trail-ujung-layer', type: 'circle', source: SRC.arenaTrailUjung,
+      paint: {
+        'circle-radius': 5,
+        'circle-color': ['get', 'warna'],
+        'circle-stroke-width': 2,
+        'circle-stroke-color': '#ffffff',
+      },
+    });
+
+    map.addLayer({
+      id: 'waypoint-garis-layer', type: 'line', source: SRC.waypointGaris,
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: {
+        'line-color': '#facc15', // Yellow warning color for planning
+        'line-width': 3,
+        'line-opacity': 0.8,
+      },
+    });
+    map.addLayer({
+      id: 'draft-trail-layer', type: 'line', source: SRC.draftTrail,
+      paint: {
+        'line-color': '#60a5fa', 'line-width': 2,
+        'line-dasharray': [3, 3], 'line-opacity': 0.7,
+      },
+    });
+
+    pasangTooltipLayer('arena-trail-layer', (f) => f.properties.label);
+    pasangTooltipLayer('geofence-aktif-garis', (f) => f.properties.label);
+    pasangTooltipLayer('geofence-draft-garis', (f) => f.properties.label);
+
+    // Right click to remove trail — hanya di mode arena, sejalan dengan
+    // penjagaan yang sama pada waypoint dan pelampung.
+    map.on('contextmenu', 'arena-trail-layer', (e) => {
+      if (props.mapMode !== 'arena') return;
+      arenaStore.removeTrail(e.features[0].properties.id);
+    });
+
+    // Lintasan kapal — datanya dari trajectoryStore, sudah berisi titik yang
+    // terekam SEBELUM peta ini dibuka.
+    trajLayer.pasang(map);
+    trajLayer.setTampil(props.visibleLayers.includes('trail'));
+
+    renderWaypoints();
+    renderArena();
+    renderGeofence();
+    renderDraftTrail();
   });
 });
 
@@ -131,28 +272,37 @@ watch(() => [vessel.lat, vessel.lng, vessel.heading], ([lat, lng, heading]) => {
   if (!map || !asvMarker) return;
   if (lat === 0 && lng === 0) return; // Ignore initial empty coords
 
-  const newPos = [lat, lng];
-
-  // Update Marker Position
-  asvMarker.setLatLng(newPos);
-
-  // Rotate the marker using CSS inside the divIcon wrapper
-  const el = asvMarker.getElement();
-  if (el) {
-    const wrapper = el.querySelector('.asv-icon-wrapper');
-    if (wrapper) {
-      wrapper.style.transform = `rotate(${heading}deg)`;
-      // Removed CSS transition so it behaves exactly like CompassRose (no 360 glitch)
-    }
-  }
+  asvMarker.setLngLat([lng, lat]);
+  // Rotasi ditangani Mapbox sendiri, tidak lagi lewat transform CSS pada
+  // pembungkus ikon: Mapbox memakai transform elemen penanda untuk menempatkan
+  // posisinya, jadi menulisi transform yang sama akan melempar ikon ke sudut layar.
+  // Tanpa transisi, persis seperti CompassRose (tidak ada glitch saat melewati 360).
+  asvMarker.setRotation(heading);
 
   // Peta hanya digeser saat penanda kapal HAMPIR keluar dari bidang pandang,
   // bukan tiap kali posisi berubah: memaksa kapal selalu di tengah membuat peta
   // merebut kembali tampilan tiap kali operator menggesernya untuk melihat area lain.
-  if (traj.mengikutiKapal && !map.getBounds().pad(-0.15).contains(newPos)) {
-    map.panTo(newPos, { animate: true, duration: 0.5 });
+  if (traj.mengikutiKapal && !dalamPandanganAman(lng, lat)) {
+    map.panTo([lng, lat], { animate: true, duration: 500 });
   }
 });
+
+/**
+ * Apakah titik masih berada di 70% bagian tengah layar?
+ *
+ * Pengganti `getBounds().pad(-0.15).contains()` milik Leaflet — LngLatBounds
+ * Mapbox tidak punya pad(), jadi penyusutan 15% tiap sisi dihitung di sini.
+ */
+function dalamPandanganAman(lng, lat) {
+  const b = map.getBounds();
+  const lebar = b.getEast() - b.getWest();
+  const tinggi = b.getNorth() - b.getSouth();
+  const m = 0.15;
+  return (
+    lng > b.getWest() + lebar * m && lng < b.getEast() - lebar * m &&
+    lat > b.getSouth() + tinggi * m && lat < b.getNorth() - tinggi * m
+  );
+}
 
 // --- GEO-TAG FORMATTING & TIME ---
 const currentTime = ref(new Date());
@@ -177,28 +327,26 @@ const coordB = computed(() => hasFix.value ? formatCoordB(vessel.lat, vessel.lng
 
 // Render Waypoints based on Mission Store
 const renderWaypoints = () => {
-  if (!map) return;
-
+  if (!map || !petaSiap) return;
 
   // Clear existing markers
-  waypointMarkers.forEach(m => map.removeLayer(m));
+  waypointMarkers.forEach((m) => m.remove());
   waypointMarkers = [];
 
-  const coords = mission.waypoints.map(wp => [wp.lat, wp.lng]);
-  waypointPolyline.setLatLngs(coords);
+  const coords = mission.waypoints.map((wp) => [wp.lng, wp.lat]);
+  // LineString wajib punya minimal dua titik; satu waypoint menghasilkan
+  // geometri tak sah yang ditolak diam-diam oleh Mapbox.
+  tulisSource(SRC.waypointGaris, coords.length >= 2
+    ? { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords } }
+    : koleksiKosong());
 
   mission.waypoints.forEach((wp, index) => {
-    const wpIcon = L.divIcon({
-      className: 'wp-custom-marker',
-      html: `<div class="w-6 h-6 bg-warning text-black font-black text-[10px] rounded-full flex items-center justify-center border-2 border-black shadow-lg">
+    const el = elemenDari(`<div class="w-6 h-6 bg-warning text-black font-black text-[10px] rounded-full flex items-center justify-center border-2 border-black shadow-lg cursor-pointer">
                ${index + 1}
-             </div>`,
-      iconSize: [24, 24],
-      iconAnchor: [12, 12]
-    });
+             </div>`);
 
-    const m = L.marker([wp.lat, wp.lng], { icon: wpIcon }).addTo(map);
-    m.on('contextmenu', () => {
+    el.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault();
       // Right click to remove waypoint — hanya di mode waypoint. Tanpa penjagaan
       // ini, peta baca-saja (mapMode="none", dipakai Panel Juri) masih bisa
       // menghapus waypoint lewat klik kanan.
@@ -206,7 +354,8 @@ const renderWaypoints = () => {
       mission.removeWaypoint(index);
       renderWaypoints();
     });
-    waypointMarkers.push(m);
+
+    waypointMarkers.push(new mapboxgl.Marker({ element: el }).setLngLat([wp.lng, wp.lat]).addTo(map));
   });
 };
 
@@ -216,20 +365,13 @@ watch(() => mission.waypoints.length, () => {
 });
 
 // ── Arena Rendering ─────────────────────────────────────────────────────────
-function makeIcon(color, letter) {
-  return L.divIcon({
-    className: '',
-    html: `<div style="width:22px;height:22px;border-radius:50%;background:${color};border:2.5px solid white;
-                box-shadow:0 2px 6px rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;
-                font-size:9px;font-weight:900;color:white;line-height:1">${letter}</div>`,
-    iconSize: [22, 22],
-    iconAnchor: [11, 11],
-  });
-}
-
-const BUOY_ICONS = {
-  red:   makeIcon('#ef4444', 'M'),
-  green: makeIcon('#22c55e', 'H'),
+const BUOY_WARNA = {
+  red: '#ef4444',
+  green: '#22c55e',
+};
+const BUOY_HURUF = {
+  red: 'M',
+  green: 'H',
 };
 
 const TRAIL_COLORS = {
@@ -238,60 +380,76 @@ const TRAIL_COLORS = {
 };
 
 function renderArena() {
-  if (!map) return;
+  if (!map || !petaSiap) return;
 
-  // Remove existing arena layers
-  arenaLayers.forEach((l) => map.removeLayer(l));
-  arenaLayers = [];
+  // Remove existing arena markers
+  arenaMarkers.forEach((m) => m.remove());
+  arenaMarkers = [];
 
   const { buoys, trails } = arenaStore.activeArena;
 
-  // Render buoys
+  // Render buoys — tetap penanda DOM, bukan layer: isinya huruf dan lingkaran
+  // ber-border yang jauh lebih murah ditulis sebagai HTML daripada disusun dari
+  // properti circle-* Mapbox.
   buoys.forEach((b) => {
-    const icon = BUOY_ICONS[b.type] || BUOY_ICONS.green;
-    const m = L.marker([b.lat, b.lng], { icon })
-      .bindTooltip(b.label, { permanent: false, direction: 'top', offset: [0, -14] })
-      .addTo(map);
-    m.on('contextmenu', () => {
+    const warna = BUOY_WARNA[b.type] || BUOY_WARNA.green;
+    const huruf = BUOY_HURUF[b.type] || BUOY_HURUF.green;
+    const el = elemenDari(`<div style="width:22px;height:22px;border-radius:50%;background:${warna};border:2.5px solid white;
+                box-shadow:0 2px 6px rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;
+                font-size:9px;font-weight:900;color:white;line-height:1;cursor:pointer">${huruf}</div>`);
+
+    pasangTooltipElemen(el, [b.lng, b.lat], b.label);
+    el.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault();
       arenaStore.removeBuoy(b.id);
     });
-    arenaLayers.push(m);
+
+    arenaMarkers.push(new mapboxgl.Marker({ element: el }).setLngLat([b.lng, b.lat]).addTo(map));
   });
 
   // Render completed trails
+  const garis = [];
+  const ujung = [];
   trails.forEach((t) => {
     if (!t.points || t.points.length < 2) return;
-    const coords = t.points.map((p) => [p.lat, p.lng]);
-    const line = L.polyline(coords, {
-      color: TRAIL_COLORS[t.type] || '#22c55e',
-      weight: 3,
-      opacity: 0.85,
-    })
-      .bindTooltip(t.label, { permanent: false, direction: 'center' })
-      .addTo(map);
-    line.on('contextmenu', () => {
-      arenaStore.removeTrail(t.id);
+    const coords = t.points.map((p) => [p.lng, p.lat]);
+    const warna = TRAIL_COLORS[t.type] || '#22c55e';
+
+    garis.push({
+      type: 'Feature',
+      properties: { warna, label: t.label, id: t.id },
+      geometry: { type: 'LineString', coordinates: coords },
     });
-    arenaLayers.push(line);
 
     // Start/end markers for trail
-    const startIcon = L.divIcon({
-      className: '',
-      html: `<div style="width:10px;height:10px;border-radius:50%;background:${TRAIL_COLORS[t.type] || '#22c55e'};border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.5)"></div>`,
-      iconSize: [10, 10], iconAnchor: [5, 5],
-    });
-    arenaLayers.push(L.marker(coords[0], { icon: startIcon, interactive: false }).addTo(map));
-    arenaLayers.push(L.marker(coords[coords.length - 1], { icon: startIcon, interactive: false }).addTo(map));
+    for (const c of [coords[0], coords[coords.length - 1]]) {
+      ujung.push({
+        type: 'Feature',
+        properties: { warna },
+        geometry: { type: 'Point', coordinates: c },
+      });
+    }
   });
+
+  tulisSource(SRC.arenaTrail, { type: 'FeatureCollection', features: garis });
+  tulisSource(SRC.arenaTrailUjung, { type: 'FeatureCollection', features: ujung });
 }
 
 // Draft trail preview
-watch(() => [...arenaStore.activeTrailPoints], (pts) => {
-  if (!draftTrailPolyline) return;
-  const color = arenaStore.activePlaceTool === 'trail_blue' ? '#3b82f6' : '#22c55e';
-  draftTrailPolyline.setStyle({ color });
-  draftTrailPolyline.setLatLngs(pts.map((p) => [p.lat, p.lng]));
-}, { deep: true });
+function renderDraftTrail() {
+  if (!map || !petaSiap) return;
+  const pts = arenaStore.activeTrailPoints;
+  const warna = arenaStore.activePlaceTool === 'trail_blue' ? '#3b82f6' : '#22c55e';
+  map.setPaintProperty('draft-trail-layer', 'line-color', warna);
+  tulisSource(SRC.draftTrail, pts.length >= 2
+    ? {
+        type: 'Feature', properties: {},
+        geometry: { type: 'LineString', coordinates: pts.map((p) => [p.lng, p.lat]) },
+      }
+    : koleksiKosong());
+}
+
+watch(() => [...arenaStore.activeTrailPoints], renderDraftTrail, { deep: true });
 
 // Re-render arena when buoys/trails change
 watch(
@@ -307,29 +465,29 @@ watch(() => arenaStore.activeArena.id, () => renderArena());
 // Tanpa membedakan keduanya, operator tidak punya cara melihat bahwa lingkaran
 // yang baru dia geser belum sampai ke kapal — dan batas yang dikira aktif padahal
 // belum itu memberi rasa aman palsu.
-let geofenceAktifLayer = null;
-let geofenceDraftLayer = null;
-
+//
+// Radiusnya METER, dan itu sebabnya lingkarannya dibuat sebagai poligon lewat
+// lingkaranGeoJSON: circle-radius milik Mapbox satuannya piksel, jadi batas 60 m
+// akan tampak menutupi seluruh danau begitu peta di-zoom keluar.
 const renderGeofence = () => {
-  if (!map) return;
-  if (geofenceAktifLayer) { map.removeLayer(geofenceAktifLayer); geofenceAktifLayer = null; }
-  if (geofenceDraftLayer) { map.removeLayer(geofenceDraftLayer); geofenceDraftLayer = null; }
+  if (!map || !petaSiap) return;
 
   const aktif = geofence.aktifDiKapal;
   if (aktif.enabled && aktif.radius_m > 0 && (aktif.lat || aktif.lon)) {
-    geofenceAktifLayer = L.circle([aktif.lat, aktif.lon], {
-      radius: aktif.radius_m,
-      color: '#f97316', weight: 2, fillColor: '#f97316', fillOpacity: 0.06,
-    }).addTo(map).bindTooltip(`Geofence aktif — ${aktif.radius_m.toFixed(0)} m`);
+    const f = lingkaranGeoJSON(aktif.lat, aktif.lon, aktif.radius_m);
+    f.properties.label = `Geofence aktif — ${aktif.radius_m.toFixed(0)} m`;
+    tulisSource(SRC.geofenceAktif, f);
+  } else {
+    tulisSource(SRC.geofenceAktif, koleksiKosong());
   }
 
   const d = geofence.draft;
   if (geofence.punyaPusat && Number(d.radius_m) > 0 && geofence.belumTersimpan) {
-    geofenceDraftLayer = L.circle([d.lat, d.lon], {
-      radius: Number(d.radius_m),
-      color: '#38bdf8', weight: 2, dashArray: '6, 6',
-      fillColor: '#38bdf8', fillOpacity: 0.04,
-    }).addTo(map).bindTooltip(`Belum disimpan — ${Number(d.radius_m).toFixed(0)} m`);
+    const f = lingkaranGeoJSON(d.lat, d.lon, Number(d.radius_m));
+    f.properties.label = `Belum disimpan — ${Number(d.radius_m).toFixed(0)} m`;
+    tulisSource(SRC.geofenceDraft, f);
+  } else {
+    tulisSource(SRC.geofenceDraft, koleksiKosong());
   }
 };
 
@@ -342,21 +500,19 @@ watch(
   ],
   renderGeofence
 );
-onMounted(renderGeofence);
 
 onMounted(() => {
   timeInterval = setInterval(() => currentTime.value = new Date(), 1000);
 });
 
 watch(() => props.visibleLayers, (layers) => {
-  if (!map) return;
+  if (!map || !asvMarker) return;
 
   // Toggle Vessel Marker
-  if (layers.includes('vessel') && !map.hasLayer(asvMarker)) {
-    asvMarker.addTo(map);
-  } else if (!layers.includes('vessel') && map.hasLayer(asvMarker)) {
-    map.removeLayer(asvMarker);
-  }
+  const mau = layers.includes('vessel');
+  if (mau && !asvTampil) asvMarker.addTo(map);
+  else if (!mau && asvTampil) asvMarker.remove();
+  asvTampil = mau;
 
   // Toggle Lintasan
   trajLayer.setTampil(layers.includes('trail'));
@@ -367,28 +523,47 @@ onUnmounted(() => {
   // Layer dilepas SEBELUM peta dibuang. Perekaman di store tetap berjalan —
   // yang berhenti hanyalah penggambarannya.
   trajLayer.lepas();
+  popupHover.forEach((p) => p.remove());
+  popupHover = [];
+  waypointMarkers.forEach((m) => m.remove());
+  waypointMarkers = [];
+  arenaMarkers.forEach((m) => m.remove());
+  arenaMarkers = [];
   if (map) {
     map.remove();
     map = null;
   }
+  petaSiap = false;
 });
 </script>
 
 <template>
   <div
     class="relative w-full h-full bg-background rounded-xl overflow-hidden shadow-2xl border border-(--border-subtle)">
-    <!-- Leaflet Map Container -->
-    <div ref="mapContainer" class="w-full h-full z-0 cursor-crosshair"></div>
+    <!-- Mapbox GL Map Container -->
+    <div ref="mapContainer" class="w-full h-full z-0"></div>
+
+    <!-- Token belum diisi: panel lain di halaman ini tetap hidup. -->
+    <div v-if="!tokenAda"
+      class="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-background/95 px-8 text-center">
+      <span class="text-[10px] font-black uppercase tracking-widest text-danger">Peta tidak aktif</span>
+      <p class="text-sm font-bold text-(--text-primary)">Token Mapbox belum diisi.</p>
+      <p class="max-w-md text-xs leading-relaxed text-(--text-secondary)">
+        Isi <code class="font-mono text-primary">VITE_MAPBOX_TOKEN</code> di
+        <code class="font-mono text-primary">frontend/.env</code>, lalu jalankan ULANG
+        <code class="font-mono text-primary">npm run dev</code> — Vite hanya membaca .env saat start.
+      </p>
+    </div>
 
 
     <!-- Map Controls Overlay -->
     <div class="absolute bottom-6 right-6 flex flex-col gap-3 z-10">
-      <button @click="map && map.setZoom(map.getZoom() + 1)"
+      <button @click="map && map.zoomIn()"
         class="w-12 h-12 bg-card/90 backdrop-blur-md text-(--text-primary) rounded-xl border border-(--border-subtle) hover:bg-primary hover:text-black transition-all shadow-xl font-bold text-xl flex items-center justify-center">+</button>
-      <button @click="map && map.setZoom(map.getZoom() - 1)"
+      <button @click="map && map.zoomOut()"
         class="w-12 h-12 bg-card/90 backdrop-blur-md text-(--text-primary) rounded-xl border border-(--border-subtle) hover:bg-primary hover:text-black transition-all shadow-xl font-bold text-xl flex items-center justify-center">-</button>
 
-      <button @click="map && map.panTo([vessel.lat || defaultLat, vessel.lng || defaultLng])"
+      <button @click="map && map.panTo([vessel.lng || defaultLng, vessel.lat || defaultLat])"
         class="mt-4 w-12 h-12 bg-primary/20 backdrop-blur-md text-primary rounded-xl border border-primary hover:bg-primary hover:text-black transition-all shadow-xl flex items-center justify-center"
         title="Center to ASV">
         <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -450,18 +625,49 @@ onUnmounted(() => {
 </template>
 
 <style>
-/* Leaflet Global Overrides */
-.leaflet-container {
+/* Mapbox GL Global Overrides */
+.mapboxgl-map {
   background: #0f172a !important;
   /* Tailwind slate-900 */
   font-family: inherit;
 }
 
+/* Kursor silang dipertahankan dari versi Leaflet: peta ini dipakai MENUNJUK
+   koordinat (waypoint, pusat geofence, elemen arena), bukan sekadar digeser,
+   dan kursor tangan bawaan Mapbox tidak menyiratkan itu. */
+.mapboxgl-canvas-container.mapboxgl-interactive {
+  cursor: crosshair;
+}
+
 .asv-icon-wrapper {
-  width: 100%;
-  height: 100%;
+  width: 48px;
+  height: 48px;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* Atribusi & logo dibuat samar: syarat layanan Mapbox mewajibkan keduanya
+   TETAP TERBACA, jadi yang dikurangi hanya kontrasnya, bukan keberadaannya. */
+.mapboxgl-ctrl-bottom-left {
+  opacity: 0.55;
+  transition: opacity 0.2s;
+}
+.mapboxgl-ctrl-bottom-left:hover {
+  opacity: 1;
+}
+
+.peta-tooltip .mapboxgl-popup-content {
+  background: rgba(15, 23, 42, 0.95);
+  color: #e2e8f0;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+.peta-tooltip .mapboxgl-popup-tip {
+  display: none;
 }
 </style>
