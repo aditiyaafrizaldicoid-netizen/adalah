@@ -15,7 +15,7 @@ import {
 } from "lucide-vue-next";
 import { useThemeStore } from '@/stores/themeStore';
 import { useUiStore } from '@/stores/uiStore';
-
+import logo from "@/assets/logo.jpg"
 const router = useRouter();
 const route = useRoute();
 const themeStore = useThemeStore();
@@ -134,13 +134,13 @@ const navigate = (path) => {
     <div class="p-6 flex items-center justify-between border-b border-(--border-primary)">
       <div v-if="!collapsed" class="flex items-center gap-3">
         <div class="w-8 h-8 bg-(--accent-primary) rounded-lg flex items-center justify-center">
-          <Activity class="text-white w-5 h-5" />
+            <img :src="logo" class="w-full h-full" />
         </div>
         <span class="font-bold text-xl tracking-tight text-(--text-primary)">UMM<span class="text-(--accent-primary)"> STATION</span></span>
       </div>
       <div v-else class="w-full flex justify-center">
         <div class="w-10 h-10 bg-(--accent-primary) rounded-lg flex items-center justify-center">
-          <Activity class="text-white w-6 h-6" />
+            <img :src="logo" class="w-full h-full" />
         </div>
       </div>
     </div>

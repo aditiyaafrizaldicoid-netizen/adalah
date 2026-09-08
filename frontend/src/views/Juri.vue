@@ -41,7 +41,7 @@ import ProgressBar from "@/components/ui/ProgressBar.vue";
 import GeotagPanel from "@/components/monitoring/GeotagPanel.vue";
 import GridMap from "@/components/mapping/GridMap.vue";
 import MjpegImg from "@/components/monitoring/MjpegImg.vue";
-
+import logo from "@/assets/logo.jpg"
 const vessel = useVesselStore();
 
 /**
@@ -157,7 +157,7 @@ const manualScoreRows = computed(() => [
       <div class="flex items-center gap-4 min-w-0">
         <div class="flex items-center gap-3 shrink-0">
           <div class="w-9 h-9 bg-(--accent-primary) rounded-lg flex items-center justify-center">
-            <Activity class="text-white w-5 h-5" />
+              <img :src="logo" class="w-full h-full" />
           </div>
           <div class="leading-tight">
             <div class="font-bold text-lg tracking-tight text-(--text-primary)">

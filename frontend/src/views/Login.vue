@@ -16,6 +16,7 @@ import {
 import { useAuthStore } from "@/stores/authStore";
 import { useThemeStore } from "@/stores/themeStore";
 import heroImage from "@/assets/hero.png";
+import logo from "@/assets/logo.jpg"
 
 const router = useRouter();
 const route = useRoute();
@@ -70,7 +71,8 @@ async function handleSubmit() {
       <div class="relative z-10 flex flex-col justify-between p-12 w-full">
         <div class="flex items-center gap-3">
           <div class="w-10 h-10 bg-(--accent-primary) rounded-lg flex items-center justify-center">
-            <Activity class="text-white w-6 h-6" />
+            <!--   <img :src="logo" class="w-full h-full" /> -->
+            <img :src="logo" class="w-full h-full" />
           </div>
           <span class="font-bold text-2xl tracking-tight text-(--text-primary)">
             UMM<span class="text-(--accent-primary)"> STATION</span>
@@ -116,7 +118,7 @@ async function handleSubmit() {
         <!-- Logo untuk layar kecil -->
         <div class="flex lg:hidden items-center gap-3 mb-10 justify-center">
           <div class="w-9 h-9 bg-(--accent-primary) rounded-lg flex items-center justify-center">
-            <Activity class="text-white w-5 h-5" />
+              <img :src="logo" class="w-full h-full" />
           </div>
           <span class="font-bold text-xl tracking-tight text-(--text-primary)">
             UMM<span class="text-(--accent-primary)"> STATION</span>
