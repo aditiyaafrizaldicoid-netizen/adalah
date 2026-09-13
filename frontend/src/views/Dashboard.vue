@@ -126,11 +126,11 @@ const wsStore = useWebsocketStore();
         />
         <MetricCard
           label="COURSE OVER GROUND"
-          :value="vessel.cogValid ? vessel.cog.toFixed(2) : '—'"
+          :value="vessel.cogAda ? vessel.cogTampil.toFixed(2) : '—'"
           unit="DEG"
           :icon="Compass"
-          color="success"
-          :note="vessel.cogValid ? '' : 'kapal terlalu pelan'"
+          :color="vessel.cogTertahanTampil ? 'warning' : 'success'"
+          :note="vessel.cogKeterangan"
         />
         <MetricCard
           label="BATTERY"

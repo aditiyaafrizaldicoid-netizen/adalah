@@ -241,11 +241,11 @@ const manualScoreRows = computed(() => [
         />
         <MetricCard
           label="Course Over Ground"
-          :value="vessel.cogValid ? vessel.cog.toFixed(2) : '—'"
+          :value="vessel.cogAda ? vessel.cogTampil.toFixed(2) : '—'"
           unit="Deg"
           :icon="Compass"
-          color="success"
-          :note="vessel.cogValid ? '' : 'kapal terlalu pelan'"
+          :color="vessel.cogTertahanTampil ? 'warning' : 'success'"
+          :note="vessel.cogKeterangan"
         />
         <MetricCard
           label="Heading"

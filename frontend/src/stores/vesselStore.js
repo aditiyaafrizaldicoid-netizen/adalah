@@ -28,6 +28,30 @@ export const useVesselStore = defineStore("vessel", () => {
   // berisi nilai valid terakhir, jadi jangan ditampilkan sebagai angka terkini.
   const cogValid = ref(false);
 
+  /**
+   * COG sah TERAKHIR yang pernah dilihat base station, dan kapan.
+   *
+   * null = kapal belum pernah sekali pun bergerak cukup cepat sejak halaman ini
+   * dibuka. Bedanya penting: `cog` sendiri lahir bernilai 0 dan tetap 0 selama
+   * kapal belum pernah jalan, jadi memampangnya apa adanya akan menyatakan
+   * "kapal mengarah ke UTARA" — arah yang tidak pernah diukur siapa pun.
+   *
+   * Disalin di sini, TIDAK diambil dari `cog` milik kapal, supaya kapal yang
+   * restart (nilainya kembali 0) tidak membuat nol itu tampil seolah-olah arah
+   * terakhir yang teramati.
+   */
+  const cogTertahan = ref(null);
+  let cogSahAt = 0;
+  /**
+   * Umur nilai tertahan, diperbarui tiap telemetri masuk — bukan oleh timer.
+   *
+   * Telemetri datang ~10x per detik, jadi angkanya tetap hidup di layar; dan
+   * saat telemetri BERHENTI, umurnya ikut membeku. Itu memang yang benar:
+   * kalau kabar dari kapal sudah putus, base station tidak tahu apa pun tentang
+   * "sekarang", dan jam yang terus berjalan hanya akan mengarang kepastian.
+   */
+  const cogUmurMs = ref(0);
+
   const pitch = ref(0);
   const roll = ref(0);
   const yaw = ref(0);
@@ -115,6 +139,46 @@ export const useVesselStore = defineStore("vessel", () => {
   // `sog` (knot) agar tidak ada dua sumber angka kecepatan yang bisa berbeda.
   const sogKmh = computed(() => sog.value * KMH_PER_KNOT);
   const isGpsValid = computed(() => gpsFix.value >= 2);
+
+  // ── COG yang tetap terbaca saat kapal pelan atau diam ─────────────────────
+  //
+  // Dulu seluruh tampilan menulis "—" begitu cog_valid jatuh, dan itu berarti
+  // COG menghilang justru pada dua keadaan paling sering: kapal menunggu di
+  // dermaga, dan kapal merayap saat manuver presisi. Operator kehilangan satu-
+  // satunya angka yang memberitahu ARAH GERAK sesungguhnya, padahal arah itu
+  // tidak berubah hanya karena kapal berhenti.
+  //
+  // Yang TIDAK dilakukan: menghitung ulang COG dari derau. Di bawah 0,3 m/s
+  // vektor kecepatan GPS melompat acak ke segala penjuru (lihat
+  // COG_MIN_SPEED_MS di core/state.py kapal), jadi memampangkannya sebagai
+  // angka terkini justru memberi arah yang salah dengan percaya diri.
+  //
+  // Yang dilakukan: pampang arah sah TERAKHIR, sebut umurnya, dan katakan
+  // bahwa itu tertahan. Operator dapat angka yang berarti, tanpa mengira
+  // angka itu hidup.
+
+  /** Angka yang layak dipampang: yang hidup kalau ada, kalau tidak yang tertahan. */
+  const cogTampil = computed(() => (cogValid.value ? cog.value : cogTertahan.value));
+
+  /** Ada sesuatu untuk dipampang? false = kapal belum pernah bergerak. */
+  const cogAda = computed(() => cogTampil.value !== null);
+
+  /** Angka yang dipampang bukan pengukuran terkini. */
+  const cogTertahanTampil = computed(() => cogAda.value && !cogValid.value);
+
+  /**
+   * Keterangan di bawah angka COG. Satu tempat, supaya kelima tampilan yang
+   * memampang COG tidak menjelaskan hal yang sama dengan kalimat berbeda-beda.
+   */
+  const cogKeterangan = computed(() => {
+    if (cogValid.value) return "";
+    if (!cogAda.value) return "kapal belum pernah bergerak";
+    const detik = Math.round(cogUmurMs.value / 1000);
+    if (detik < 60) return `tertahan — ${detik} d lalu`;
+    const menit = Math.round(detik / 60);
+    if (menit < 60) return `tertahan — ${menit} mnt lalu`;
+    return `tertahan — ${Math.floor(menit / 60)} j ${menit % 60} mnt lalu`;
+  });
   const batteryColor = computed(() => {
     if (batteryPct.value > 50) return "text-success";
     if (batteryPct.value > 20) return "text-warning";
@@ -173,6 +237,13 @@ export const useVesselStore = defineStore("vessel", () => {
     if (data.sog !== undefined) sog.value = data.sog * MS_TO_KNOTS;
     if (data.cog !== undefined && data.cog !== null) cog.value = data.cog;
     if (data.cog_valid !== undefined) cogValid.value = data.cog_valid;
+    // Tangkap arah gerak SELAGI masih sah. Inilah satu-satunya kesempatan:
+    // begitu kapal melambat, angka yang sama tidak akan pernah ditandai sah lagi.
+    if (cogValid.value && Number.isFinite(cog.value)) {
+      cogTertahan.value = cog.value;
+      cogSahAt = Date.now();
+    }
+    if (cogTertahan.value !== null) cogUmurMs.value = Date.now() - cogSahAt;
     if (data.pitch !== undefined) pitch.value = data.pitch;
     if (data.roll !== undefined) roll.value = data.roll;
     if (data.yaw !== undefined) yaw.value = data.yaw;
@@ -254,6 +325,7 @@ export const useVesselStore = defineStore("vessel", () => {
 
   return {
     lat, lng, heading, sog, cog, cogValid,
+    cogTampil, cogAda, cogTertahanTampil, cogKeterangan, cogUmurMs,
     pitch, roll, yaw,
     batteryPct, batteryVolt,
     gpsFix, satellites, gpsHdop, signalStrength, track,

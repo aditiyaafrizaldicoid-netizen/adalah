@@ -47,8 +47,9 @@ const vessel = useVesselStore();
           <SpeedGauge :speed="vessel.sog" />
           <div class="h-24 w-px bg-card"></div>
           <div class="flex flex-col items-center">
-            <span class="text-2xl font-black text-(--text-primary) font-mono">{{ vessel.cog.toFixed(2) }}°</span>
+            <span :class="['text-2xl font-black font-mono', vessel.cogTertahanTampil ? 'text-warning' : 'text-(--text-primary)']">{{ vessel.cogAda ? vessel.cogTampil.toFixed(2) + '°' : '—' }}</span>
             <span class="text-[10px] font-bold text-(--text-secondary) uppercase tracking-widest mt-1">Course</span>
+            <span v-if="vessel.cogKeterangan" class="text-[9px] font-bold text-(--text-muted) tracking-tight mt-0.5">{{ vessel.cogKeterangan }}</span>
           </div>
         </div>
 

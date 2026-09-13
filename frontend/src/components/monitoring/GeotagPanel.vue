@@ -38,8 +38,8 @@ const rows = computed(() => [
   },
   {
     label: 'COG',
-    value: vessel.cogValid ? `${vessel.cog.toFixed(2)}°` : '—',
-    suffix: vessel.cogValid ? 'deg' : 'kapal terlalu pelan',
+    value: vessel.cogAda ? `${vessel.cogTampil.toFixed(2)}°` : '—',
+    suffix: vessel.cogValid ? 'deg' : vessel.cogKeterangan,
   },
 ]);
 
