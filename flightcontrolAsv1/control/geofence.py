@@ -1,9 +1,15 @@
 """
 Geofence: batalkan misi otomatis kalau kapal keluar dari batas yang diizinkan.
 
-Batasnya berupa LINGKARAN — satu titik pusat dan satu jari-jari. Pusatnya, kalau
-tidak diisi, diambil dari posisi kapal SAAT MISI DIMULAI. Jadi yang perlu disetel
-biasanya cuma satu angka: jari-jarinya.
+Batasnya berupa KOTAK SEJAJAR SUMBU — satu titik pusat, satu lebar (timur-barat)
+dan satu tinggi (utara-selatan), keduanya dalam meter dan diukur sisi ke sisi.
+Pusatnya, kalau tidak diisi, diambil dari posisi kapal SAAT MISI DIMULAI.
+
+KENAPA KOTAK, BUKAN LINGKARAN (sejak versi ini):
+    Danau dan arena lomba berbentuk persegi panjang. Lingkaran yang cukup besar
+    untuk memuat seluruh arena mau tidak mau ikut memuat daratan di keempat
+    sudutnya; lingkaran yang cukup kecil untuk menghindari daratan memotong
+    ujung arena. Kotak bisa mengikuti bentuk perairannya.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 EMPAT KEPUTUSAN YANG MENENTUKAN APAKAH INI MENOLONG ATAU MALAH MERUSAK
@@ -31,43 +37,64 @@ EMPAT KEPUTUSAN YANG MENENTUKAN APAKAH INI MENOLONG ATAU MALAH MERUSAK
    ArduPilot, yang berjalan di Flight Controller dan tidak peduli mini PC hidup
    atau mati. Yang di sini menghentikan MISI-nya; yang di sana menyelamatkan
    KAPAL-nya. Pasang keduanya.
+
+   ⚠ PERHATIKAN BENTUKNYA BERBEDA: FENCE_RADIUS di ArduPilot tetap LINGKARAN dan
+     tidak bisa dibuat kotak lewat parameter itu. Jadi setelah perubahan ini ada
+     DUA batas dengan bentuk berbeda. Setel FENCE_RADIUS minimal sebesar setengah
+     diagonal kotak ini (√(lebar² + tinggi²) / 2) supaya ArduPilot tidak lebih
+     dulu bertindak di dalam kotak yang justru masih sah.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+HANYA BERLAKU SAAT MISI OTONOM BERJALAN.
+    _tick() langsung keluar kalau mission_engine.status != "RUNNING". Kapal yang
+    dikemudikan MANUAL boleh keluar batas sejauh apa pun tanpa satu pun peringatan
+    dari modul ini — yang memang disengaja (operator sedang memegang kendali),
+    tapi berarti geofence ini BUKAN jaring pengaman untuk kemudi manual.
+
 MENYIAPKAN (flightcontrolAsv1/.env di Mini PC):
-    ASV_GEOFENCE_RADIUS_M=60      # 0 / kosong = fitur NONAKTIF
+    ASV_GEOFENCE_LEBAR_M=120      # bentangan timur-barat; 0 / kosong = NONAKTIF
+    ASV_GEOFENCE_TINGGI_M=80      # bentangan utara-selatan
     ASV_GEOFENCE_LAT=             # opsional; kosong = pusat diambil saat misi mulai
     ASV_GEOFENCE_LON=
+
+    ASV_GEOFENCE_RADIUS_M=60      # USANG. Masih dibaca demi Mini PC yang .env-nya
+                                  # belum diperbarui: jadi kotak 2R × 2R. Tanpa
+                                  # ini, kapal yang sudah dipasang di lapangan akan
+                                  # diam-diam boot TANPA geofence sama sekali.
 """
 
+import math
 import os
 import threading
 import time
 
-from control.geodesy import haversine_m, posisi_masuk_akal
+from control.geodesy import margin_kotak_m, posisi_masuk_akal
 
 
 class GeofenceMonitor:
-    """Pantau posisi kapal; batalkan misi begitu keluar batas."""
+    """Pantau posisi kapal; batalkan misi begitu keluar batas kotak."""
 
     # Lama pelanggaran harus bertahan sebelum misi dibatalkan. Cukup panjang untuk
     # menelan satu-dua pembacaan GPS yang melenceng, cukup pendek supaya kapal tidak
     # sempat jauh — pada 1 m/s, 2 detik berarti sekitar 2 meter tambahan.
     CONFIRM_SEC = 2.0
 
-    # Jarak masuk kembali harus lebih dalam dari batas sebelum pelanggaran dianggap
-    # berakhir. Tanpa histeresis ini, kapal yang mengambang tepat di garis batas akan
-    # memicu peringatan berulang-ulang.
+    # Kapal harus masuk kembali SEDALAM ini dari sisi kotak sebelum pelanggaran
+    # dianggap berakhir. Tanpa histeresis ini, kapal yang mengambang tepat di garis
+    # batas akan memicu peringatan berulang-ulang.
     HYSTERESIS_M = 3.0
 
     POLL_SEC = 0.5
 
-    def __init__(self, asv, mission_engine=None, radius_m: float = None,
-                 center_lat: float = None, center_lon: float = None,
-                 on_warning=None):
+    def __init__(self, asv, mission_engine=None, lebar_m: float = None,
+                 tinggi_m: float = None, center_lat: float = None,
+                 center_lon: float = None, on_warning=None):
         """
         :param asv: ASVController.
         :param mission_engine: MissionEngine yang akan di-abort saat batas dilanggar.
-        :param radius_m: jari-jari batas (meter). None/0 = fitur nonaktif.
+        :param lebar_m: bentangan TIMUR-BARAT (meter, penuh). None/0 = nonaktif.
+        :param tinggi_m: bentangan UTARA-SELATAN (meter, penuh). None = ikut lebar
+                         (kotak bujur sangkar).
         :param center_lat/lon: pusat batas. None = diambil saat misi dimulai.
         :param on_warning: callback(level, code, message) ke base station.
         """
@@ -75,9 +102,31 @@ class GeofenceMonitor:
         self.mission_engine = mission_engine
         self._on_warning = on_warning
 
-        if radius_m is None:
-            radius_m = self._env_float("ASV_GEOFENCE_RADIUS_M", 0.0)
-        self.radius_m = float(radius_m or 0.0)
+        if lebar_m is None:
+            lebar_m = self._env_float("ASV_GEOFENCE_LEBAR_M", 0.0)
+        if tinggi_m is None:
+            tinggi_m = self._env_float("ASV_GEOFENCE_TINGGI_M", 0.0)
+
+        # Mini PC yang .env-nya masih dari versi lingkaran. Tanpa jalur ini kapal
+        # yang sudah terpasang di lapangan akan boot TANPA geofence sama sekali,
+        # dan tidak ada apa pun di layar yang menunjukkan bahwa pagar hilang.
+        if lebar_m <= 0 and tinggi_m <= 0:
+            radius_lama = self._env_float("ASV_GEOFENCE_RADIUS_M", 0.0)
+            if radius_lama > 0:
+                lebar_m = tinggi_m = radius_lama * 2.0
+                print(f"[Geofence] ASV_GEOFENCE_RADIUS_M={radius_lama:.0f} (usang) "
+                      f"dibaca sebagai kotak {lebar_m:.0f} × {tinggi_m:.0f} m. "
+                      f"Perbarui .env ke ASV_GEOFENCE_LEBAR_M/TINGGI_M.")
+
+        # Hanya satu sisi yang diisi = bujur sangkar. Menganggapnya nonaktif akan
+        # membuang batas yang jelas-jelas diniatkan operator.
+        if lebar_m > 0 and tinggi_m <= 0:
+            tinggi_m = lebar_m
+        elif tinggi_m > 0 and lebar_m <= 0:
+            lebar_m = tinggi_m
+
+        self.lebar_m = float(lebar_m or 0.0)
+        self.tinggi_m = float(tinggi_m or 0.0)
 
         if center_lat is None:
             center_lat = self._env_float("ASV_GEOFENCE_LAT", 0.0)
@@ -97,7 +146,7 @@ class GeofenceMonitor:
         self._melanggar_sejak = None
         self._sudah_membatalkan = False
         self._lapor_gps_buruk = False
-        # Dimatikan operator dari peta — beda dari radius 0. Lihat configure().
+        # Dimatikan operator dari peta — beda dari ukuran 0. Lihat configure().
         self._dimatikan_operator = False
 
     @staticmethod
@@ -109,30 +158,45 @@ class GeofenceMonitor:
 
     @property
     def enabled(self) -> bool:
-        return self.radius_m > 0 and not self._dimatikan_operator
+        return (self.lebar_m > 0 and self.tinggi_m > 0
+                and not self._dimatikan_operator)
+
+    @property
+    def diagonal_m(self) -> float:
+        """
+        Jarak pusat ke sudut terjauh. Inilah angka minimum yang pantas dipakai
+        untuk FENCE_RADIUS di ArduPilot — lihat catatan bentuk di atas modul.
+        """
+        return math.hypot(self.lebar_m, self.tinggi_m) / 2.0
 
     def set_mission_engine(self, mission_engine):
         self.mission_engine = mission_engine
 
-    def configure(self, enabled=None, lat=None, lon=None, radius_m=None) -> str:
+    def configure(self, enabled=None, lat=None, lon=None,
+                  lebar_m=None, tinggi_m=None) -> str:
         """
         Ubah batas saat kapal SEDANG BERJALAN — dipakai saat operator menggambarnya
         di peta base station.
 
         Nilai yang None dibiarkan apa adanya, sehingga perintah boleh mengirim
-        sebagian field saja (mis. cuma radius).
+        sebagian field saja (mis. cuma lebar).
 
-        Mematikan geofence TIDAK menghapus pusat & radius yang sudah diatur: operator
+        Mematikan geofence TIDAK menghapus pusat & ukuran yang sudah diatur: operator
         sering menonaktifkannya sementara saat menguji sesuatu, dan kehilangan batas
         yang sudah susah payah digambar di peta setiap kali itu terjadi bukan sesuatu
         yang bisa dimaafkan di tengah lomba.
 
         Return ringkasan untuk di-log/dikirim balik.
         """
-        if radius_m is not None:
+        if lebar_m is not None:
             try:
-                nilai = float(radius_m)
-                self.radius_m = max(0.0, nilai)
+                self.lebar_m = max(0.0, float(lebar_m))
+            except (TypeError, ValueError):
+                pass
+
+        if tinggi_m is not None:
+            try:
+                self.tinggi_m = max(0.0, float(tinggi_m))
             except (TypeError, ValueError):
                 pass
 
@@ -141,19 +205,13 @@ class GeofenceMonitor:
             self._pusat_tetap = True
 
         if enabled is not None:
-            aktif = bool(enabled)
-            if not aktif:
-                # Disimpan sebagai radius 0 hanya kalau memang diminta lewat radius_m;
-                # di sini cukup tandai lewat flag terpisah supaya pusat & radius tetap.
-                self._dimatikan_operator = True
-            else:
-                self._dimatikan_operator = False
+            self._dimatikan_operator = not bool(enabled)
 
         # Pelanggaran yang sedang dihitung dilupakan: batas baru berarti penilaian baru.
         self._melanggar_sejak = None
         self._sudah_membatalkan = False
 
-        ringkas = (f"radius {self.radius_m:.0f} m"
+        ringkas = (f"kotak {self.lebar_m:.0f} × {self.tinggi_m:.0f} m"
                    + (f", pusat {self.center[0]:.6f},{self.center[1]:.6f}" if self.center
                       else ", pusat diambil saat misi mulai")
                    + (" — DIMATIKAN operator" if self._dimatikan_operator else ""))
@@ -174,7 +232,10 @@ class GeofenceMonitor:
         if self.enabled:
             asal = (f"pusat tetap {self.center[0]:.6f},{self.center[1]:.6f}"
                     if self._pusat_tetap else "pusat diambil saat misi dimulai")
-            print(f"[Geofence] Aktif — jari-jari {self.radius_m:.0f} m, {asal}.")
+            print(f"[Geofence] Aktif — kotak {self.lebar_m:.0f} × {self.tinggi_m:.0f} m "
+                  f"(T-B × U-S), {asal}.")
+            print(f"[Geofence] Setel FENCE_RADIUS ArduPilot ≥ {self.diagonal_m:.0f} m "
+                  f"— bentuknya lingkaran, jadi harus memuat sudut kotak ini.")
         else:
             print("[Geofence] Belum aktif — bisa dinyalakan dari peta base station "
                   "tanpa perlu restart kapal.")
@@ -183,6 +244,14 @@ class GeofenceMonitor:
         self._is_running = False
 
     # ------------------------------------------------------------------ #
+
+    def margin_m(self, lat, lon) -> float:
+        """
+        Seberapa dalam kapal di dalam batas (meter). Negatif = di luar.
+        Satu-satunya tempat bentuk batas diputuskan — lihat geodesy.margin_kotak_m.
+        """
+        return margin_kotak_m(self.center[0], self.center[1],
+                              self.lebar_m, self.tinggi_m, lat, lon)
 
     def on_mission_started(self):
         """
@@ -208,14 +277,15 @@ class GeofenceMonitor:
                 return True, ""
             self.center = (lat, lon)
             print(f"[Geofence] Pusat batas dikunci di {lat:.6f}, {lon:.6f} "
-                  f"(jari-jari {self.radius_m:.0f} m).")
+                  f"(kotak {self.lebar_m:.0f} × {self.tinggi_m:.0f} m).")
             return True, ""
 
         if posisi_masuk_akal(lat, lon):
-            jarak = haversine_m(lat, lon, *self.center)
-            if jarak > self.radius_m:
-                pesan = (f"Kapal sudah {jarak:.0f} m dari pusat batas "
-                         f"(maks {self.radius_m:.0f} m) SEBELUM misi dimulai.")
+            margin = self.margin_m(lat, lon)
+            if margin < 0:
+                pesan = (f"Kapal sudah {-margin:.0f} m DI LUAR batas "
+                         f"(kotak {self.lebar_m:.0f} × {self.tinggi_m:.0f} m) "
+                         f"SEBELUM misi dimulai.")
                 return False, pesan
         return True, ""
 
@@ -262,18 +332,18 @@ class GeofenceMonitor:
             print(f"[Geofence] Pusat batas dikunci menyusul di {lat:.6f}, {lon:.6f}.")
             return
 
-        jarak = haversine_m(lat, lon, *self.center)
+        margin = self.margin_m(lat, lon)
 
-        if jarak <= self.radius_m - self.HYSTERESIS_M:
+        if margin >= self.HYSTERESIS_M:
             self._melanggar_sejak = None
             return
-        if jarak <= self.radius_m:
+        if margin >= 0:
             return   # di pita histeresis — jangan ubah apa pun
 
         if self._melanggar_sejak is None:
             self._melanggar_sejak = time.time()
-            print(f"[Geofence] ⚠️ Kapal di luar batas ({jarak:.0f} m > "
-                  f"{self.radius_m:.0f} m) — menunggu konfirmasi {self.CONFIRM_SEC:.0f}s...")
+            print(f"[Geofence] ⚠️ Kapal di luar batas ({-margin:.0f} m dari sisi "
+                  f"terdekat) — menunggu konfirmasi {self.CONFIRM_SEC:.0f}s...")
             return
         if (time.time() - self._melanggar_sejak) < self.CONFIRM_SEC:
             return
@@ -281,18 +351,19 @@ class GeofenceMonitor:
             return
 
         self._sudah_membatalkan = True
-        self._batalkan(jarak)
+        self._batalkan(-margin)
 
-    def _batalkan(self, jarak: float):
+    def _batalkan(self, keluar_m: float):
         """Batalkan misi. TIDAK disarm dan TIDAK memindah sumber kendali."""
         try:
             self.mission_engine.abort_mission()
         except Exception as e:
             print(f"[Geofence] Gagal membatalkan misi: {e}")
 
-        pesan = (f"⛔ GEOFENCE: kapal {jarak:.0f} m dari pusat batas "
-                 f"(maks {self.radius_m:.0f} m). Misi DIBATALKAN. Kapal tidak "
-                 f"di-disarm — pindahkan kendali ke remote untuk membawanya pulang.")
+        pesan = (f"⛔ GEOFENCE: kapal {keluar_m:.0f} m di luar batas "
+                 f"(kotak {self.lebar_m:.0f} × {self.tinggi_m:.0f} m). Misi "
+                 f"DIBATALKAN. Kapal tidak di-disarm — pindahkan kendali ke remote "
+                 f"untuk membawanya pulang.")
         print(f"[Geofence] {pesan}")
         self._warn("critical", "GEOFENCE_DILANGGAR", pesan)
 

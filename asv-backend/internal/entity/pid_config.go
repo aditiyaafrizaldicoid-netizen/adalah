@@ -27,12 +27,27 @@ type PidConfig struct {
 	// Menumpang baris ini, bukan tabel sendiri, karena kapal sudah menarik
 	// /api/v1/pid-config saat boot — geofence ikut terbawa tanpa permintaan baru.
 	//
-	// Radius 0 ATAU Enabled=false berarti batas tidak dijaga. Keduanya disimpan
+	// Bentuknya KOTAK sejajar sumbu: lebar (timur-barat) × tinggi (utara-selatan),
+	// keduanya METER dan diukur sisi ke sisi, bukan dari pusat. Danau dan arena
+	// lomba berbentuk persegi panjang; lingkaran yang memuat seluruh arena ikut
+	// memuat daratan di keempat sudutnya.
+	//
+	// Ukuran 0 ATAU Enabled=false berarti batas tidak dijaga. Keduanya disimpan
 	// terpisah supaya operator bisa mematikan geofence sementara tanpa kehilangan
-	// titik pusat dan radius yang sudah susah payah diatur di peta.
+	// titik pusat dan ukuran yang sudah susah payah diatur di peta.
 	GeofenceEnabled bool    `gorm:"default:false" json:"geofence_enabled"`
 	GeofenceLat     float64 `gorm:"default:0" json:"geofence_lat"`
 	GeofenceLon     float64 `gorm:"default:0" json:"geofence_lon"`
+	GeofenceLebarM  float64 `gorm:"default:0" json:"geofence_lebar_m"`
+	GeofenceTinggiM float64 `gorm:"default:0" json:"geofence_tinggi_m"`
+
+	// USANG — jari-jari dari versi lingkaran. Dipertahankan HANYA supaya baris
+	// yang sudah tersimpan bisa dipindahkan ke kotak saat server start (lihat
+	// config.BackfillGeofenceKotak). Menghapus kolomnya sebelum setiap deployment
+	// pernah start sekali berarti membuang batas yang sudah diatur operator, dan
+	// hilangnya tidak akan terlihat sampai ada yang memeriksa peta.
+	//
+	// Aman dihapus setelah semua base station pernah menjalankan versi ini.
 	GeofenceRadiusM float64 `gorm:"default:0" json:"geofence_radius_m"`
 
 	// Lintasan arena: "A" atau "B". Menentukan sisi mana yang ditandai tiap warna

@@ -106,3 +106,75 @@ def posisi_masuk_akal(lat, lon) -> bool:
     if abs(lat) < 1e-7 and abs(lon) < 1e-7:
         return False
     return -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0
+
+# ── Kotak geofence ──────────────────────────────────────────────────────────
+# Bentuk batas geofence adalah KOTAK SEJAJAR SUMBU: sisinya mengikuti garis
+# lintang dan bujur, dan tidak bisa diputar. Danau dan arena lomba berbentuk
+# persegi panjang, dan lingkaran yang memuat seluruh arena mau tidak mau ikut
+# memuat daratan di keempat sudutnya.
+#
+# Setengah-bentangan, bukan jari-jari: `lebar_m` dan `tinggi_m` adalah ukuran
+# PENUH sisi ke sisi, seperti orang menyebut ukuran lapangan.
+#
+# ⚠ RUMUS DI BAWAH DICERMINKAN PERSIS di frontend (utils/geo.js → kotakGeoJSON).
+#   Kalau salah satunya diubah, yang lain WAJIB ikut berubah. Peta yang
+#   menggambar kotak berbeda dari yang ditegakkan kapal adalah peta yang
+#   berbohong tentang satu-satunya hal yang perlu dipercaya operator.
+#   (Jari-jari bumi di kedua sisi beda 8,8 m dari 6.371 km — 1,4 per sejuta,
+#   yaitu di bawah satu milimeter pada kotak 300 m. Tidak berarti.)
+
+
+def kotak_batas(center_lat: float, center_lon: float,
+                lebar_m: float, tinggi_m: float):
+    """
+    Batas kotak sebagai (lat_min, lat_maks, lon_min, lon_maks) dalam DERAJAT.
+
+    :param lebar_m:  bentangan TIMUR-BARAT, penuh (bukan setengah)
+    :param tinggi_m: bentangan UTARA-SELATAN, penuh
+    """
+    R = 6371000.0
+    d_lat = (tinggi_m / 2.0) / R * (180.0 / math.pi)
+
+    cos_lat = math.cos(math.radians(center_lat))
+    # Di kutub cos(lat) menuju nol dan pembagiannya meledak jadi tak hingga —
+    # dan batas tak hingga berarti SETIAP posisi dianggap di dalam, yaitu
+    # geofence yang mati tanpa memberi tahu siapa pun. Kapal ini tidak akan
+    # pernah ke sana, tapi gagal diam-diam ke arah "semua aman" tidak boleh
+    # dibiarkan mungkin.
+    if abs(cos_lat) < 1e-12:
+        d_lon = 180.0
+    else:
+        d_lon = (lebar_m / 2.0) / (R * cos_lat) * (180.0 / math.pi)
+
+    return (center_lat - d_lat, center_lat + d_lat,
+            center_lon - d_lon, center_lon + d_lon)
+
+
+def margin_kotak_m(center_lat: float, center_lon: float,
+                   lebar_m: float, tinggi_m: float,
+                   lat: float, lon: float) -> float:
+    """
+    Seberapa dalam sebuah posisi berada di dalam kotak, dalam METER.
+
+    Positif = di DALAM, sejauh itu dari sisi terdekat.
+    Negatif = di LUAR, sejauh itu dari sisi (atau sudut) terdekat.
+    Nol      = tepat di garis batas.
+
+    Satu angka bertanda untuk dua keadaan, supaya pemanggilnya tidak perlu
+    mengurus dua cabang: histeresis, pesan pembatalan, dan pemeriksaan sebelum
+    misi berangkat semuanya hanya membandingkan angka ini dengan ambang.
+    """
+    # Jarak utara-selatan: bujur disamakan, jadi yang tersisa murni lintang.
+    d_ns = haversine_m(center_lat, center_lon, lat, center_lon)
+    # Jarak timur-barat diukur di lintang PUSAT, bukan lintang kapal — itulah
+    # yang membuat himpunan titiknya persis sama dengan kotak_batas() di atas,
+    # dan karenanya persis sama dengan kotak yang digambar di peta.
+    d_ew = haversine_m(center_lat, center_lon, center_lat, lon)
+
+    keluar_ns = max(0.0, d_ns - tinggi_m / 2.0)
+    keluar_ew = max(0.0, d_ew - lebar_m / 2.0)
+    if keluar_ns > 0.0 or keluar_ew > 0.0:
+        # Keluar lewat sudut: jaraknya diagonal, bukan salah satu sumbu saja.
+        return -math.hypot(keluar_ns, keluar_ew)
+
+    return min(tinggi_m / 2.0 - d_ns, lebar_m / 2.0 - d_ew)

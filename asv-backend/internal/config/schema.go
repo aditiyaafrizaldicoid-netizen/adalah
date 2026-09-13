@@ -55,6 +55,8 @@ func SelaraskanSkema(db *gorm.DB, logger *zap.Logger) {
 			zap.Error(err))
 	}
 
+	BackfillGeofenceKotak(db, logger)
+
 	if hilang := KolomYangHilang(db); len(hilang) > 0 {
 		logger.Error("SKEMA DATABASE TERTINGGAL — kolom berikut tidak ada di tabelnya. "+
 			"Setiap penyimpanan ke tabel tersebut akan gagal dengan HTTP 500, "+
@@ -115,4 +117,48 @@ func RingkasKolomHilang(hilang []string) string {
 		return "skema sesuai"
 	}
 	return strings.Join(hilang, ", ")
+}
+
+// BackfillGeofenceKotak memindahkan geofence LINGKARAN yang tersimpan ke bentuk
+// KOTAK, sekali, saat server pertama kali start dengan versi ini.
+//
+// KENAPA HARUS ADA: AutoMigrate menambah kolom baru berisi NOL. Tanpa pemindahan
+// ini, base station yang sudah punya geofence radius 60 m akan start dengan
+// lebar=0 dan tinggi=0 — yang artinya geofence MATI. Dan matinya tidak terlihat:
+// peta menggambar "TIDAK AKTIF", kapal tidak memeriksa apa pun, dan satu-satunya
+// cara mengetahuinya adalah menyadari sendiri bahwa pagarnya hilang.
+//
+// Radius R menjadi kotak 2R × 2R — kotak yang MELINGKUPI lingkaran lama, bukan
+// yang termuat di dalamnya. Arahnya dipilih sadar: kotak yang lebih kecil akan
+// membatalkan misi yang sebelumnya sah, dan pembatalan mendadak di tengah lomba
+// jauh lebih merugikan daripada batas yang sedikit lebih longgar sampai operator
+// sempat menyetelnya ulang.
+//
+// Hanya menyentuh baris yang benar-benar perlu: ada radius, belum ada kotak.
+// Jadi menjalankannya berulang kali tidak menimpa ukuran yang sudah diatur.
+func BackfillGeofenceKotak(db *gorm.DB, logger *zap.Logger) {
+	hasil := db.Exec(`
+		UPDATE pid_configs
+		SET geofence_lebar_m = geofence_radius_m * 2,
+		    geofence_tinggi_m = geofence_radius_m * 2
+		WHERE geofence_radius_m > 0
+		  AND geofence_lebar_m = 0
+		  AND geofence_tinggi_m = 0`)
+
+	if hasil.Error != nil {
+		// Tidak menghentikan start — lihat alasan di SelaraskanSkema. Tapi ini
+		// dicatat sebagai Error, bukan Warn: diamnya berarti geofence mati.
+		logger.Error("PEMINDAHAN GEOFENCE KE KOTAK GAGAL — batas yang tersimpan "+
+			"sebagai lingkaran tidak ikut terbawa, dan geofence akan tampak "+
+			"TIDAK AKTIF di peta. Setel ulang batasnya dari peta.",
+			zap.Error(hasil.Error))
+		return
+	}
+
+	if hasil.RowsAffected > 0 {
+		logger.Info("Geofence lingkaran dipindahkan ke kotak (radius R menjadi 2R × 2R). "+
+			"Periksa ukurannya di peta — bentuknya berubah, jadi sudut kotak "+
+			"sekarang menjangkau lebih jauh dari lingkaran lama.",
+			zap.Int64("baris", hasil.RowsAffected))
+	}
 }

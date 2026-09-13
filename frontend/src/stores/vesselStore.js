@@ -104,7 +104,8 @@ export const useVesselStore = defineStore("vessel", () => {
   const geofenceEnabled = ref(false);
   const geofenceLat = ref(0);
   const geofenceLon = ref(0);
-  const geofenceRadiusM = ref(0);
+  const geofenceLebarM = ref(0);   // bentangan timur-barat, meter penuh
+  const geofenceTinggiM = ref(0);  // bentangan utara-selatan, meter penuh
 
   // Video Recording State (Tanpa Object Detection)
   const isRecording = ref(false);
@@ -277,7 +278,8 @@ export const useVesselStore = defineStore("vessel", () => {
     if (data.geofence_enabled !== undefined) geofenceEnabled.value = data.geofence_enabled;
     if (data.geofence_lat !== undefined) geofenceLat.value = data.geofence_lat;
     if (data.geofence_lon !== undefined) geofenceLon.value = data.geofence_lon;
-    if (data.geofence_radius_m !== undefined) geofenceRadiusM.value = data.geofence_radius_m;
+    if (data.geofence_lebar_m !== undefined) geofenceLebarM.value = data.geofence_lebar_m;
+    if (data.geofence_tinggi_m !== undefined) geofenceTinggiM.value = data.geofence_tinggi_m;
     if (data.camera_connected !== undefined) cameraConnected.value = data.camera_connected;
     // Status Recording Video Mentah
     if (data.is_recording !== undefined) isRecording.value = data.is_recording;
@@ -334,7 +336,7 @@ export const useVesselStore = defineStore("vessel", () => {
     xte, dtw, nextWp,
     thrusterL, thrusterR, rpmL, rpmR,
     isConnected, isArmed, mode, manualSource, rcSourceSwitch, rcSourceChannel,
-    geofenceEnabled, geofenceLat, geofenceLon, geofenceRadiusM,
+    geofenceEnabled, geofenceLat, geofenceLon, geofenceLebarM, geofenceTinggiM,
     isRecording, recordingFilename, recordingResolution,
     isStreaming,
     cameraConnected, asvConnected,

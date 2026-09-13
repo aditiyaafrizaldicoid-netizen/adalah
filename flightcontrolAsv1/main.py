@@ -163,7 +163,7 @@ def main():
     # Lapis DALAM. Kalau Mini PC yang hang, ini ikut diam — pagar sesungguhnya
     # tetap FENCE_ENABLE/FENCE_ACTION di ArduPilot yang jalan di Flight Controller.
     # Yang di sini menghentikan MISI-nya, yang di sana menyelamatkan KAPAL-nya.
-    # NONAKTIF sampai ASV_GEOFENCE_RADIUS_M diisi ATAU digambar dari peta.
+    # NONAKTIF sampai ASV_GEOFENCE_LEBAR_M/TINGGI_M diisi ATAU digambar dari peta.
     #
     # HARUS dibuat & dipasang ke ws_client SEBELUM set_tracking_controller() di
     # bawah: pemanggilan itu memicu fetch_and_apply_pid_config(), dan geofence

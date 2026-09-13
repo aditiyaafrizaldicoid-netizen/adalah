@@ -166,12 +166,13 @@ class ASVWebSocketClient:
 
                         # Geofence menumpang baris config yang sama, jadi ikut
                         # terbawa tanpa permintaan HTTP tambahan.
-                        if self.geofence is not None and cfg.get("geofence_radius_m") is not None:
+                        if self.geofence is not None and cfg.get("geofence_lebar_m") is not None:
                             self.geofence.configure(
                                 enabled=cfg.get("geofence_enabled"),
                                 lat=cfg.get("geofence_lat"),
                                 lon=cfg.get("geofence_lon"),
-                                radius_m=cfg.get("geofence_radius_m"),
+                                lebar_m=cfg.get("geofence_lebar_m"),
+                                tinggi_m=cfg.get("geofence_tinggi_m"),
                             )
                         print(f"[WS] 📥 Synced initial PID config from DB -> Speed/Throttle: {f_speed}, MaxTurn: {cfg.get('max_turn_rate')}deg/s, MinDetectionArea: {min_area}px²")
         except Exception as e:
@@ -615,7 +616,8 @@ class ASVWebSocketClient:
                     enabled=cmd.get("enabled"),
                     lat=cmd.get("lat"),
                     lon=cmd.get("lon"),
-                    radius_m=cmd.get("radius_m"),
+                    lebar_m=cmd.get("lebar_m"),
+                    tinggi_m=cmd.get("tinggi_m"),
                 )
                 # Dikonfirmasi balik supaya panel di peta menampilkan batas yang
                 # BENAR-BENAR berlaku di kapal, bukan yang dikira sudah terkirim.
@@ -1159,14 +1161,15 @@ class ASVWebSocketClient:
                             self.rc_source_switch.channel if self.rc_source_switch else 0),
                         # Batas yang BENAR-BENAR berlaku di kapal — peta menggambar
                         # dari sini, bukan dari yang tersimpan di DB, supaya
-                        # lingkaran di layar selalu mewakili keadaan sebenarnya.
+                        # kotak di layar selalu mewakili keadaan sebenarnya.
                         # Lintasan arena yang BENAR-BENAR berlaku di kapal. Ikut di
                         # telemetri, bukan cuma di ACK, supaya dashboard yang baru
                         # dibuka (atau baru tersambung ulang) langsung menampilkan
                         # keadaan sebenarnya tanpa perlu bertanya.
                         "track": gate_convention.lintasan_aktif(),
                         "geofence_enabled": bool(self.geofence and self.geofence.enabled),
-                        "geofence_radius_m": (self.geofence.radius_m if self.geofence else 0),
+                        "geofence_lebar_m": (self.geofence.lebar_m if self.geofence else 0),
+                        "geofence_tinggi_m": (self.geofence.tinggi_m if self.geofence else 0),
                         "geofence_lat": (self.geofence.center[0]
                                          if self.geofence and self.geofence.center else 0),
                         "geofence_lon": (self.geofence.center[1]

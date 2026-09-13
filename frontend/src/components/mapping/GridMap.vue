@@ -9,7 +9,7 @@ import { useTrajectoryLayer } from '@/composables/useTrajectoryLayer';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import mapboxgl from 'mapbox-gl';
 import { MAPBOX_TOKEN, GAYA_BAWAAN } from '@/config/mapbox';
-import { lingkaranGeoJSON, koleksiKosong } from '@/utils/geo';
+import { kotakGeoJSON, koleksiKosong } from '@/utils/geo';
 import { formatDay, formatDate, formatTime, formatCoordA, formatCoordB } from '@/utils/geotag';
 
 const props = defineProps({
@@ -459,32 +459,36 @@ watch(
 watch(() => arenaStore.activeArena.id, () => renderArena());
 
 // ── Geofence ────────────────────────────────────────────────────────────────
-// DUA lingkaran digambar sekaligus, dan itu disengaja:
+// DUA kotak digambar sekaligus, dan itu disengaja:
 //   - garis TEBAL  = batas yang benar-benar berlaku di kapal (dari telemetri)
 //   - garis PUTUS  = batas yang sedang digambar operator tapi BELUM disimpan
-// Tanpa membedakan keduanya, operator tidak punya cara melihat bahwa lingkaran
-// yang baru dia geser belum sampai ke kapal — dan batas yang dikira aktif padahal
+// Tanpa membedakan keduanya, operator tidak punya cara melihat bahwa kotak
+// yang baru dia ubah belum sampai ke kapal — dan batas yang dikira aktif padahal
 // belum itu memberi rasa aman palsu.
 //
-// Radiusnya METER, dan itu sebabnya lingkarannya dibuat sebagai poligon lewat
-// lingkaranGeoJSON: circle-radius milik Mapbox satuannya piksel, jadi batas 60 m
-// akan tampak menutupi seluruh danau begitu peta di-zoom keluar.
+// Ukurannya METER, dan itu sebabnya kotaknya dibuat sebagai poligon lewat
+// kotakGeoJSON — yang rumusnya CERMINAN PERSIS kotak_batas() di kapal. Kotak yang
+// digambar di sini dan kotak yang ditegakkan kapal adalah himpunan titik yang sama.
+const ukuranSah = (g) => Number(g.lebar_m) > 0 && Number(g.tinggi_m) > 0;
+const labelUkuran = (g) =>
+  `${Number(g.lebar_m).toFixed(0)} × ${Number(g.tinggi_m).toFixed(0)} m`;
+
 const renderGeofence = () => {
   if (!map || !petaSiap) return;
 
   const aktif = geofence.aktifDiKapal;
-  if (aktif.enabled && aktif.radius_m > 0 && (aktif.lat || aktif.lon)) {
-    const f = lingkaranGeoJSON(aktif.lat, aktif.lon, aktif.radius_m);
-    f.properties.label = `Geofence aktif — ${aktif.radius_m.toFixed(0)} m`;
+  if (aktif.enabled && ukuranSah(aktif) && (aktif.lat || aktif.lon)) {
+    const f = kotakGeoJSON(aktif.lat, aktif.lon, aktif.lebar_m, aktif.tinggi_m);
+    f.properties.label = `Geofence aktif — ${labelUkuran(aktif)}`;
     tulisSource(SRC.geofenceAktif, f);
   } else {
     tulisSource(SRC.geofenceAktif, koleksiKosong());
   }
 
   const d = geofence.draft;
-  if (geofence.punyaPusat && Number(d.radius_m) > 0 && geofence.belumTersimpan) {
-    const f = lingkaranGeoJSON(d.lat, d.lon, Number(d.radius_m));
-    f.properties.label = `Belum disimpan — ${Number(d.radius_m).toFixed(0)} m`;
+  if (geofence.punyaPusat && ukuranSah(d) && geofence.belumTersimpan) {
+    const f = kotakGeoJSON(d.lat, d.lon, Number(d.lebar_m), Number(d.tinggi_m));
+    f.properties.label = `Belum disimpan — ${labelUkuran(d)}`;
     tulisSource(SRC.geofenceDraft, f);
   } else {
     tulisSource(SRC.geofenceDraft, koleksiKosong());
@@ -493,9 +497,11 @@ const renderGeofence = () => {
 
 watch(
   () => [
-    geofence.draft.lat, geofence.draft.lon, geofence.draft.radius_m,
+    geofence.draft.lat, geofence.draft.lon,
+    geofence.draft.lebar_m, geofence.draft.tinggi_m,
     geofence.draft.enabled, geofence.belumTersimpan,
-    geofence.aktifDiKapal.enabled, geofence.aktifDiKapal.radius_m,
+    geofence.aktifDiKapal.enabled,
+    geofence.aktifDiKapal.lebar_m, geofence.aktifDiKapal.tinggi_m,
     geofence.aktifDiKapal.lat, geofence.aktifDiKapal.lon,
   ],
   renderGeofence

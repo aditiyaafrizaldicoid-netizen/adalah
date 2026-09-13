@@ -6,7 +6,11 @@ import { useWebsocketStore } from "./websocketStore";
 import { useVesselStore } from "./vesselStore";
 
 /**
- * Geofence: batas melingkar yang membatalkan misi kalau kapal keluar darinya.
+ * Geofence: batas KOTAK yang membatalkan misi kalau kapal keluar darinya.
+ *
+ * Kotak, bukan lingkaran, karena danau dan arena lomba berbentuk persegi panjang:
+ * lingkaran yang memuat seluruh arena ikut memuat daratan di keempat sudutnya.
+ * Ukurannya lebar (timur-barat) × tinggi (utara-selatan), METER penuh sisi ke sisi.
  *
  * Batasnya digambar di peta lalu dikirim ke DUA tempat, dan keduanya perlu:
  *   - Backend (PUT /api/v1/geofence) supaya bertahan setelah kapal atau backend
@@ -15,14 +19,14 @@ import { useVesselStore } from "./vesselStore";
  *     menunggu restart. Ini yang membuat batas bisa diatur di tepi danau.
  *
  * Yang DITAMPILKAN di peta selalu berasal dari telemetri kapal, bukan dari nilai
- * yang baru saja diketik operator — supaya lingkaran di layar mewakili batas yang
+ * yang baru saja diketik operator — supaya kotak di layar mewakili batas yang
  * BENAR-BENAR berlaku di kapal, bukan yang dikira sudah terkirim.
  */
 export const useGeofenceStore = defineStore("geofence", () => {
   const vessel = useVesselStore();
 
   // Nilai yang sedang diedit operator (draft).
-  const draft = ref({ enabled: false, lat: 0, lon: 0, radius_m: 60 });
+  const draft = ref({ enabled: false, lat: 0, lon: 0, lebar_m: 120, tinggi_m: 80 });
   const isSaving = ref(false);
   const feedback = ref("");
 
@@ -31,7 +35,8 @@ export const useGeofenceStore = defineStore("geofence", () => {
     enabled: vessel.geofenceEnabled === true,
     lat: vessel.geofenceLat || 0,
     lon: vessel.geofenceLon || 0,
-    radius_m: vessel.geofenceRadiusM || 0,
+    lebar_m: vessel.geofenceLebarM || 0,
+    tinggi_m: vessel.geofenceTinggiM || 0,
   }));
 
   /** Sudah ada titik pusat yang layak digambar? */
@@ -45,7 +50,8 @@ export const useGeofenceStore = defineStore("geofence", () => {
     const d = draft.value;
     return (
       a.enabled !== d.enabled ||
-      Math.abs(a.radius_m - d.radius_m) > 0.5 ||
+      Math.abs(a.lebar_m - d.lebar_m) > 0.5 ||
+      Math.abs(a.tinggi_m - d.tinggi_m) > 0.5 ||
       Math.abs(a.lat - d.lat) > 1e-7 ||
       Math.abs(a.lon - d.lon) > 1e-7
     );
@@ -78,7 +84,8 @@ export const useGeofenceStore = defineStore("geofence", () => {
           enabled: !!body.data.enabled,
           lat: body.data.lat || 0,
           lon: body.data.lon || 0,
-          radius_m: body.data.radius_m || 60,
+          lebar_m: body.data.lebar_m || 120,
+          tinggi_m: body.data.tinggi_m || 80,
         };
       }
     } catch {
@@ -107,7 +114,8 @@ export const useGeofenceStore = defineStore("geofence", () => {
           enabled: d.enabled,
           lat: d.lat,
           lon: d.lon,
-          radius_m: Number(d.radius_m) || 0,
+          lebar_m: Number(d.lebar_m) || 0,
+          tinggi_m: Number(d.tinggi_m) || 0,
         }),
       });
       okDb = res.ok;
@@ -124,7 +132,8 @@ export const useGeofenceStore = defineStore("geofence", () => {
         enabled: d.enabled,
         lat: d.lat,
         lon: d.lon,
-        radius_m: Number(d.radius_m) || 0,
+        lebar_m: Number(d.lebar_m) || 0,
+        tinggi_m: Number(d.tinggi_m) || 0,
       });
     }
 

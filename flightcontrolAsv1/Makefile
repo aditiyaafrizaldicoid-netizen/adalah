@@ -2,7 +2,7 @@
 # 🚢 ASV FLIGHT CONTROLLER MAKEFILE
 # ==============================================================================
 
-.PHONY: run clean clear restart test help
+.PHONY: run clean clear restart test test-unit help
 
 # Set environment variable agar Python tidak membuat bytecode (.pyc / __pycache__)
 export PYTHONDONTWRITEBYTECODE=1
@@ -32,10 +32,18 @@ test:
 	@python3 -m py_compile main.py connection/*.py control/*.py core/*.py vision/*.py camera/*.py
 	@echo "✅ Semua file Python valid dan bebas error sintaks!"
 
+# Uji perilaku, bukan cuma sintaks. Memakai unittest bawaan Python — sengaja
+# tanpa pustaka tambahan, supaya bisa dijalankan di Mini PC apa adanya tanpa
+# memasang apa pun lebih dulu.
+test-unit:
+	@echo "🧪 Menjalankan uji perilaku..."
+	@python3 -m unittest discover -s tests -t . -q
+
 # Tampilkan petunjuk penggunaan Makefile
 help:
 	@echo "Gunakan salah satu perintah berikut:"
 	@echo "  make run     - Jalankan Flight Controller (python3 main.py)"
 	@echo "  make clean   - Bersihkan semua cache __pycache__ & file .pyc"
 	@echo "  make restart - Bersihkan cache lalu jalankan ulang sistem"
-	@echo "  make test    - Verifikasi sintaks kompilasi file Python"
+	@echo "  make test      - Verifikasi sintaks kompilasi file Python"
+	@echo "  make test-unit - Jalankan uji perilaku (geofence, dll)"

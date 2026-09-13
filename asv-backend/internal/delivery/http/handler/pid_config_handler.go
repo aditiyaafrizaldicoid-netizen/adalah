@@ -33,15 +33,19 @@ func (h *PidConfigHandler) GetConfig(c *fiber.Ctx) error {
 
 // GeofenceRequest memakai POINTER untuk setiap field.
 //
-// Ini bukan gaya, melainkan keharusan: radius 0 dan enabled=false adalah nilai yang
+// Ini bukan gaya, melainkan keharusan: ukuran 0 dan enabled=false adalah nilai yang
 // SAH dan bermakna "matikan geofence". Pola `if body.X != 0` yang dipakai SaveConfig
 // di bawah tidak bisa membedakannya dari "field tidak dikirim", sehingga operator
 // tidak akan pernah bisa mematikan geofence dari peta.
+//
+// LebarM = bentangan timur-barat, TinggiM = utara-selatan. Keduanya METER penuh,
+// sisi ke sisi — bukan setengah, bukan jari-jari.
 type GeofenceRequest struct {
 	Enabled *bool    `json:"enabled"`
 	Lat     *float64 `json:"lat"`
 	Lon     *float64 `json:"lon"`
-	RadiusM *float64 `json:"radius_m"`
+	LebarM  *float64 `json:"lebar_m"`
+	TinggiM *float64 `json:"tinggi_m"`
 }
 
 // GetGeofence mengembalikan batas yang tersimpan.
@@ -56,7 +60,8 @@ func (h *PidConfigHandler) GetGeofence(c *fiber.Ctx) error {
 		"enabled":  config.GeofenceEnabled,
 		"lat":      config.GeofenceLat,
 		"lon":      config.GeofenceLon,
-		"radius_m": config.GeofenceRadiusM,
+		"lebar_m":  config.GeofenceLebarM,
+		"tinggi_m": config.GeofenceTinggiM,
 	}})
 }
 
@@ -85,13 +90,21 @@ func (h *PidConfigHandler) SaveGeofence(c *fiber.Ctx) error {
 	if body.Lon != nil {
 		config.GeofenceLon = *body.Lon
 	}
-	if body.RadiusM != nil {
-		if *body.RadiusM < 0 {
+	if body.LebarM != nil {
+		if *body.LebarM < 0 {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"status": "error", "message": "radius tidak boleh negatif",
+				"status": "error", "message": "lebar tidak boleh negatif",
 			})
 		}
-		config.GeofenceRadiusM = *body.RadiusM
+		config.GeofenceLebarM = *body.LebarM
+	}
+	if body.TinggiM != nil {
+		if *body.TinggiM < 0 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"status": "error", "message": "tinggi tidak boleh negatif",
+			})
+		}
+		config.GeofenceTinggiM = *body.TinggiM
 	}
 
 	if err := h.service.SaveConfig(config); err != nil {
@@ -103,7 +116,8 @@ func (h *PidConfigHandler) SaveGeofence(c *fiber.Ctx) error {
 		"enabled":  config.GeofenceEnabled,
 		"lat":      config.GeofenceLat,
 		"lon":      config.GeofenceLon,
-		"radius_m": config.GeofenceRadiusM,
+		"lebar_m":  config.GeofenceLebarM,
+		"tinggi_m": config.GeofenceTinggiM,
 	}})
 }
 
