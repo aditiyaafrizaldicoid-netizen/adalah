@@ -39,6 +39,7 @@ import { VIDEO_STREAM_URL } from "@/config/api";
 import MetricCard from "@/components/ui/MetricCard.vue";
 import ProgressBar from "@/components/ui/ProgressBar.vue";
 import GeotagPanel from "@/components/monitoring/GeotagPanel.vue";
+import MissionPhotos from "@/components/monitoring/MissionPhotos.vue";
 import GridMap from "@/components/mapping/GridMap.vue";
 import MjpegImg from "@/components/monitoring/MjpegImg.vue";
 import logo from "@/assets/logo.jpg"
@@ -360,6 +361,19 @@ const manualScoreRows = computed(() => [
 
       <!-- Geo-tag: field yang diminta lembar ketentuan -->
       <GeotagPanel />
+
+      <!-- Foto yang DINILAI, tepat di bawah geo-tag yang tercetak padanya.
+           Halaman ini sudah memampang skor IMH dan IMB di blok Skor di atas,
+           tapi sampai sekarang tidak pernah menampilkan fotonya — juri membaca
+           angka tanpa bukti yang dinilai, dan harus membuka halaman admin untuk
+           melihatnya.
+
+           Komponennya SAMA PERSIS dengan yang dipakai operator, bukan salinan:
+           dua tampilan foto penilaian yang bisa berbeda isi adalah cara paling
+           mudah membuat juri dan operator berdebat tentang foto yang mana.
+           Isinya memang hanya-baca — memuat, mengunduh, memperbesar — jadi tidak
+           ada yang perlu dipagari untuk halaman juri. -->
+      <MissionPhotos />
 
       <!-- Peta & video -->
       <div class="grid grid-cols-12 gap-6">

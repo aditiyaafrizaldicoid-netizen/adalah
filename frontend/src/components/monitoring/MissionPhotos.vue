@@ -137,9 +137,14 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
 </script>
 
 <template>
-  <div class="panel flex flex-col overflow-hidden">
+  <div class="glass-card flex flex-col overflow-hidden">
     <!-- Header -->
-    <div class="panel-header justify-between">
+    <!-- glass-card, bukan "panel": kelas .panel dan .panel-header tidak pernah
+         didefinisikan di style.css mana pun, jadi panel ini selama ini tampil
+         tanpa latar, tanpa border, dan tanpa padding header — termasuk di
+         Dashboard. Baru terlihat saat panelnya ditaruh berdampingan dengan
+         glass-card di halaman Juri. -->
+    <div class="px-4 py-2.5 border-b border-(--border-primary) flex items-center justify-between">
       <div class="flex items-center gap-2">
         <Camera class="w-4 h-4 text-primary" />
         <span class="text-[11px] font-black uppercase tracking-widest text-(--text-primary)">
