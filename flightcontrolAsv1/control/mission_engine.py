@@ -1837,11 +1837,25 @@ class MissionEngine:
         Label penilaian yang harus dipakai foto step ini, atau "" kalau tidak
         mengisi slot mana pun.
 
-        Kosong ATAU tidak dikenali → tidak mengisi slot. Salah ketik tidak boleh
-        diam-diam berarti "isi slot IMB": foto yang menumpuk di slot penilaian
-        tanpa diniatkan akan MENIMPA tampilan foto yang sah.
+        Tidak dikenali → tidak mengisi slot. Salah ketik tidak boleh diam-diam
+        berarti "isi slot IMB": foto yang menumpuk di slot penilaian tanpa
+        diniatkan akan MENIMPA tampilan foto yang sah.
+
+        FIELD TIDAK ADA SAMA SEKALI ≠ dipilih "tidak dinilai". Bedanya nyata:
+        misi yang disusun panel versi lama tidak punya field ini, dan operator
+        tidak pernah diberi kesempatan memilih. Untuk misi seperti itu, foto yang
+        diambil KAMERA BAWAH AIR disimpulkan sebagai foto IMB — satu-satunya
+        nilai yang memang dinilai dari kamera bawah air, dan satu-satunya alasan
+        masuk akal untuk memasang kamera itu di kapal lomba.
+
+        Yang memilih "tidak dinilai" secara SADAR tetap dihormati: nilainya ada,
+        terbaca "none", dan berhenti di situ.
         """
-        nilai = str(step.get("slot") or "").strip().lower()
+        mentah = step.get("slot")
+        if mentah is None:
+            return (ROLE_BLUE_BOX
+                    if self._ti_kamera(step) == self.KAMERA_BAWAH_AIR else "")
+        nilai = str(mentah).strip().lower()
         return self._ALIAS_SLOT.get(nilai, "")
 
     def _ti_kamera(self, step) -> str:

@@ -260,8 +260,12 @@ class UjiBerkasTersimpan(Dasar):
     def test_nama_berkas_bawah_air_TIDAK_diberi_imbuhan(self):
         # Backend mengambil label penilaian dari nama berkas. Imbuhan apa pun di
         # sini pernah membuat foto tersimpan tapi slotnya tampak kosong.
+        #
+        # slot="none" dipilih SADAR: yang diuji di sini adalah IMBUHAN pada foto
+        # bawah air yang berhasil, bukan pemilihan slot. Tanpa itu labelnya jadi
+        # blue_box lewat kesimpulan, dan ujinya berhenti menguji yang dimaksud.
         self.e.set_underwater_camera(KameraBawahAirPalsu(FRAME_BAWAH_AIR))
-        self.jalankan_take_image(kamera="bawah_air")
+        self.jalankan_take_image(kamera="bawah_air", slot="none")
         path = self.e.capture_now(FRAME_PERMUKAAN)
         self.assertTrue(os.path.basename(path).endswith("_dermaga.jpg"),
                         f"nama tak terduga: {os.path.basename(path)}")
@@ -393,6 +397,48 @@ class UjiPresedensiKamera(Dasar):
         frame, _, _ = self.e._sumber_foto(
             FRAME_PERMUKAAN, "dermaga", MissionEngine.KAMERA_BAWAH_AIR)
         self.assertTrue(np.array_equal(frame, FRAME_BAWAH_AIR))
+
+
+class UjiSlotDisimpulkan(Dasar):
+    """
+    Misi yang disusun panel versi LAMA tidak punya field "slot" sama sekali —
+    operator tidak pernah diberi kesempatan memilih. Untuk misi seperti itu, foto
+    kamera bawah air disimpulkan sebagai foto IMB.
+
+    Kejadian nyata yang melahirkan ini: step sudah benar memakai kamera bawah air
+    (lencana BAWAH AIR muncul di dashboard), tapi fotonya mendarat di "Foto lain"
+    dan slot IMB tetap kosong. Satu-satunya yang kurang adalah pilihan yang belum
+    ada di panel operator.
+    """
+
+    def test_tanpa_slot_dengan_kamera_bawah_air_menjadi_IMB(self):
+        self.assertEqual(self.e._ti_slot({"kamera": "bawah_air"}), ROLE_BLUE_BOX)
+
+    def test_tanpa_slot_dengan_kamera_permukaan_tetap_tidak_dinilai(self):
+        self.assertEqual(self.e._ti_slot({"kamera": "permukaan"}), "")
+
+    def test_tanpa_slot_tanpa_kamera_tetap_tidak_dinilai(self):
+        # Step foto biasa dari misi lama tidak boleh tiba-tiba mengisi slot juri.
+        self.assertEqual(self.e._ti_slot({}), "")
+
+    def test_memilih_tidak_dinilai_secara_SADAR_dihormati(self):
+        # Field ADA dan berisi "none" — operator memang melihat pilihannya lalu
+        # memutuskan foto ini bukan untuk penilaian. Kesimpulan tidak boleh
+        # menimpa keputusan yang diambil sadar.
+        self.assertEqual(
+            self.e._ti_slot({"slot": "none", "kamera": "bawah_air"}), "")
+
+    def test_misi_yang_sedang_berjalan_di_kapal_kini_mengisi_slot_IMB(self):
+        # Bentuk step ini PERSIS seperti yang ada di kapal saat ini: kamera sudah
+        # bawah air, slot belum ada karena panelnya belum punya pilihan itu.
+        self.e.set_underwater_camera(KameraBawahAirPalsu(FRAME_BAWAH_AIR))
+        self.jalankan_take_image(kamera="bawah_air")
+
+        self.assertEqual(self.e._capture_label, ROLE_BLUE_BOX)
+        path = self.e.capture_now(FRAME_PERMUKAAN)
+        self.assertTrue(os.path.basename(path).endswith("_blue_box.jpg"),
+                        f"nama tak terduga: {os.path.basename(path)}")
+        self.buktikan_dari(path, "bawah air")
 
 
 if __name__ == "__main__":
