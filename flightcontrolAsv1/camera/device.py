@@ -15,6 +15,19 @@ KENAPA PATH PERLU DIDUKUNG:
     tertukar. Dengan dua kamera terpasang, itulah cara yang aman.
 
     Lihat nama stabilnya dengan:  ls -l /dev/v4l/by-id/
+
+TIGA BENTUK YANG DITERIMA:
+    2                                     nomor index — paling rapuh, bisa bertukar
+    /dev/v4l/by-id/usb-046d_C270_..._0     path lengkap — paling tepat
+    C270                                  POTONGAN NAMA — tahan penggantian kamera
+
+    Potongan nama ada karena nama by-id memuat NOMOR SERI: mengganti kamera dengan
+    unit lain bermodel sama sudah cukup membuat .env menunjuk perangkat yang tidak
+    ada. Itu terjadi dua kali dalam sepekan pada kamera bawah air kapal ini.
+
+    Potongan yang cocok dengan LEBIH DARI SATU perangkat ditolak, bukan ditebak —
+    menebak berarti kamera permukaan dan bawah air bisa tertukar tanpa satu pun
+    pesan, dan kapal akan mencari bola di pemandangan bawah air yang keruh.
 """
 import os
 
@@ -77,8 +90,42 @@ def parse(raw, default=None, nama_env=""):
             _sebutkan_yang_tersedia()
         return raw
 
-    print(f"[Kamera] ⚠️ {nama_env or 'Nilai'}='{raw}' bukan angka maupun path "
-          f"perangkat (/dev/...). Dipakai default: {default}.")
+    # Bukan angka, bukan path → perlakukan sebagai POTONGAN NAMA perangkat.
+    #
+    # KENAPA (dua kali dalam seminggu): nama by-id memuat nomor seri, jadi ia
+    # berubah setiap kali kamera diganti — dan kamera bawah air ini sudah dua kali
+    # diganti karena kemasukan air. Tiap penggantian membuat .env menunjuk
+    # perangkat yang tidak ada, dan kegagalannya sunyi: foto tetap jadi, dari
+    # kamera yang salah.
+    #
+    # Dengan potongan nama, ".env" cukup berisi "C270" dan tetap benar walau unit
+    # fisiknya ditukar dengan C270 lain. Yang hilang cuma ketepatan membedakan DUA
+    # kamera bermodel sama — dan kasus itu ditolak di bawah, bukan ditebak.
+    cocok = [n for n in daftar_tersedia() if raw.lower() in n.lower()]
+
+    # Hanya node penangkap gambar. Tiap kamera juga mendaftarkan index1 yang
+    # bukan sumber frame, dan memilihnya menghasilkan kamera yang "terbuka" tapi
+    # tidak pernah memberi gambar.
+    tangkap = [n for n in cocok if n.endswith("-video-index0")] or cocok
+
+    if len(tangkap) == 1:
+        hasil = f"{DIR_BY_ID}/{tangkap[0]}"
+        print(f"[Kamera] 🔎 {nama_env or 'Nilai'}='{raw}' dicocokkan ke {hasil}")
+        return hasil
+
+    if len(tangkap) > 1:
+        # Menebak salah satu berarti kamera permukaan dan bawah air bisa tertukar
+        # tanpa satu pun pesan — persis kegagalan yang modul ini ada untuk mencegah.
+        print(f"[Kamera] ⛔ {nama_env or 'Nilai'}='{raw}' cocok dengan LEBIH DARI SATU "
+              f"perangkat, jadi tidak bisa dipastikan yang mana:")
+        for n in tangkap:
+            print(f"[Kamera]      {DIR_BY_ID}/{n}")
+        print("[Kamera]    Tulis nama lengkapnya di .env supaya tidak ambigu.")
+        return default
+
+    print(f"[Kamera] ⛔ {nama_env or 'Nilai'}='{raw}' bukan angka, bukan path "
+          f"(/dev/...), dan tidak cocok dengan perangkat mana pun.")
+    _sebutkan_yang_tersedia()
     return default
 
 
