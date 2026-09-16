@@ -54,8 +54,19 @@ class Ctl:
 
 # Dua frame yang SANGAT berbeda kecerahannya, supaya yang tersimpan bisa
 # dibuktikan berasal dari kamera yang mana — bukan sekadar "ada berkasnya".
-FRAME_PERMUKAAN = np.full((80, 100, 3), 200, dtype=np.uint8)
-FRAME_BAWAH_AIR = np.full((80, 100, 3), 20, dtype=np.uint8)
+#
+# UKURANNYA PENTING, dan ini pernah membuat uji di berkas ini lolos karena alasan
+# yang salah. Overlay geo-tag menutupi sebagian gambar dengan teks; pada frame
+# mungil 100x80 ia memakan porsi begitu besar sehingga foto PERMUKAAN yang cerah
+# (200) turun rata-ratanya jadi 97,8 — di bawah ambang yang dipakai untuk
+# membuktikan "ini foto bawah air". Ujinya lulus tanpa benar-benar membedakan apa
+# pun. Pada 640x360 overlay hanya menggigit sedikit: 196,5 lawan 20,2.
+FRAME_PERMUKAAN = np.full((360, 640, 3), 200, dtype=np.uint8)
+FRAME_BAWAH_AIR = np.full((360, 640, 3), 20, dtype=np.uint8)
+
+# Ambang yang memisahkan keduanya dengan jarak lebar, bukan pas-pasan.
+TERANG_MIN = 150   # foto permukaan
+GELAP_MAKS = 60    # foto bawah air
 
 
 class KameraBawahAirPalsu:
@@ -87,6 +98,23 @@ class Dasar(unittest.TestCase):
 
     def frame(self):
         return self.e.update_frame(None, None, {"red": [], "green": [], "blue": []})
+
+    def buktikan_dari(self, path, kamera):
+        """
+        Buktikan foto tersimpan berasal dari kamera yang diharapkan.
+
+        Membandingkan kecerahan, bukan piksel per piksel: overlay geo-tag memang
+        menimpa sebagian gambar, jadi kesamaan persis mustahil. Yang dijaga adalah
+        jaraknya tetap lebar — lihat catatan ukuran frame di atas.
+        """
+        import cv2
+        rata = cv2.imread(path).mean()
+        if kamera == "bawah air":
+            self.assertLess(rata, GELAP_MAKS,
+                            f"rata-rata {rata:.1f} — harusnya frame BAWAH AIR yang gelap")
+        else:
+            self.assertGreater(rata, TERANG_MIN,
+                               f"rata-rata {rata:.1f} — harusnya frame PERMUKAAN yang terang")
 
     def jalankan_take_image(self, **field):
         """Jalankan TAKE_IMAGE sampai ia meminta shutter, tanpa melayaninya."""
@@ -221,13 +249,7 @@ class UjiBerkasTersimpan(Dasar):
 
         path = self.e.capture_now(FRAME_PERMUKAAN)
         self.assertIsNotNone(path, "foto harus tersimpan")
-
-        import cv2
-        tersimpan = cv2.imread(path)
-        # Geo-tag menimpa sebagian piksel dengan teks, jadi yang dibandingkan
-        # rata-ratanya — 20 vs 200 terlalu jauh untuk tertukar.
-        self.assertLess(tersimpan.mean(), 110,
-                        "yang tersimpan harus frame BAWAH AIR yang gelap")
+        self.buktikan_dari(path, "bawah air")
 
     def test_sidecar_mencatat_kamera_bawah_air(self):
         self.e.set_underwater_camera(KameraBawahAirPalsu(FRAME_BAWAH_AIR))
@@ -271,6 +293,106 @@ class UjiBerkasTersimpan(Dasar):
         self.assertIsNotNone(self.e.capture_now(FRAME_PERMUKAAN))
         self.assertIsNone(self.e.capture_now(FRAME_PERMUKAAN),
                           "permintaan yang sudah dilayani tidak boleh memotret lagi")
+
+
+# ── Slot penilaian ──────────────────────────────────────────────────────────
+
+class UjiSlotPenilaian(Dasar):
+    """
+    Label foto menentukan slot mana yang terisi di panel Foto Misi — backend
+    menurunkannya dari nama berkas. Sebelum field "slot" ada, satu-satunya cara
+    mengisi slot IMB adalah MENAMAI step-nya persis "blue_box", dan satu huruf
+    besar saja sudah cukup untuk membuat fotonya mendarat di "Foto lain" dengan
+    slot penilaian tetap kosong. Tidak ada error; yang hilang cuma nilainya.
+    """
+
+    def test_tanpa_slot_label_memakai_nama_step(self):
+        self.jalankan_take_image()
+        self.assertEqual(self.e._capture_label, "dermaga")
+
+    def test_slot_imb_memakai_label_penilaian_bukan_nama_step(self):
+        self.jalankan_take_image(slot="imb")
+        self.assertEqual(self.e._capture_label, ROLE_BLUE_BOX)
+
+    def test_slot_imh_memakai_label_box_hijau(self):
+        self.jalankan_take_image(slot="imh")
+        self.assertEqual(self.e._capture_label, ROLE_GREEN_BOX)
+
+    def test_slot_salah_ketik_tidak_diam_diam_mengisi_slot(self):
+        # Foto yang menumpuk di slot penilaian tanpa diniatkan akan MENIMPA
+        # tampilan foto yang sah.
+        self.jalankan_take_image(slot="ngawurr")
+        self.assertEqual(self.e._capture_label, "dermaga")
+
+    def test_slot_imb_memaksa_kamera_bawah_air_walau_operator_pilih_permukaan(self):
+        # Box biru adalah target bawah air menurut ketentuan lomba, bukan
+        # preferensi yang boleh ditawar. Foto permukaan yang mengisi slot IMB
+        # adalah bukti palsu — persis yang seluruh berkas ini ada untuk mencegah.
+        self.e.set_underwater_camera(KameraBawahAirPalsu(FRAME_BAWAH_AIR))
+        self.jalankan_take_image(slot="imb", kamera="permukaan")
+
+        path = self.e.capture_now(FRAME_PERMUKAAN)
+        self.buktikan_dari(path, "bawah air")
+
+    def test_slot_imb_menghasilkan_nama_berkas_yang_mengisi_slot(self):
+        self.e.set_underwater_camera(KameraBawahAirPalsu(FRAME_BAWAH_AIR))
+        self.jalankan_take_image(slot="imb")
+        path = self.e.capture_now(FRAME_PERMUKAAN)
+        # Backend mengambil label dari nama berkas: ..._blue_box → "blue_box",
+        # yang cocok dengan slot Underwater di dashboard.
+        self.assertTrue(os.path.basename(path).endswith("_blue_box.jpg"),
+                        f"nama tak terduga: {os.path.basename(path)}")
+
+    def test_kamera_gagal_TIDAK_boleh_mengisi_slot_imb(self):
+        # Kejatuhan ke permukaan memberi akhiran "_permukaan", sehingga labelnya
+        # jadi "blue_box_permukaan" dan TIDAK cocok dengan slot Underwater. Itu
+        # disengaja: kalau foto bawah air tidak pernah terjadi, slot penilaian
+        # MEMANG harus kosong, bukan diisi foto permukaan yang menyamar.
+        self.e.set_underwater_camera(None)
+        self.jalankan_take_image(slot="imb")
+        path = self.e.capture_now(FRAME_PERMUKAAN)
+        self.assertTrue(os.path.basename(path).endswith("_blue_box_permukaan.jpg"),
+                        f"nama tak terduga: {os.path.basename(path)}")
+
+    def test_slot_imh_dengan_bawaan_memakai_kamera_permukaan(self):
+        self.e.set_underwater_camera(KameraBawahAirPalsu(FRAME_BAWAH_AIR))
+        self.jalankan_take_image(slot="imh")
+        path = self.e.capture_now(FRAME_PERMUKAAN)
+        self.buktikan_dari(path, "permukaan")
+        self.assertTrue(os.path.basename(path).endswith("_green_box.jpg"))
+
+
+class UjiPresedensiKamera(Dasar):
+    """
+    Urutan kewenangan pemilihan kamera, dan bukti bahwa step LAIN tidak berubah.
+    """
+
+    def test_step_tanpa_permintaan_tetap_mengikuti_aturan_label(self):
+        # Inilah jalur PHOTO_BOX, BOX_CHANNEL, dan BOX_APPROACH. Mereka tidak
+        # pernah mengisi pilihan kamera, jadi harus melewati jalur yang identik
+        # dengan sebelum field "kamera" ada sama sekali.
+        self.e.set_underwater_camera(KameraBawahAirPalsu(FRAME_BAWAH_AIR))
+
+        frame, sumber, _ = self.e._sumber_foto(FRAME_PERMUKAAN, ROLE_BLUE_BOX, "")
+        self.assertTrue(np.array_equal(frame, FRAME_BAWAH_AIR))
+        self.assertEqual(sumber, "bawah air")
+
+        frame, sumber, _ = self.e._sumber_foto(FRAME_PERMUKAAN, ROLE_GREEN_BOX, "")
+        self.assertTrue(np.array_equal(frame, FRAME_PERMUKAAN))
+        self.assertEqual(sumber, "permukaan")
+
+    def test_label_box_biru_mengalahkan_permintaan_permukaan(self):
+        self.e.set_underwater_camera(KameraBawahAirPalsu(FRAME_BAWAH_AIR))
+        frame, _, _ = self.e._sumber_foto(
+            FRAME_PERMUKAAN, ROLE_BLUE_BOX, MissionEngine.KAMERA_PERMUKAAN)
+        self.assertTrue(np.array_equal(frame, FRAME_BAWAH_AIR),
+                        "ketentuan lomba harus menang atas pilihan operator")
+
+    def test_permintaan_berlaku_untuk_label_yang_bukan_slot_penilaian(self):
+        self.e.set_underwater_camera(KameraBawahAirPalsu(FRAME_BAWAH_AIR))
+        frame, _, _ = self.e._sumber_foto(
+            FRAME_PERMUKAAN, "dermaga", MissionEngine.KAMERA_BAWAH_AIR)
+        self.assertTrue(np.array_equal(frame, FRAME_BAWAH_AIR))
 
 
 if __name__ == "__main__":

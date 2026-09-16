@@ -59,6 +59,37 @@ export const STEP_TYPES = [
     bg: "bg-violet-500/10 border-violet-500/30",
     fields: [
       {
+        key: "slot",
+        label: "Slot Penilaian",
+        type: "select",
+        default: "none",
+        options: [
+          { value: "none", label: "Tidak dinilai (foto lepas)", aliases: ["tidak", "lepas"] },
+          {
+            value: "imb",
+            label: "Underwater — IMB",
+            aliases: ["underwater", "bawah_air", "blue_box"],
+          },
+          {
+            value: "imh",
+            label: "Surface — IMH",
+            aliases: ["surface", "permukaan", "green_box"],
+          },
+        ],
+        // Slot penilaian menentukan LABEL foto, dan label itulah yang menentukan
+        // slot mana yang terisi di panel Foto Misi.
+        //
+        // Sebelum field ini ada, satu-satunya cara mengisi slot IMB adalah
+        // MENAMAI step-nya persis "blue_box". Satu huruf besar saja sudah cukup
+        // untuk membuat fotonya mendarat di "Foto lain" dengan slot penilaian
+        // tetap kosong — tanpa satu pun error, dan yang hilang cuma nilainya.
+        //
+        // Memilih IMB juga MEMAKSA kamera bawah air, apa pun isi field Kamera di
+        // bawah: box biru adalah target bawah air menurut ketentuan lomba, bukan
+        // preferensi yang boleh ditawar. Foto permukaan yang mengisi slot IMB
+        // adalah bukti palsu.
+      },
+      {
         key: "kamera",
         label: "Kamera",
         type: "select",
@@ -71,6 +102,9 @@ export const STEP_TYPES = [
             aliases: ["bawah air", "bawahair", "underwater", "uw"],
           },
         ],
+        // DIABAIKAN kalau Slot Penilaian di atas diisi IMB — lihat alasannya di
+        // sana. Berlaku penuh untuk foto lepas dan untuk IMH.
+        //
         // Bawaan PERMUKAAN, dan itu disengaja: misi yang sudah tersimpan tidak
         // punya field ini sama sekali, jadi bawaan apa pun selain permukaan akan
         // diam-diam mengubah arti misi yang sudah terbukti jalan di danau.

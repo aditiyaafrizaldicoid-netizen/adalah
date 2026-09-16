@@ -134,6 +134,8 @@ class UjiOpsiPanel(unittest.TestCase):
             return e._dock_prefer_normal(nilai)
         if (tipe_step, key) == ("PHOTO_BOX", "target"):
             return tuple(e._photo_urutan_target({"target": nilai}))
+        if (tipe_step, key) == ("TAKE_IMAGE", "slot"):
+            return e._ti_slot({"slot": nilai})
         if (tipe_step, key) == ("TAKE_IMAGE", "kamera"):
             return e._ti_kamera({"kamera": nilai})
         if (tipe_step, key) == ("STEER_UNTIL_BOX", "target"):

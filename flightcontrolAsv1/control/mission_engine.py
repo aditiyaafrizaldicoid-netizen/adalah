@@ -1809,6 +1809,41 @@ class MissionEngine:
 
         return 0.0, 0.0, "GOTO_GPS"
 
+    # Slot penilaian yang boleh diisi step TAKE_IMAGE.
+    #
+    # Label foto menentukan slot mana yang terisi di dashboard — backend
+    # menurunkannya dari nama berkas. Sebelum field ini ada, satu-satunya cara
+    # mengisi slot IMB adalah MENAMAI step-nya persis "blue_box", dan satu huruf
+    # besar saja sudah cukup untuk membuat fotonya diam-diam mendarat di "Foto
+    # lain" dengan slot penilaian tetap kosong. Tidak ada yang error; yang hilang
+    # cuma nilainya.
+    _ALIAS_SLOT = {
+        "": "",
+        "none": "",
+        "tidak": "",
+        "lepas": "",
+        "imb": ROLE_BLUE_BOX,
+        "underwater": ROLE_BLUE_BOX,
+        "bawah_air": ROLE_BLUE_BOX,
+        "blue_box": ROLE_BLUE_BOX,
+        "imh": ROLE_GREEN_BOX,
+        "surface": ROLE_GREEN_BOX,
+        "permukaan": ROLE_GREEN_BOX,
+        "green_box": ROLE_GREEN_BOX,
+    }
+
+    def _ti_slot(self, step) -> str:
+        """
+        Label penilaian yang harus dipakai foto step ini, atau "" kalau tidak
+        mengisi slot mana pun.
+
+        Kosong ATAU tidak dikenali → tidak mengisi slot. Salah ketik tidak boleh
+        diam-diam berarti "isi slot IMB": foto yang menumpuk di slot penilaian
+        tanpa diniatkan akan MENIMPA tampilan foto yang sah.
+        """
+        nilai = str(step.get("slot") or "").strip().lower()
+        return self._ALIAS_SLOT.get(nilai, "")
+
     def _ti_kamera(self, step) -> str:
         """
         Kamera yang diminta step TAKE_IMAGE ini.
@@ -1848,7 +1883,11 @@ class MissionEngine:
         if self._capture_requested_at != self._step_start_time:
             self._capture_requested_at = self._step_start_time
             self._capture_pending = True
-            self._capture_label = str(step.get("name") or f"step{step.get('id', '')}")
+            # Slot penilaian, kalau dipilih, MENENTUKAN label — bukan nama step.
+            # Nama step tetap dipakai kalau step ini memang foto lepas.
+            slot = self._ti_slot(step)
+            self._capture_label = slot or str(
+                step.get("name") or f"step{step.get('id', '')}")
             self._capture_kamera = self._ti_kamera(step)
             nama_kamera = ("BAWAH AIR" if self._capture_kamera == self.KAMERA_BAWAH_AIR
                            else "permukaan")
@@ -2014,8 +2053,25 @@ class MissionEngine:
         bawah air adalah bukti palsu — lebih merugikan daripada foto yang jelas
         gagal.
         """
-        minta_bawah_air = (kamera_diminta == self.KAMERA_BAWAH_AIR
-                           or label in self.KAMERA_BAWAH_AIR_UNTUK)
+        # URUTAN KEWENANGAN, dan urutannya penting:
+        #
+        #   1. LABEL PENILAIAN menang mutlak. Box biru adalah target bawah air
+        #      menurut ketentuan lomba — bukan preferensi yang boleh ditawar
+        #      operator. Foto permukaan yang mengisi slot IMB adalah bukti palsu.
+        #   2. Baru setelah itu pilihan eksplisit step (field "kamera"), untuk
+        #      foto lepas yang tidak mengisi slot penilaian mana pun.
+        #   3. Kalau step tidak memilih apa-apa: permukaan, seperti selamanya.
+        #
+        # Hasilnya SAMA PERSIS dengan sebelumnya untuk setiap step yang tidak
+        # memilih kamera — PHOTO_BOX, BOX_CHANNEL, BOX_APPROACH melewati jalur
+        # yang identik. Yang berubah hanya kasus yang dulu bisa saling bertabrakan.
+        if label in self.KAMERA_BAWAH_AIR_UNTUK:
+            minta_bawah_air = True
+        elif kamera_diminta:
+            minta_bawah_air = (kamera_diminta == self.KAMERA_BAWAH_AIR)
+        else:
+            minta_bawah_air = False
+
         if not minta_bawah_air:
             return frame_permukaan, "permukaan", ""
 
