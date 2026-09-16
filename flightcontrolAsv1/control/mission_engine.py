@@ -1004,6 +1004,12 @@ class MissionEngine:
         # bukan kotak deteksi dan label debug.
         self._capture_pending: bool = False
         self._capture_label: str = ""
+        # Kamera yang DIMINTA permintaan foto ini, kalau step-nya memang memilih.
+        # Kosong = tidak memilih, jadi aturan berbasis label yang berlaku (box biru
+        # → bawah air). Disimpan per-permintaan, bukan per-step: yang melayani
+        # shutter adalah main.py beberapa frame kemudian, dan saat itu step-nya
+        # sudah tidak bisa ditanya lagi.
+        self._capture_kamera: str = ""
         # Kamera bawah air (camera/underwater.py). None = tidak terpasang, dan
         # foto box biru tetap memakai kamera permukaan seperti sebelumnya.
         self._underwater_camera = None
@@ -1803,6 +1809,18 @@ class MissionEngine:
 
         return 0.0, 0.0, "GOTO_GPS"
 
+    def _ti_kamera(self, step) -> str:
+        """
+        Kamera yang diminta step TAKE_IMAGE ini.
+
+        Kosong ATAU tidak dikenali → kamera PERMUKAAN. Default itu disengaja:
+        setiap misi yang sudah tersimpan tidak punya field ini sama sekali, dan
+        diam-diam memindahkannya ke kamera bawah air akan mengubah arti misi yang
+        sudah terbukti jalan di danau.
+        """
+        nilai = str(step.get("kamera") or "").strip().lower()
+        return self._ALIAS_KAMERA.get(nilai, self.KAMERA_PERMUKAAN)
+
     def _handle_take_image(self, step, frame, gate_x, detected_balls=None):
         """
         Handle TAKE_IMAGE step: kapal berhenti selama `duration_sec`, dan SEKALI
@@ -1811,6 +1829,17 @@ class MissionEngine:
         Sebelumnya step ini sama sekali tidak menyimpan gambar apa pun — hanya diam
         lalu lanjut — sehingga tidak ada berkas yang bisa diberi geo-tag maupun
         dinilai.
+
+        TIDAK MENCARI APA PUN. Tidak ada box, tidak ada bola, tidak ada deteksi
+        yang harus lebih dulu berhasil: begitu step ini dimasuki, shutter diminta
+        pada frame berikutnya, lalu kapal lanjut. Itulah bedanya dari PHOTO_BOX,
+        yang baru memotret setelah menemukan dan mendekati sasarannya — dan yang
+        karenanya bisa selesai tanpa foto sama sekali kalau sasarannya tidak ada.
+
+        Kameranya boleh dipilih lewat field "kamera". Kamera bawah air tidak
+        pernah menunda shutter walau airnya keruh atau gelap: frame terbarunya
+        diambil apa adanya, karena menunggu "pemandangan yang bagus" dari kamera
+        yang mungkin memang tidak melihat apa-apa berarti tidak pernah memotret.
         """
         duration = self._safe_float(step.get("duration_sec"), 3.0)
         elapsed = time.time() - self._step_start_time
@@ -1820,14 +1849,17 @@ class MissionEngine:
             self._capture_requested_at = self._step_start_time
             self._capture_pending = True
             self._capture_label = str(step.get("name") or f"step{step.get('id', '')}")
-            print(f"[MissionEngine] 📸 TAKE_IMAGE '{self._capture_label}' — "
-                  f"menunggu frame kamera bersih untuk difoto...")
+            self._capture_kamera = self._ti_kamera(step)
+            nama_kamera = ("BAWAH AIR" if self._capture_kamera == self.KAMERA_BAWAH_AIR
+                           else "permukaan")
+            print(f"[MissionEngine] 📸 TAKE_IMAGE '{self._capture_label}' "
+                  f"(kamera {nama_kamera}) — menunggu frame kamera bersih...")
 
         if elapsed >= duration:
             if self._capture_pending:
                 # Durasi habis tapi frame bersih tidak pernah datang (mis. kamera mati).
                 # Jangan menggantung permintaan foto ke step berikutnya.
-                self._capture_pending = False
+                self._batalkan_permintaan_foto("durasi TAKE_IMAGE habis")
                 print("[MissionEngine] ⚠️ TAKE_IMAGE selesai TANPA foto tersimpan "
                       "(tidak ada frame kamera).")
             print(f"[MissionEngine] ✅ TAKE_IMAGE selesai!")
@@ -1847,6 +1879,35 @@ class MissionEngine:
     # step yang memotret (PHOTO_BOX, BOX_CHANNEL, BOX_APPROACH) melewati
     # capture_now() yang sama, jadi aturannya cukup ditulis sekali di sini.
     KAMERA_BAWAH_AIR_UNTUK = frozenset({ROLE_BLUE_BOX})
+
+    # Nama kamera yang dipakai step untuk MEMINTA secara eksplisit.
+    #
+    # Aturan berbasis label di atas tetap berlaku dan tidak tergantikan: box biru
+    # selalu bawah air karena ketentuan lomba, bukan karena operator memilihnya.
+    # Yang ditambahkan di sini adalah jalan bagi step yang TIDAK memotret box —
+    # TAKE_IMAGE — untuk meminta kamera bawah air tanpa harus berpura-pura punya
+    # label box.
+    KAMERA_PERMUKAAN = "permukaan"
+    KAMERA_BAWAH_AIR = "bawah_air"
+
+    # Ejaan yang diterima untuk field "kamera" pada step TAKE_IMAGE.
+    #
+    # Daftar ini HARUS cocok dengan options+aliases di frontend STEP_TYPES —
+    # tools/uji_opsi_panel.py menjalankan tiap nilai dan tiap aliasnya lewat
+    # parser di bawah dan akan gagal kalau keduanya menyimpang. Dropdown yang
+    # menampilkan satu hal sementara kapal mengerjakan hal lain adalah kegagalan
+    # yang tidak menimbulkan error sama sekali.
+    _ALIAS_KAMERA = {
+        "permukaan": KAMERA_PERMUKAAN,
+        "atas": KAMERA_PERMUKAAN,
+        "atas_air": KAMERA_PERMUKAAN,
+        "surface": KAMERA_PERMUKAAN,
+        "bawah_air": KAMERA_BAWAH_AIR,
+        "bawah air": KAMERA_BAWAH_AIR,
+        "bawahair": KAMERA_BAWAH_AIR,
+        "underwater": KAMERA_BAWAH_AIR,
+        "uw": KAMERA_BAWAH_AIR,
+    }
 
     CAPTURE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                "captures")
@@ -1881,6 +1942,7 @@ class MissionEngine:
         self._capture_pending = False
         self._capture_requested_at = None
         self._capture_label = ""
+        self._capture_kamera = ""
 
     def capture_now(self, frame) -> Optional[str]:
         """
@@ -1896,7 +1958,9 @@ class MissionEngine:
             return None
         self._capture_pending = False   # sekali percobaan per step, apa pun hasilnya
 
-        frame_pakai, sumber, imbuhan = self._sumber_foto(frame, self._capture_label)
+        frame_pakai, sumber, imbuhan = self._sumber_foto(
+            frame, self._capture_label, self._capture_kamera)
+        self._capture_kamera = ""   # sekali pakai, sama seperti benderanya
         if frame_pakai is None:
             print("[MissionEngine] ⚠️ Tidak ada frame dari kamera mana pun — "
                   "foto dilewati.")
@@ -1919,9 +1983,16 @@ class MissionEngine:
         cam = self._underwater_camera
         return bool(cam is not None and cam.is_ok())
 
-    def _sumber_foto(self, frame_permukaan, label):
+    def _sumber_foto(self, frame_permukaan, label, kamera_diminta=""):
         """
         Pilih frame untuk foto ini: (frame, nama_kamera, imbuhan_label).
+
+        DUA jalan menuju kamera bawah air, dan keduanya perlu:
+          - LABEL — box biru selalu bawah air, karena begitu ketentuan lombanya.
+          - PERMINTAAN — step TAKE_IMAGE memilihnya sendiri lewat field "kamera",
+            untuk memotret apa pun yang tidak punya label box sama sekali.
+        Sisanya di bawah berlaku sama untuk keduanya, termasuk kejatuhan ke
+        permukaan dan imbuhan nama berkas yang menandainya.
 
         PEMICUNYA TETAP KAMERA ATAS. Fungsi ini berjalan SETELAH keputusan
         "kondisinya sudah pas, jepret sekarang" diambil dari deteksi kamera
@@ -1943,7 +2014,9 @@ class MissionEngine:
         bawah air adalah bukti palsu — lebih merugikan daripada foto yang jelas
         gagal.
         """
-        if label not in self.KAMERA_BAWAH_AIR_UNTUK:
+        minta_bawah_air = (kamera_diminta == self.KAMERA_BAWAH_AIR
+                           or label in self.KAMERA_BAWAH_AIR_UNTUK)
+        if not minta_bawah_air:
             return frame_permukaan, "permukaan", ""
 
         cam = self._underwater_camera

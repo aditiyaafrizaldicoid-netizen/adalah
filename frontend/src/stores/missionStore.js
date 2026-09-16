@@ -48,12 +48,41 @@ export const STEP_TYPES = [
     ],
   },
   {
+    // Step foto yang TIDAK mencari apa pun: tidak ada box, tidak ada bola, tidak
+    // ada deteksi yang harus berhasil dulu. Begitu step ini dimasuki, shutter
+    // diminta pada frame berikutnya lalu misi lanjut — itulah bedanya dari
+    // PHOTO_BOX, yang baru memotret setelah menemukan dan mendekati sasarannya.
     type: "TAKE_IMAGE",
-    label: "Take Image / Record",
+    label: "Take Image — Permukaan / Bawah Air",
     icon: "📷",
     color: "text-violet-400",
     bg: "bg-violet-500/10 border-violet-500/30",
-    fields: [{ key: "duration_sec", label: "Duration (s)", type: "number", default: 3 }],
+    fields: [
+      {
+        key: "kamera",
+        label: "Kamera",
+        type: "select",
+        default: "permukaan",
+        options: [
+          { value: "permukaan", label: "Kamera permukaan", aliases: ["atas", "atas_air", "surface"] },
+          {
+            value: "bawah_air",
+            label: "Kamera bawah air",
+            aliases: ["bawah air", "bawahair", "underwater", "uw"],
+          },
+        ],
+        // Bawaan PERMUKAAN, dan itu disengaja: misi yang sudah tersimpan tidak
+        // punya field ini sama sekali, jadi bawaan apa pun selain permukaan akan
+        // diam-diam mengubah arti misi yang sudah terbukti jalan di danau.
+        //
+        // Kamera bawah air tidak pernah menunda shutter walau airnya keruh atau
+        // gelap — frame terbarunya diambil apa adanya. Kalau kameranya tidak
+        // terpasang atau frame-nya basi, fotonya jatuh ke kamera permukaan dan
+        // nama berkasnya diberi akhiran "_permukaan" supaya kejatuhan itu tidak
+        // pernah tersamar sebagai foto bawah air.
+      },
+      { key: "duration_sec", label: "Duration (s)", type: "number", default: 3 },
+    ],
   },
   {
     type: "HOLD",

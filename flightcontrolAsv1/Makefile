@@ -36,8 +36,18 @@ test:
 # tanpa pustaka tambahan, supaya bisa dijalankan di Mini PC apa adanya tanpa
 # memasang apa pun lebih dulu.
 test-unit:
-	@echo "🧪 Menjalankan uji perilaku..."
+	@echo "🧪 Uji perilaku di tests/ ..."
 	@python3 -m unittest discover -s tests -t . -q
+	@echo "🧪 Uji di tools/ ..."
+	@# Berkas uji di tools/ berdiri sendiri (punya __main__) dan TIDAK terjaring
+	@# unittest discover di atas. Dijalankan satu per satu supaya tidak diam-diam
+	@# tertinggal — uji shutter di sana menjaga bug lapangan yang sudah pernah
+	@# terjadi, dan uji opsi panel menjaga dropdown tetap berarti sama di kapal.
+	@for f in tools/uji_*.py; do \
+		echo "  → $$f"; \
+		python3 "$$f" >/dev/null 2>&1 || { python3 "$$f"; exit 1; }; \
+	done
+	@echo "✅ Semua uji lolos."
 
 # Tampilkan petunjuk penggunaan Makefile
 help:
