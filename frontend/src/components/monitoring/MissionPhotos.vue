@@ -50,9 +50,31 @@ const bySlot = computed(() =>
   }))
 );
 
-const totalLain = computed(
-  () => captures.value.filter((c) => !SLOTS.some((s) => s.label === c.label)).length
+/**
+ * Foto yang TIDAK mengisi slot penilaian — hasil step TAKE_IMAGE.
+ *
+ * Backend menurunkan label dari nama berkas, dan nama berkas TAKE_IMAGE berasal
+ * dari `name` step yang diketik operator ("dermaga", "foto bawah air"). Label itu
+ * tidak akan pernah cocok dengan slot blue_box/green_box, jadi sebelumnya foto-
+ * foto ini cuma dihitung sebagai "+N lain" dan tidak pernah digambar sama sekali.
+ *
+ * Akibatnya lebih buruk dari sekadar tidak terlihat: satu-satunya penanda KAMERA
+ * MANA yang mengambil sebuah foto ada di lencana thumbnail. Tanpa thumbnail-nya,
+ * tidak ada cara memeriksa apakah step yang diminta memakai kamera bawah air
+ * benar-benar memakainya — selain masuk ke Mini PC lewat SSH dan membaca sidecar
+ * JSON-nya satu per satu.
+ *
+ * Cadangan box biru dikecualikan: ia sudah punya tempatnya sendiri di slot
+ * Underwater yang kosong (lihat cadanganBiru), dan memunculkannya dua kali
+ * membuatnya terbaca seperti dua foto yang berbeda.
+ */
+const lainnya = computed(() =>
+  captures.value.filter(
+    (c) => !SLOTS.some((s) => s.label === c.label) && c.label !== "blue_box_permukaan"
+  )
 );
+
+const totalLain = computed(() => lainnya.value.length);
 
 function fullUrl(c) {
   return `${API_BASE}${c.url}`;
@@ -267,6 +289,39 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
           <span v-else-if="slot.foto" class="text-[9px] font-mono text-(--text-muted)">
             Tanpa metadata geo-tag
           </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Foto di luar slot penilaian — hasil TAKE_IMAGE -->
+    <div v-if="lainnya.length" class="px-3 pb-3">
+      <div class="flex items-center gap-2 mb-2">
+        <span class="text-[9px] font-black uppercase tracking-widest text-(--text-secondary)">
+          Foto lain
+        </span>
+        <span class="text-[9px] text-(--text-muted)">di luar slot penilaian</span>
+      </div>
+
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        <div v-for="c in lainnya" :key="c.filename"
+          class="rounded-lg border border-(--border-subtle) bg-(--bg-secondary) overflow-hidden flex flex-col">
+          <button @click="preview = c" class="relative aspect-video bg-black/40 overflow-hidden group">
+            <img :src="fullUrl(c)" :alt="c.label" class="w-full h-full object-contain" />
+            <!-- Lencana kamera: satu-satunya cara operator tahu foto ini benar
+                 diambil kamera bawah air, atau diam-diam jatuh ke permukaan. -->
+            <span v-if="kameraFoto(c)"
+              class="absolute top-1 left-1 text-[8px] font-black px-1.5 py-0.5 rounded"
+              :class="kameraFoto(c).startsWith('bawah air')
+                ? 'bg-sky-500/80 text-white' : 'bg-black/70 text-white/80'">
+              {{ kameraFoto(c).startsWith('bawah air') ? 'BAWAH AIR' : 'PERMUKAAN' }}
+            </span>
+          </button>
+          <div class="px-2 py-1.5 flex flex-col gap-0.5">
+            <span class="text-[9px] font-bold text-(--text-primary) truncate">{{ c.label || '—' }}</span>
+            <span v-if="geoRingkas(c)" class="text-[8px] font-mono text-(--text-secondary) truncate">
+              {{ geoRingkas(c) }}
+            </span>
+          </div>
         </div>
       </div>
     </div>
